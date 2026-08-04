@@ -1,0 +1,48 @@
+# Example nginx config for captive.ungana.africa
+#
+# Serves the frontend SPA (frontend/build) as static files, proxies /backend/
+# to the Express API (backend/, listening on localhost:5000), and redirects
+# all plain-HTTP traffic — whether it arrives via the domain or the bare IP —
+# to HTTPS. Consolidated to a single port-80 block: the original two-block
+# split (one for the IP, one Certbot-managed block for the domain with an
+# `if ($host = ...)` guard) had a gap where any request whose Host header
+# was the raw IP fell through to a hard `return 404`, instead of being
+# redirected. Captive-portal detection traffic from client devices very
+# commonly hits the server by IP before DNS/the domain is involved — that
+# was almost certainly the 404 seen when connecting via the UniFi SSID
+# (going straight to the domain in a browser skipped this block entirely,
+# which is why that path "just worked").
+
+# ── HTTPS — captive.ungana.africa ───────────────────────────────────────
+server {
+    listen 443 ssl;
+    server_name captive.ungana.africa;
+
+    ssl_certificate /etc/letsencrypt/live/captive.ungana.africa/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/captive.ungana.africa/privkey.pem; # managed by Certbot
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    # Frontend SPA
+    location / {
+        root /var/www/html;
+        index index.html;
+        try_files $uri /index.html;
+    }
+
+    # Backend API
+    location /backend/ {
+        proxy_pass http://localhost:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# ── HTTP — redirect everything to HTTPS, by domain or by IP ────────────
+server {
+    listen 80;
+    server_name captive.ungana.africa 45.12.28.150;
+    return 301 https://captive.ungana.africa$request_uri;
+}
