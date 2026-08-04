@@ -16,19 +16,23 @@
   import CoordinatorDashboardScreen from '$lib/screens/CoordinatorDashboardScreen.svelte';
   import TimelineScreen from '$lib/screens/TimelineScreen.svelte';
   import CheckSessionScreen from '$lib/screens/CheckSessionScreen.svelte';
-  import { PACKAGES, WARNING_THRESHOLD } from '$lib/data.js';
-  import { getSessionStatus } from '$lib/api.js';
+  import { PACKAGES, getWarningThreshold } from '$lib/data.js';
+  import { getSessionStatus, getAppInfo } from '$lib/api.js';
   import { getClientMac, getStoredClientMac } from '$lib/device.js';
 
   let screen = $state('packages');
   let checkingSession = $state(true);
+  // 'simulation' (safe default) or 'active' — mirrors the backend's own
+  // APP_MODE. 'active' means real money: use real package durations instead
+  // of the accelerated demo timers, and hide the "Demo" badges.
+  let appMode = $state('simulation');
   let activeInitialRemaining = $state(null);
   let selectedPkg = $state(PACKAGES.find((p) => p.id === 'weekly'));
   let selectedActivator = $state(null);
   let loggedInActivator = $state(null);
   let loggedInCoordinator = $state(null);
   let phone = $state('');
-  let warningRemaining = $state(WARNING_THRESHOLD);
+  let warningRemaining = $state(getWarningThreshold('simulation'));
   let paymentFailReason = $state(null);
   let simulatePaymentFailure = $state(false);
   let paymentReference = $state(null);
@@ -37,7 +41,7 @@
     screen = 'packages';
   }
   function goWarning() {
-    warningRemaining = WARNING_THRESHOLD;
+    warningRemaining = getWarningThreshold(appMode);
     screen = 'warning';
   }
 
@@ -88,6 +92,9 @@
   // WebView with its own storage, separate from the user's regular
   // Chrome — the real MAC only ever reached that WebView's localStorage.
   onMount(async () => {
+    const infoResult = await getAppInfo();
+    if (infoResult.ok && infoResult.data?.mode) appMode = infoResult.data.mode;
+
     const params = new URLSearchParams(window.location.search);
     const hasRouterMac = ['id', 'mac', 'client_mac'].some((name) => params.get(name));
     const hasStoredMac = !!getStoredClientMac();
@@ -114,6 +121,7 @@
     </div>
   {:else if screen === 'packages'}
     <PackageScreen
+      mode={appMode}
       onSelect={(pkg, activator) => {
         selectedPkg = pkg;
         selectedActivator = activator;
@@ -213,6 +221,7 @@
     <PaymentFailedScreen
       pkg={selectedPkg}
       {phone}
+      mode={appMode}
       reason={paymentFailReason}
       onRetry={() => (screen = 'payment')}
       onHome={goPackages}
@@ -227,10 +236,23 @@
     />
   {/if}
   {#if screen === 'active'}
-    <ActiveScreen pkg={selectedPkg} {phone} initialRemaining={activeInitialRemaining} onExpiring={goWarning} onExtend={goPackages} />
+    <ActiveScreen
+      pkg={selectedPkg}
+      {phone}
+      mode={appMode}
+      initialRemaining={activeInitialRemaining}
+      onExpiring={goWarning}
+      onExtend={goPackages}
+    />
   {/if}
   {#if screen === 'warning'}
-    <WarningScreen pkg={selectedPkg} remaining={warningRemaining} onExtend={goPackages} onDismiss={() => (screen = 'ended')} />
+    <WarningScreen
+      pkg={selectedPkg}
+      remaining={warningRemaining}
+      mode={appMode}
+      onExtend={goPackages}
+      onDismiss={() => (screen = 'ended')}
+    />
   {/if}
   {#if screen === 'ended'}
     <EndedScreen pkg={selectedPkg} {phone} onBuyAgain={goPackages} />

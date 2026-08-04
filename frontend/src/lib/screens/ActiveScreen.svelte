@@ -2,14 +2,15 @@
   import { Wifi, Signal, Clock, Phone, RotateCcw, MessageCircle, Globe } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import DemoBadge from '$lib/components/DemoBadge.svelte';
-  import { formatTime, WARNING_THRESHOLD } from '$lib/data.js';
+  import { formatTime, getWarningThreshold } from '$lib/data.js';
 
   // `initialRemaining` lets a restored session (page reload while still
   // connected) resume the countdown from the actual time left instead of
   // restarting the full duration — see +page.svelte's session-restore check.
-  let { pkg, phone, initialRemaining = null, onExpiring, onExtend } = $props();
+  let { pkg, phone, mode = 'simulation', initialRemaining = null, onExpiring, onExtend } = $props();
 
   const total = pkg.demoSecs;
+  const warningThreshold = getWarningThreshold(mode);
   let remaining = $state(initialRemaining ?? total);
   let warned = false;
   let returnBanner = $state(false);
@@ -19,7 +20,7 @@
   $effect(() => {
     const t = setInterval(() => {
       const next = remaining - 1;
-      if (next <= WARNING_THRESHOLD && !warned) {
+      if (next <= warningThreshold && !warned) {
         warned = true;
         setTimeout(onExpiring, 0);
       }
@@ -40,7 +41,7 @@
           const m = Math.floor(r / 60);
           const s = r % 60;
           const ts = `${m}:${s.toString().padStart(2, '0')}`;
-          document.title = r <= WARNING_THRESHOLD ? `⚠️ ${ts} left — Ungana WiFi` : `⏱ ${ts} remaining — Ungana`;
+          document.title = r <= warningThreshold ? `⚠️ ${ts} left — Ungana WiFi` : `⏱ ${ts} remaining — Ungana`;
         }, 1000);
       } else {
         if (titleInterval) {
@@ -85,13 +86,13 @@
   >
     <div
       class="flex items-center gap-2 px-4 py-2 rounded-full shadow-lg"
-      style="background: {remaining <= WARNING_THRESHOLD
+      style="background: {remaining <= warningThreshold
         ? '#B85038'
         : '#2E5A3E'}; border: 1px solid rgba(255,255,255,0.15); white-space: nowrap;"
     >
-      <div class="w-2 h-2 rounded-full animate-pulse" style="background: {remaining <= WARNING_THRESHOLD ? '#ffb0a0' : '#C45C38'};"></div>
+      <div class="w-2 h-2 rounded-full animate-pulse" style="background: {remaining <= warningThreshold ? '#ffb0a0' : '#C45C38'};"></div>
       <span class="text-xs font-semibold text-[#E8D4B0]">
-        {remaining <= WARNING_THRESHOLD ? '⚠️ Session expiring soon!' : `${minsLeft} min left in your session`}
+        {remaining <= warningThreshold ? '⚠️ Session expiring soon!' : `${minsLeft} min left in your session`}
       </span>
     </div>
   </div>
@@ -198,5 +199,5 @@
   >
     <MessageCircle size={15} />Support
   </button>
-  <DemoBadge />
+  {#if mode !== 'active'}<DemoBadge />{/if}
 </div>

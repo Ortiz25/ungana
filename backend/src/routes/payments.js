@@ -10,8 +10,9 @@ import {
 } from "../services/sessions.js";
 import { completeAuthorization } from "../services/authorization.js";
 import { findActivatorByCode } from "../services/activators.js";
+import { getPackageById } from "../services/catalog.js";
 import { authorizeClient } from "../services/unifi.js";
-import { PAYMENT_PROVIDER, ENABLE_TEST_ROUTE } from "../config.js";
+import { APP_MODE, PAYMENT_PROVIDER, ENABLE_TEST_ROUTE } from "../config.js";
 
 export const paymentsRouter = Router();
 
@@ -22,9 +23,12 @@ export const paymentsRouter = Router();
  *         simulateFailure?, username? }
  * `activatorCode` is the referral code chosen in the portal; omit or send
  * 'SELF' for a self-onboarded user (no activator credited).
- * `duration` is whole minutes (matches the UniFi voucher API); pass
- * `durationSecs` instead when you need sub-minute precision (e.g. the
- * frontend's accelerated demo timers) — it takes priority when present.
+ * `duration` is whole minutes (matches the UniFi voucher API); `durationSecs`
+ * gives sub-minute precision. Both are only honoured when APP_MODE=simulation
+ * (the frontend's accelerated demo timers) — in APP_MODE=active a
+ * client-supplied duration is never trusted; the real duration always comes
+ * from the `packages` catalog for `packageId`, so a session lasts what was
+ * actually paid for regardless of what the client sends.
  * `simulateFailure` only has an effect when the server is running with
  * APP_MODE=simulation — it's ignored for real payments.
  * `username` is optional — a self-chosen handle that lets this session be
@@ -64,7 +68,20 @@ paymentsRouter.post("/initiate-payment", async (req, res) => {
       simulateFailure: !!simulateFailure,
     });
 
-    const durationSecs = data ? 0 : Number.isFinite(durationSecsInput) ? durationSecsInput : (duration || 0) * 60;
+    let durationSecs;
+    if (data) {
+      durationSecs = 0;
+    } else if (APP_MODE === "simulation" && Number.isFinite(durationSecsInput)) {
+      // Simulation only: trust the client's accelerated demo duration so
+      // the whole payment -> session -> expiry cycle runs quickly.
+      durationSecs = durationSecsInput;
+    } else {
+      // Active (real money): never trust a client-supplied duration —
+      // always the real catalog value, so a session lasts what was paid
+      // for and can't be shortened/lengthened by tampering with the body.
+      const catalogPkg = await getPackageById(packageId);
+      durationSecs = catalogPkg?.duration_secs ?? (duration || 0) * 60;
+    }
 
     await createPendingSession({
       reference,

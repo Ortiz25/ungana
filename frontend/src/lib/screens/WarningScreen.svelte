@@ -3,7 +3,7 @@
   import DemoBadge from '$lib/components/DemoBadge.svelte';
   import { formatTime } from '$lib/data.js';
 
-  let { pkg, remaining, onExtend, onDismiss } = $props();
+  let { pkg, remaining, mode = 'simulation', onExtend, onDismiss } = $props();
 
   let secs = $state(remaining);
 
@@ -95,5 +95,5 @@
   >
     Let it expire
   </button>
-  <DemoBadge />
+  {#if mode !== 'active'}<DemoBadge />{/if}
 </div>

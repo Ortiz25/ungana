@@ -7,12 +7,18 @@
   import { PACKAGES } from '$lib/data.js';
   import { getPackages } from '$lib/api.js';
 
-  let { onSelect, onActivatorLogin, onCoordinatorLogin, onEarnAccess } = $props();
+  let { mode = 'simulation', onSelect, onActivatorLogin, onCoordinatorLogin, onEarnAccess } = $props();
 
   // Static PACKAGES supplies icon/badge/demoSecs (frontend-only demo/UI
   // concerns); price + label are refreshed from the backend when reachable
   // so pricing can change without a frontend redeploy. Falls back to the
   // static catalogue wholesale if the backend/DB is unreachable.
+  //
+  // `demoSecs` is what every downstream screen (Active/Warning/Connecting)
+  // actually counts down — in `active` mode (real money) it's overridden to
+  // the package's real catalog duration here, so nothing further down the
+  // chain needs to know about mode at all. In `simulation` it stays the
+  // fast accelerated value for demo purposes.
   let packages = $state(PACKAGES);
 
   onMount(async () => {
@@ -23,7 +29,12 @@
       .map((row) => {
         const local = PACKAGES.find((p) => p.id === row.id);
         if (!local) return null; // unknown id — no icon/UI metadata to render it with
-        return { ...local, label: row.label, price: Number(row.price_kes) };
+        return {
+          ...local,
+          label: row.label,
+          price: Number(row.price_kes),
+          demoSecs: mode === 'active' ? row.duration_secs : local.demoSecs
+        };
       })
       .filter(Boolean);
 

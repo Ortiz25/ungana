@@ -2,7 +2,7 @@
   import { CircleX, RotateCcw, Home, MessageCircle } from '@lucide/svelte';
   import DemoBadge from '$lib/components/DemoBadge.svelte';
 
-  let { pkg, phone, reason, onRetry, onHome } = $props();
+  let { pkg, phone, mode = 'simulation', reason, onRetry, onHome } = $props();
 
   const rows = $derived([
     { label: 'Plan', value: `${pkg.label} · ${pkg.duration}` },
@@ -76,5 +76,5 @@
   >
     <MessageCircle size={16} />Contact Ungana Support
   </button>
-  <DemoBadge />
+  {#if mode !== 'active'}<DemoBadge />{/if}
 </div>

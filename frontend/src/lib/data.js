@@ -31,7 +31,17 @@ export const PACKAGES = [
   { id: 'monthly', label: 'Monthly', duration: '30 days', price: 750, icon: Sparkles, badge: null, demoSecs: 45 }
 ];
 
-export const WARNING_THRESHOLD = 15; // seconds remaining before showing warning
+// Seconds remaining before showing the "session about to end" warning.
+// `demo` matches the accelerated simulation timers; `active` is a real,
+// fixed lead time (15 min) that makes sense regardless of plan length —
+// unlike a percentage-of-total, it doesn't get absurdly early on a 30-day
+// plan or vanishingly short on a 24-hour one.
+export const WARNING_THRESHOLD_DEMO = 15;
+export const WARNING_THRESHOLD_ACTIVE = 15 * 60;
+
+export function getWarningThreshold(mode) {
+  return mode === 'active' ? WARNING_THRESHOLD_ACTIVE : WARNING_THRESHOLD_DEMO;
+}
 
 // ─── Timeline / Earn content ────────────────────────────────────────────────
 export const TL_FEATURED = {

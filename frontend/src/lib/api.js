@@ -34,6 +34,11 @@ async function request(path, options = {}) {
   }
 }
 
+/** GET /api — health check; { mode, paymentProvider }. Used to know whether the backend is running 'simulation' or 'active'. */
+export function getAppInfo() {
+  return request('', { method: 'GET' });
+}
+
 /** GET /api/packages */
 export function getPackages() {
   return request('/packages');
