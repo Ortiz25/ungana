@@ -30,7 +30,13 @@ device.
 | `APP_MODE`     | Behaviour                                                                 |
 |----------------|-----------------------------------------------------------------------------|
 | `simulation` *(default)* | No network call to Paystack/Daraja — `/api/initiate-payment` resolves locally after ~3s. Pass `"simulateFailure": true` in the request body to force a declined outcome (mirrors the frontend's PaymentScreen demo toggle). Safe for dev/demo — no money moves, no provider credentials required. |
-| `active`       | Real STK push via the configured `PAYMENT_PROVIDER`. Requires valid credentials (see `PAYMENTS.md`) — the server warns on startup if they're missing. |
+| `active`       | Real STK push via the configured `PAYMENT_PROVIDER`. Requires valid credentials — the server warns on startup if they're missing. |
+
+**`APP_MODE` only affects the payment gateway call.** Router authorisation
+(`services/unifi.js`) is unconditional — once a session's payment resolves
+to `success` (real or simulated), the backend still logs into `UNIFI_URL`
+and creates/authorises a real voucher if it's configured. Unset `UNIFI_URL`
+to test payments without touching a real console.
 
 The default is `simulation` so a blank/misconfigured `.env` can never
 accidentally trigger a real charge — you have to opt in explicitly.

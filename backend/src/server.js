@@ -5,6 +5,7 @@ import { paymentsRouter } from "./routes/payments.js";
 import { activatorsRouter } from "./routes/activators.js";
 import { catalogRouter } from "./routes/catalog.js";
 import { retryPaidAuthorizations } from "./services/authorization.js";
+import { login } from "./services/unifi.js";
 
 if (APP_MODE === "active") {
   const missingCreds =
@@ -49,6 +50,8 @@ const RETRY_SWEEP_MS = 30_000;
 setInterval(() => {
   retryPaidAuthorizations().catch((err) => console.error("❌ Retry sweep crashed:", err.message));
 }, RETRY_SWEEP_MS);
+
+login()
 
 app.listen(PORT, () =>
   console.log(`🚀 Ungana backend running on port ${PORT} — mode: ${APP_MODE}, payment provider: ${PAYMENT_PROVIDER}`)
