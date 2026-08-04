@@ -1,5 +1,5 @@
 <script>
-  import { UserCheck, ChevronRight, AlertTriangle, ArrowRight } from '@lucide/svelte';
+  import { UserCheck, ChevronRight, AlertTriangle, ArrowRight, ShieldCheck } from '@lucide/svelte';
   import ScreenBg from '$lib/components/ScreenBg.svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import { getSessionByUsername } from '$lib/api.js';
@@ -9,7 +9,7 @@
   // Android opens captive-portal logins in an isolated WebView with its own
   // storage, separate from the user's regular browser. `onFound` receives
   // the raw session-status payload; `onSkip` goes to the normal purchase flow.
-  let { onFound, onSkip } = $props();
+  let { onFound, onSkip, onActivatorLogin, onCoordinatorLogin } = $props();
 
   let username = $state('');
   let loading = $state(false);
@@ -97,4 +97,24 @@
   <p class="text-[10px] text-[#9AB498] text-center mt-4">
     Didn't set a username? Reconnect to the Wi-Fi network to be recognised automatically.
   </p>
+
+  <div class="flex items-center gap-3 mt-4">
+    <button
+      onclick={onActivatorLogin}
+      class="flex items-center gap-1.5 text-[11px] font-semibold transition-opacity active:opacity-60"
+      style="color: #2E5A3E;"
+    >
+      <UserCheck size={12} />
+      Activator Portal
+    </button>
+    <span class="text-[#C4A870]">·</span>
+    <button
+      onclick={onCoordinatorLogin}
+      class="flex items-center gap-1.5 text-[11px] font-semibold transition-opacity active:opacity-60"
+      style="color: #96B496;"
+    >
+      <ShieldCheck size={12} />
+      Coordinator
+    </button>
+  </div>
 </ScreenBg>

@@ -138,6 +138,8 @@
         if (!applySessionData(data)) screen = 'packages';
       }}
       onSkip={goPackages}
+      onActivatorLogin={() => (screen = 'activator-login')}
+      onCoordinatorLogin={() => (screen = 'coordinator-login')}
     />
   {/if}
   {#if screen === 'timeline'}
