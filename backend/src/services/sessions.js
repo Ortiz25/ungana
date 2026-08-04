@@ -38,12 +38,18 @@ export async function getSessionByReference(reference) {
   return rows[0] || null;
 }
 
-/** Most recent still-valid session for a device, for the live status endpoint. */
-export async function getActiveSessionForMac(mac) {
+/**
+ * Most recent authorised session for a device, active or already expired —
+ * for the live status endpoint, so the frontend can tell "session is still
+ * running" apart from "session ended". Includes the client's phone for
+ * restoring the session-summary display.
+ */
+export async function getLatestSessionForMac(mac) {
   const { rows } = await query(
-    `SELECT * FROM sessions
-     WHERE client_mac = $1 AND payment_status = 'success' AND (expires_at IS NULL OR expires_at > now())
-     ORDER BY authorized_at DESC NULLS LAST, created_at DESC
+    `SELECT s.*, c.phone AS client_phone
+     FROM sessions s JOIN clients c ON c.id = s.client_id
+     WHERE s.client_mac = $1 AND s.payment_status = 'success'
+     ORDER BY s.authorized_at DESC NULLS LAST, s.created_at DESC
      LIMIT 1`,
     [mac.toLowerCase()]
   );

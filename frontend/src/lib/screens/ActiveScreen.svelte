@@ -1,13 +1,16 @@
 <script>
-  import { Wifi, Signal, Clock, Phone, RotateCcw, MessageCircle } from '@lucide/svelte';
+  import { Wifi, Signal, Clock, Phone, RotateCcw, MessageCircle, Globe } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import DemoBadge from '$lib/components/DemoBadge.svelte';
   import { formatTime, WARNING_THRESHOLD } from '$lib/data.js';
 
-  let { pkg, phone, onExpiring, onExtend } = $props();
+  // `initialRemaining` lets a restored session (page reload while still
+  // connected) resume the countdown from the actual time left instead of
+  // restarting the full duration — see +page.svelte's session-restore check.
+  let { pkg, phone, initialRemaining = null, onExpiring, onExtend } = $props();
 
   const total = pkg.demoSecs;
-  let remaining = $state(total);
+  let remaining = $state(initialRemaining ?? total);
   let warned = false;
   let returnBanner = $state(false);
   const originalTitle = document.title;
@@ -176,11 +179,18 @@
   </div>
 
   <button
-    onclick={onExtend}
+    onclick={() => window.open('https://www.google.com', '_blank', 'noopener,noreferrer')}
     class="w-full py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 mb-2"
     style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
   >
-    <RotateCcw size={16} />Extend Session
+    <Globe size={16} />Go Online
+  </button>
+  <button
+    onclick={onExtend}
+    class="w-full py-3.5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 mb-2"
+    style="background: rgba(255,255,255,0.14); color: #C4DAC0;"
+  >
+    <RotateCcw size={15} />Extend Session
   </button>
   <button
     class="w-full py-3.5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95"

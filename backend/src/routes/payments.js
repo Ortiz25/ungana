@@ -4,7 +4,7 @@ import { verifyPaystackSignature } from "../services/payments/paystack.js";
 import {
   createPendingSession,
   getSessionByReference,
-  getActiveSessionForMac,
+  getLatestSessionForMac,
   markSessionFailed,
 } from "../services/sessions.js";
 import { completeAuthorization } from "../services/authorization.js";
@@ -184,25 +184,33 @@ paymentsRouter.post("/webhook/daraja", async (req, res) => {
 
 /**
  * GET /api/session/:mac
- * Live status for a device, read from our own DB (no round-trip to UniFi
- * needed for the countdown UI — the session row already has expires_at).
+ * Latest session status for a device, read from our own DB. Distinguishes
+ * "still active" from "found but expired" from "never had a session" so the
+ * frontend can restore the right screen on load (timer vs. ended vs. the
+ * normal start screen) instead of just a boolean.
  */
 paymentsRouter.get("/session/:mac", async (req, res) => {
   try {
-    const session = await getActiveSessionForMac(req.params.mac);
-    if (!session) return res.json({ online: false, type: null, expiresAt: null, serverNow: Date.now() });
+    const session = await getLatestSessionForMac(req.params.mac);
+    if (!session) return res.json({ found: false, active: false, serverNow: Date.now() });
+
+    const serverNow = Date.now();
+    const expiresAt = session.expires_at ? new Date(session.expires_at).getTime() : null;
+    const active = expiresAt === null || expiresAt > serverNow;
 
     res.json({
-      online: true,
+      found: true,
+      active,
       type: session.package_id === "earned" ? "earned" : "time",
-      expiresAt: session.expires_at ? new Date(session.expires_at).getTime() : null,
+      expiresAt,
       durationSecs: session.duration_secs,
       packageId: session.package_id,
-      serverNow: Date.now(),
+      phone: session.client_phone,
+      serverNow,
     });
   } catch (error) {
     console.error("❌ Session status error:", error.message);
-    res.status(500).json({ online: false, reason: "error", message: error.message });
+    res.status(500).json({ found: false, active: false, reason: "error", message: error.message });
   }
 });
 

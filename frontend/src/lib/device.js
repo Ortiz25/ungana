@@ -13,13 +13,24 @@ function randomMac() {
   return bytes.map((b) => b.toString(16).padStart(2, '0')).join(':');
 }
 
+/**
+ * Resolves the client MAC and always persists it to localStorage — whether
+ * it came from the router's redirect params or was freshly generated — so
+ * it stays queryable/reusable for the rest of the session (e.g. re-reading
+ * it on a later page load where the URL params are no longer present, or
+ * feeding it into GET /api/session/:mac) without needing the URL each time.
+ */
 export function getClientMac() {
   if (typeof window === 'undefined') return '00:00:00:00:00:00';
 
   const params = new URLSearchParams(window.location.search);
   for (const name of ROUTER_PARAM_NAMES) {
     const value = params.get(name);
-    if (value) return value.toLowerCase();
+    if (value) {
+      const mac = value.toLowerCase();
+      localStorage.setItem(MAC_STORAGE_KEY, mac);
+      return mac;
+    }
   }
 
   let mac = localStorage.getItem(MAC_STORAGE_KEY);
@@ -28,4 +39,10 @@ export function getClientMac() {
     localStorage.setItem(MAC_STORAGE_KEY, mac);
   }
   return mac;
+}
+
+/** Reads the persisted MAC without resolving/generating a new one — null if none stored yet. */
+export function getStoredClientMac() {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(MAC_STORAGE_KEY);
 }

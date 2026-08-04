@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import { Zap } from '@lucide/svelte';
   import AppShell from '$lib/components/AppShell.svelte';
   import PackageScreen from '$lib/screens/PackageScreen.svelte';
@@ -15,8 +16,12 @@
   import CoordinatorDashboardScreen from '$lib/screens/CoordinatorDashboardScreen.svelte';
   import TimelineScreen from '$lib/screens/TimelineScreen.svelte';
   import { PACKAGES, WARNING_THRESHOLD } from '$lib/data.js';
+  import { getSessionStatus } from '$lib/api.js';
+  import { getClientMac } from '$lib/device.js';
 
   let screen = $state('packages');
+  let checkingSession = $state(true);
+  let activeInitialRemaining = $state(null);
   let selectedPkg = $state(PACKAGES.find((p) => p.id === 'weekly'));
   let selectedActivator = $state(null);
   let loggedInActivator = $state(null);
@@ -34,10 +39,50 @@
     warningRemaining = WARNING_THRESHOLD;
     screen = 'warning';
   }
+
+  function buildPkgFromSession(data) {
+    const local = PACKAGES.find((p) => p.id === data.packageId);
+    if (!local) return null;
+    return { ...local, demoSecs: data.durationSecs ?? local.demoSecs };
+  }
+
+  // On load, ask the backend whether this device (by MAC) already has a
+  // session on record — resume the live timer if it's still active, or
+  // show the ended summary if it just expired, instead of always starting
+  // fresh at package selection. Falls through to the normal flow if the
+  // backend/DB is unreachable or no session is found.
+  onMount(async () => {
+    const mac = getClientMac();
+    const result = await getSessionStatus(mac);
+
+    if (result.ok && result.data?.found) {
+      const restoredPkg = buildPkgFromSession(result.data);
+      if (restoredPkg) {
+        selectedPkg = restoredPkg;
+        phone = result.data.phone ? result.data.phone.replace(/^\+?254/, '') : '';
+
+        if (result.data.active) {
+          const serverNow = result.data.serverNow ?? Date.now();
+          activeInitialRemaining = result.data.expiresAt
+            ? Math.max(0, Math.round((result.data.expiresAt - serverNow) / 1000))
+            : restoredPkg.demoSecs;
+          screen = 'active';
+        } else {
+          screen = 'ended';
+        }
+      }
+    }
+
+    checkingSession = false;
+  });
 </script>
 
 <AppShell>
-  {#if screen === 'packages'}
+  {#if checkingSession}
+    <div class="flex items-center justify-center" style="min-height: 100dvh;">
+      <div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div>
+    </div>
+  {:else if screen === 'packages'}
     <PackageScreen
       onSelect={(pkg, activator) => {
         selectedPkg = pkg;
@@ -136,10 +181,15 @@
     />
   {/if}
   {#if screen === 'connecting'}
-    <ConnectingScreen onConnected={() => (screen = 'active')} />
+    <ConnectingScreen
+      onConnected={() => {
+        activeInitialRemaining = null;
+        screen = 'active';
+      }}
+    />
   {/if}
   {#if screen === 'active'}
-    <ActiveScreen pkg={selectedPkg} {phone} onExpiring={goWarning} onExtend={goPackages} />
+    <ActiveScreen pkg={selectedPkg} {phone} initialRemaining={activeInitialRemaining} onExpiring={goWarning} onExtend={goPackages} />
   {/if}
   {#if screen === 'warning'}
     <WarningScreen pkg={selectedPkg} remaining={warningRemaining} onExtend={goPackages} onDismiss={() => (screen = 'ended')} />
