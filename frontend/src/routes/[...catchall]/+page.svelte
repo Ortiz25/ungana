@@ -76,14 +76,17 @@
   // fresh at package selection. Falls through to the normal flow if the
   // backend/DB is unreachable or no session is found.
   //
-  // The MAC is only trustworthy here if it came from the router's redirect
-  // URL just now, or was cached in this exact browser from a previous visit
-  // that did. Without either, generating a throwaway random MAC would just
-  // silently fail to match anything — so instead we send the user to
-  // CheckSessionScreen to identify themselves by username. This is the
-  // Android case: captive-portal logins open in an isolated WebView with
-  // its own storage, separate from the user's regular Chrome — the real
-  // MAC only ever reached that WebView's localStorage, not Chrome's.
+  // A MAC found in the URL just now is always trustworthy. A MAC merely
+  // *cached* from a previous visit is not, by itself — getClientMac()
+  // persists a randomly-generated MAC on any purchase attempt, including
+  // ones that never completed (failed/abandoned payment), so "something is
+  // stored" doesn't mean "this device has a real session". We only trust a
+  // stored-but-unmatched MAC as proof of "genuinely new user" when it was
+  // freshly confirmed by the router just now; otherwise, offer
+  // CheckSessionScreen as a safety net rather than assuming "new". This is
+  // also the Android case: captive-portal logins open in an isolated
+  // WebView with its own storage, separate from the user's regular
+  // Chrome — the real MAC only ever reached that WebView's localStorage.
   onMount(async () => {
     const params = new URLSearchParams(window.location.search);
     const hasRouterMac = ['id', 'mac', 'client_mac'].some((name) => params.get(name));
@@ -91,7 +94,11 @@
 
     if (hasRouterMac || hasStoredMac) {
       const result = await getSessionStatus(getClientMac());
-      if (result.ok && result.data?.found) applySessionData(result.data);
+      if (result.ok && result.data?.found) {
+        applySessionData(result.data);
+      } else if (!hasRouterMac) {
+        screen = 'check-session';
+      }
     } else {
       screen = 'check-session';
     }

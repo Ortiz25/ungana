@@ -4,6 +4,7 @@ import { PORT, APP_MODE, PAYMENT_PROVIDER, PAYSTACK_SECRET_KEY, DARAJA_CONSUMER_
 import { paymentsRouter } from "./routes/payments.js";
 import { activatorsRouter } from "./routes/activators.js";
 import { catalogRouter } from "./routes/catalog.js";
+import { clientsRouter } from "./routes/clients.js";
 import { retryPaidAuthorizations } from "./services/authorization.js";
 import { login } from "./services/unifi.js";
 
@@ -39,6 +40,7 @@ app.get("/api", (_req, res) => {
 
 app.use("/api", paymentsRouter);
 app.use("/api", catalogRouter);
+app.use("/api/clients", clientsRouter);
 app.use("/api/activators", activatorsRouter);
 
 // ── Background retry sweep ────────────────────────────────────────────────

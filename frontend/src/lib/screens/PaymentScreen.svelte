@@ -1,8 +1,9 @@
 <script>
-  import { ArrowLeft, Phone, MessageCircle, User } from '@lucide/svelte';
+  import { onMount } from 'svelte';
+  import { ArrowLeft, Phone, MessageCircle, User, CheckCircle2, CircleX } from '@lucide/svelte';
   import ScreenBg from '$lib/components/ScreenBg.svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
-  import { initiatePayment } from '$lib/api.js';
+  import { initiatePayment, getUsernameForMac, checkUsernameAvailable } from '$lib/api.js';
   import { getClientMac } from '$lib/device.js';
 
   let { pkg, activator, onPay, onBack } = $props();
@@ -10,10 +11,43 @@
   let phone = $state('');
   let username = $state('');
   let usernameError = $state('');
+  let usernameLocked = $state(false); // already set for this MAC on an earlier purchase — just display it
+  let usernameStatus = $state(null); // null | 'checking' | 'available' | 'taken'
   let simulateFailure = $state(false);
   let submitting = $state(false);
-  const ready = $derived(phone.length >= 9 && !submitting);
+  const ready = $derived(phone.length >= 9 && !submitting && usernameStatus !== 'taken');
   const PkgIcon = $derived(pkg.icon);
+
+  let usernameCheckTimer;
+
+  onMount(async () => {
+    const result = await getUsernameForMac(getClientMac());
+    if (result.ok && result.data?.username) {
+      username = result.data.username;
+      usernameLocked = true;
+    }
+  });
+
+  function onUsernameInput(e) {
+    username = e.currentTarget.value.replace(/\s/g, '').slice(0, 24);
+    usernameError = '';
+    clearTimeout(usernameCheckTimer);
+
+    if (!username) {
+      usernameStatus = null;
+      return;
+    }
+
+    usernameStatus = 'checking';
+    const checkedValue = username;
+    usernameCheckTimer = setTimeout(async () => {
+      const result = await checkUsernameAvailable(checkedValue, getClientMac());
+      // The field may have changed again while this was in flight — only
+      // apply the result if it's still describing the current value.
+      if (checkedValue !== username) return;
+      usernameStatus = result.ok ? (result.data?.available ? 'available' : 'taken') : null;
+    }, 400);
+  }
 
   async function handlePay() {
     if (!ready) return;
@@ -120,7 +154,7 @@
       <div>
         <div
           class="flex items-center rounded-2xl overflow-hidden border border-white/10"
-          style="background: #3C6A4A;"
+          style="background: #3C6A4A; opacity: {usernameLocked ? 0.75 : 1};"
         >
           <div class="px-4 py-3.5 border-r border-white/15 shrink-0">
             <User size={13} color="#C4DAC0" />
@@ -128,16 +162,29 @@
           <input
             type="text"
             value={username}
-            oninput={(e) => {
-              username = e.currentTarget.value.replace(/\s/g, '').slice(0, 24);
-              usernameError = '';
-            }}
+            oninput={onUsernameInput}
+            disabled={usernameLocked}
             placeholder="Username (optional)"
             class="flex-1 bg-transparent px-4 py-3.5 text-[#E8D4B0] placeholder-[#7A9E7A] text-sm outline-none"
           />
+          <div class="pr-4 shrink-0">
+            {#if usernameLocked}
+              <CheckCircle2 size={14} color="#7EC88E" />
+            {:else if usernameStatus === 'checking'}
+              <div class="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin"></div>
+            {:else if usernameStatus === 'available'}
+              <CheckCircle2 size={14} color="#7EC88E" />
+            {:else if usernameStatus === 'taken'}
+              <CircleX size={14} color="#F0A08A" />
+            {/if}
+          </div>
         </div>
         {#if usernameError}
           <p class="text-[11px] text-[#F0A08A] mt-1.5 px-1">{usernameError}</p>
+        {:else if usernameLocked}
+          <p class="text-[11px] mt-1.5 px-1" style="color: #7A9E7A;">Your username from a previous purchase</p>
+        {:else if usernameStatus === 'taken'}
+          <p class="text-[11px] text-[#F0A08A] mt-1.5 px-1">That username is taken — try another</p>
         {:else}
           <p class="text-[11px] mt-1.5 px-1" style="color: #7A9E7A;">
             So you can check your session later from any browser

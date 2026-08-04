@@ -27,3 +27,20 @@ export async function upsertClient(macAddress, phone = null) {
 export async function setClientUsername(clientId, username) {
   await query(`UPDATE clients SET username = $1 WHERE id = $2`, [username, clientId]);
 }
+
+/** Looks up a client by MAC — used to auto-fill a previously-set username at checkout. */
+export async function getClientByMac(macAddress) {
+  const { rows } = await query(`SELECT id, username FROM clients WHERE mac_address = $1`, [macAddress.toLowerCase()]);
+  return rows[0] || null;
+}
+
+/**
+ * Is `username` free to claim? True if unclaimed, or already claimed by
+ * the same device (`macAddress`) — so a returning user re-checking their
+ * own existing username during live validation isn't told it's "taken".
+ */
+export async function isUsernameAvailable(username, macAddress) {
+  const { rows } = await query(`SELECT mac_address FROM clients WHERE username = $1`, [username]);
+  if (rows.length === 0) return true;
+  return !!macAddress && rows[0].mac_address === macAddress.toLowerCase();
+}

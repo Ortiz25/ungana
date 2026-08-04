@@ -64,6 +64,17 @@ export function getSessionByUsername(username) {
   return request(`/session/by-username/${encodeURIComponent(username)}`);
 }
 
+/** GET /api/clients/by-mac/:mac/username — for checkout auto-fill. */
+export function getUsernameForMac(mac) {
+  return request(`/clients/by-mac/${encodeURIComponent(mac)}/username`);
+}
+
+/** GET /api/clients/username-available?username=X&mac=Y — live checkout validation. */
+export function checkUsernameAvailable(username, mac) {
+  const params = new URLSearchParams({ username, ...(mac ? { mac } : {}) });
+  return request(`/clients/username-available?${params}`);
+}
+
 /** POST /api/activators/login — Body: { phone, pin } */
 export function activatorLogin(phone, pin) {
   return request('/activators/login', { method: 'POST', body: JSON.stringify({ phone, pin }) });
