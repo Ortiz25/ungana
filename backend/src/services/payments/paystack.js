@@ -11,13 +11,23 @@ export function formatKEPhone(phone) {
   throw new Error(`Invalid Kenyan phone number: ${phone}`);
 }
 
+// Rotated across common consumer providers rather than one fixed domain
+// (e.g. example.com) — every unset-email charge sharing the exact same
+// domain is a pattern Paystack's fraud/risk engine can flag across
+// transactions; varying it makes each placeholder look individually normal.
+const PLACEHOLDER_EMAIL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com", "aol.com"];
+
+function randomPlaceholderDomain() {
+  return PLACEHOLDER_EMAIL_DOMAINS[Math.floor(Math.random() * PLACEHOLDER_EMAIL_DOMAINS.length)];
+}
+
 /** Initiate a Paystack M-Pesa STK push. Returns { reference, status, displayText }. */
 export async function initiatePaystackMpesa({ phone, amountKES, email, metadata = {} }) {
   const formattedPhone = formatKEPhone(phone);
   const reference = `UNGANA-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
   const payload = {
-    email: email || `${formattedPhone.replace("+", "")}@example.com`, // Paystack requires an email per charge
+    email: email || `${formattedPhone.replace("+", "")}@${randomPlaceholderDomain()}`, // Paystack requires an email per charge
     amount: Math.round(amountKES * 100), // kobo/cents
     currency: "KES",
     reference,
