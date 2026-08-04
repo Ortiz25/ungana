@@ -3,7 +3,14 @@
 // status?, error? } on any failure — network error, timeout, or non-2xx
 // response — so callers can uniformly fall back to static demo data
 // instead of throwing. Never throws.
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+//
+// Base URL switches automatically between dev and a production build:
+//   - `npm run dev`   -> http://localhost:5000/api (backend's own dev port)
+//   - `npm run build` -> /backend/api (same-origin, proxied by nginx's
+//     `location /backend/ { proxy_pass http://localhost:5000/; }` — see
+//     example-nginx-config.txt at the repo root)
+// Override either with VITE_API_BASE_URL if you need something else.
+const API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://localhost:5000/api' : '/backend/api');
 const TIMEOUT_MS = 5000;
 
 async function request(path, options = {}) {
