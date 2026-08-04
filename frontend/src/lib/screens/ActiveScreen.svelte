@@ -2,7 +2,7 @@
   import { Wifi, Signal, Clock, Phone, RotateCcw, MessageCircle, Globe } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import DemoBadge from '$lib/components/DemoBadge.svelte';
-  import { formatTime, getWarningThreshold } from '$lib/data.js';
+  import { formatTime, formatCompactDuration, getWarningThreshold } from '$lib/data.js';
 
   // `initialRemaining` lets a restored session (page reload while still
   // connected) resume the countdown from the actual time left instead of
@@ -10,7 +10,7 @@
   let { pkg, phone, mode = 'simulation', initialRemaining = null, onExpiring, onExtend } = $props();
 
   const total = pkg.demoSecs;
-  const warningThreshold = getWarningThreshold(mode);
+  const warningThreshold = getWarningThreshold(total);
   let remaining = $state(initialRemaining ?? total);
   let warned = false;
   let returnBanner = $state(false);
@@ -38,9 +38,7 @@
       if (document.hidden) {
         titleInterval = setInterval(() => {
           const r = remaining;
-          const m = Math.floor(r / 60);
-          const s = r % 60;
-          const ts = `${m}:${s.toString().padStart(2, '0')}`;
+          const ts = formatCompactDuration(r);
           document.title = r <= warningThreshold ? `⚠️ ${ts} left — Ungana WiFi` : `⏱ ${ts} remaining — Ungana`;
         }, 1000);
       } else {

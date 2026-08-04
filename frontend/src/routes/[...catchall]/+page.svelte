@@ -32,7 +32,7 @@
   let loggedInActivator = $state(null);
   let loggedInCoordinator = $state(null);
   let phone = $state('');
-  let warningRemaining = $state(getWarningThreshold('simulation'));
+  let warningRemaining = $state(getWarningThreshold(selectedPkg.demoSecs));
   let paymentFailReason = $state(null);
   let simulatePaymentFailure = $state(false);
   let paymentReference = $state(null);
@@ -41,7 +41,7 @@
     screen = 'packages';
   }
   function goWarning() {
-    warningRemaining = getWarningThreshold(appMode);
+    warningRemaining = getWarningThreshold(selectedPkg.demoSecs);
     screen = 'warning';
   }
 

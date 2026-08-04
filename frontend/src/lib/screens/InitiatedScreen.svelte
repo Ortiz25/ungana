@@ -22,7 +22,11 @@
   }
 
   const POLL_INTERVAL_MS = 1500;
-  const POLL_DEADLINE_MS = 15000;
+  // Real STK push confirmation routinely takes 10-45+ seconds in practice
+  // (the customer has to notice the prompt, unlock their phone, enter their
+  // M-PESA PIN) — 15s was cutting real payments off mid-flight and dropping
+  // them into the local demo fallback. At least a minute before giving up.
+  const POLL_DEADLINE_MS = 60000;
 
   // Manual "skip the wait" button — resolves immediately without waiting on
   // the poll loop, using the same simulated intent.

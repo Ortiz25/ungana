@@ -31,16 +31,17 @@ export const PACKAGES = [
   { id: 'monthly', label: 'Monthly', duration: '30 days', price: 750, icon: Sparkles, badge: null, demoSecs: 45 }
 ];
 
-// Seconds remaining before showing the "session about to end" warning.
-// `demo` matches the accelerated simulation timers; `active` is a real,
-// fixed lead time (15 min) that makes sense regardless of plan length —
-// unlike a percentage-of-total, it doesn't get absurdly early on a 30-day
-// plan or vanishingly short on a 24-hour one.
-export const WARNING_THRESHOLD_DEMO = 15;
-export const WARNING_THRESHOLD_ACTIVE = 15 * 60;
+// Warning fires once this fraction of a session's own total duration
+// remains — scales correctly for any plan length (demo or real) without
+// needing to know which mode produced that duration, and can never exceed
+// the total the way a fixed threshold could for a short demo/test package.
+export const WARNING_PERCENT = 0.05;
+// Floor so a very short demo countdown (45s) still gets a usable warning
+// window instead of ~2 seconds.
+export const WARNING_MIN_SECONDS = 5;
 
-export function getWarningThreshold(mode) {
-  return mode === 'active' ? WARNING_THRESHOLD_ACTIVE : WARNING_THRESHOLD_DEMO;
+export function getWarningThreshold(totalSecs) {
+  return Math.max(WARNING_MIN_SECONDS, Math.round(totalSecs * WARNING_PERCENT));
 }
 
 // ─── Timeline / Earn content ────────────────────────────────────────────────
@@ -92,6 +93,21 @@ export function formatTime(secs) {
   const s = secs % 60;
   if (h > 0) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * Compact duration for constrained UI (e.g. the browser tab title) —
+ * mm:ss / hh:mm:ss via formatTime() for anything under a day, "Xd Yh" above
+ * that. formatTime() alone renders absurd values on real multi-day
+ * sessions (e.g. a 30-day plan showing "720:00:00").
+ */
+export function formatCompactDuration(secs) {
+  const days = Math.floor(secs / 86400);
+  if (days > 0) {
+    const hours = Math.floor((secs % 86400) / 3600);
+    return `${days}d ${hours}h`;
+  }
+  return formatTime(secs);
 }
 
 // ─── Mock activator session data ─────────────────────────────────────────────
