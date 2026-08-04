@@ -59,6 +59,11 @@ export function getSessionStatus(mac) {
   return request(`/session/${encodeURIComponent(mac)}`);
 }
 
+/** GET /api/session/by-username/:username */
+export function getSessionByUsername(username) {
+  return request(`/session/by-username/${encodeURIComponent(username)}`);
+}
+
 /** POST /api/activators/login — Body: { phone, pin } */
 export function activatorLogin(phone, pin) {
   return request('/activators/login', { method: 'POST', body: JSON.stringify({ phone, pin }) });

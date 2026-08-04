@@ -15,9 +15,10 @@
   import CoordinatorLoginScreen from '$lib/screens/CoordinatorLoginScreen.svelte';
   import CoordinatorDashboardScreen from '$lib/screens/CoordinatorDashboardScreen.svelte';
   import TimelineScreen from '$lib/screens/TimelineScreen.svelte';
+  import CheckSessionScreen from '$lib/screens/CheckSessionScreen.svelte';
   import { PACKAGES, WARNING_THRESHOLD } from '$lib/data.js';
   import { getSessionStatus } from '$lib/api.js';
-  import { getClientMac } from '$lib/device.js';
+  import { getClientMac, getStoredClientMac } from '$lib/device.js';
 
   let screen = $state('packages');
   let checkingSession = $state(true);
@@ -46,31 +47,53 @@
     return { ...local, demoSecs: data.durationSecs ?? local.demoSecs };
   }
 
+  // Shared by the MAC-based auto-check and the username-based manual check
+  // (CheckSessionScreen) — applies a GET /session/... response to app state
+  // and picks the right screen. Returns false if the payload didn't map to
+  // a package we know how to render (caller should treat as "not found").
+  function applySessionData(data) {
+    const restoredPkg = buildPkgFromSession(data);
+    if (!restoredPkg) return false;
+
+    selectedPkg = restoredPkg;
+    phone = data.phone ? data.phone.replace(/^\+?254/, '') : '';
+
+    if (data.active) {
+      const serverNow = data.serverNow ?? Date.now();
+      activeInitialRemaining = data.expiresAt
+        ? Math.max(0, Math.round((data.expiresAt - serverNow) / 1000))
+        : restoredPkg.demoSecs;
+      screen = 'active';
+    } else {
+      screen = 'ended';
+    }
+    return true;
+  }
+
   // On load, ask the backend whether this device (by MAC) already has a
   // session on record — resume the live timer if it's still active, or
   // show the ended summary if it just expired, instead of always starting
   // fresh at package selection. Falls through to the normal flow if the
   // backend/DB is unreachable or no session is found.
+  //
+  // The MAC is only trustworthy here if it came from the router's redirect
+  // URL just now, or was cached in this exact browser from a previous visit
+  // that did. Without either, generating a throwaway random MAC would just
+  // silently fail to match anything — so instead we send the user to
+  // CheckSessionScreen to identify themselves by username. This is the
+  // Android case: captive-portal logins open in an isolated WebView with
+  // its own storage, separate from the user's regular Chrome — the real
+  // MAC only ever reached that WebView's localStorage, not Chrome's.
   onMount(async () => {
-    const mac = getClientMac();
-    const result = await getSessionStatus(mac);
+    const params = new URLSearchParams(window.location.search);
+    const hasRouterMac = ['id', 'mac', 'client_mac'].some((name) => params.get(name));
+    const hasStoredMac = !!getStoredClientMac();
 
-    if (result.ok && result.data?.found) {
-      const restoredPkg = buildPkgFromSession(result.data);
-      if (restoredPkg) {
-        selectedPkg = restoredPkg;
-        phone = result.data.phone ? result.data.phone.replace(/^\+?254/, '') : '';
-
-        if (result.data.active) {
-          const serverNow = result.data.serverNow ?? Date.now();
-          activeInitialRemaining = result.data.expiresAt
-            ? Math.max(0, Math.round((result.data.expiresAt - serverNow) / 1000))
-            : restoredPkg.demoSecs;
-          screen = 'active';
-        } else {
-          screen = 'ended';
-        }
-      }
+    if (hasRouterMac || hasStoredMac) {
+      const result = await getSessionStatus(getClientMac());
+      if (result.ok && result.data?.found) applySessionData(result.data);
+    } else {
+      screen = 'check-session';
     }
 
     checkingSession = false;
@@ -92,6 +115,14 @@
       onActivatorLogin={() => (screen = 'activator-login')}
       onCoordinatorLogin={() => (screen = 'coordinator-login')}
       onEarnAccess={() => (screen = 'timeline')}
+    />
+  {/if}
+  {#if screen === 'check-session'}
+    <CheckSessionScreen
+      onFound={(data) => {
+        if (!applySessionData(data)) screen = 'packages';
+      }}
+      onSkip={goPackages}
     />
   {/if}
   {#if screen === 'timeline'}

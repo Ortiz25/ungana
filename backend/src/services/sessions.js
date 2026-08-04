@@ -1,5 +1,5 @@
 import { query } from "../db/pool.js";
-import { upsertClient } from "./clients.js";
+import { upsertClient, setClientUsername } from "./clients.js";
 
 /**
  * Create the pending session row for a fresh payment attempt (or an earned
@@ -17,8 +17,12 @@ export async function createPendingSession({
   amountKES,
   paymentProvider,
   durationSecs,
+  username,
 }) {
   const clientId = await upsertClient(clientMac, phone);
+  // Throws (Postgres 23505) if `username` is already claimed by another
+  // client — left to the caller to catch and turn into a 409.
+  if (username) await setClientUsername(clientId, username);
 
   const { rows } = await query(
     `INSERT INTO sessions
@@ -52,6 +56,24 @@ export async function getLatestSessionForMac(mac) {
      ORDER BY s.authorized_at DESC NULLS LAST, s.created_at DESC
      LIMIT 1`,
     [mac.toLowerCase()]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Same as `getLatestSessionForMac`, keyed by the client's self-chosen
+ * username instead — the recovery path for a browser context that never
+ * saw the router's MAC redirect (see the `clients.username` comment in
+ * schema.sql). Deliberately no phone-based equivalent of this lookup.
+ */
+export async function getLatestSessionForUsername(username) {
+  const { rows } = await query(
+    `SELECT s.*, c.phone AS client_phone
+     FROM sessions s JOIN clients c ON c.id = s.client_id
+     WHERE c.username = $1 AND s.payment_status = 'success'
+     ORDER BY s.authorized_at DESC NULLS LAST, s.created_at DESC
+     LIMIT 1`,
+    [username]
   );
   return rows[0] || null;
 }

@@ -70,13 +70,26 @@ CREATE INDEX IF NOT EXISTS idx_activators_status ON activators(status);
 -- deliberately not unique since the same device may pay with different
 -- numbers across sessions, and is nullable since a device may exist before
 -- any payment (e.g. first portal hit).
+-- `username` is a self-chosen, optional, pseudonymous handle set at
+-- checkout — the recovery key for "check my session" from a browser
+-- context that never saw the router's MAC redirect (e.g. Android opens
+-- captive-portal logins in an isolated WebView with its own storage,
+-- separate from the user's regular browser — localStorage can't bridge
+-- that gap). Deliberately NOT the phone number: a public, unauthenticated
+-- lookup keyed on real phone numbers would let anyone enumerate Kenyan
+-- phone numbers against payment history, which phone itself must still be
+-- collected for M-Pesa but should never be used for.
 CREATE TABLE IF NOT EXISTS clients (
   id          SERIAL PRIMARY KEY,
   mac_address TEXT UNIQUE NOT NULL,                 -- device identity, lower-cased
-  phone       TEXT,                                 -- +254XXXXXXXXX, last used
+  phone       TEXT,                                 -- +254XXXXXXXXX, last used — for payment/support only, never a public lookup key
+  username    TEXT UNIQUE,                          -- self-chosen recovery handle, optional
   first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Idempotent for databases created before `username` existed.
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS username TEXT UNIQUE;
 
 CREATE INDEX IF NOT EXISTS idx_clients_phone ON clients(phone);
 

@@ -5,6 +5,7 @@ import {
   createPendingSession,
   getSessionByReference,
   getLatestSessionForMac,
+  getLatestSessionForUsername,
   markSessionFailed,
 } from "../services/sessions.js";
 import { completeAuthorization } from "../services/authorization.js";
@@ -17,7 +18,8 @@ export const paymentsRouter = Router();
 /**
  * POST /api/initiate-payment
  * Body: { phoneNumber, clientMac, amount, packageId, activatorCode?, email?,
- *         duration?, durationSecs?, expire_number?, expire_unit?, data?, simulateFailure? }
+ *         duration?, durationSecs?, expire_number?, expire_unit?, data?,
+ *         simulateFailure?, username? }
  * `activatorCode` is the referral code chosen in the portal; omit or send
  * 'SELF' for a self-onboarded user (no activator credited).
  * `duration` is whole minutes (matches the UniFi voucher API); pass
@@ -25,6 +27,9 @@ export const paymentsRouter = Router();
  * frontend's accelerated demo timers) — it takes priority when present.
  * `simulateFailure` only has an effect when the server is running with
  * APP_MODE=simulation — it's ignored for real payments.
+ * `username` is optional — a self-chosen handle that lets this session be
+ * recovered later via GET /session/by-username/:username from a browser
+ * context that never saw the router's MAC redirect. Never the phone number.
  */
 paymentsRouter.post("/initiate-payment", async (req, res) => {
   const {
@@ -40,6 +45,7 @@ paymentsRouter.post("/initiate-payment", async (req, res) => {
     expire_unit,
     data,
     simulateFailure,
+    username,
   } = req.body;
 
   if (!phoneNumber || !clientMac || !amount) {
@@ -69,12 +75,16 @@ paymentsRouter.post("/initiate-payment", async (req, res) => {
       amountKES: amount,
       paymentProvider: PAYMENT_PROVIDER,
       durationSecs,
+      username: username || undefined,
     });
 
     console.log(`🔖 Pending session stored [${reference}] for MAC ${clientMac} via ${PAYMENT_PROVIDER}`);
 
     res.json({ success: true, reference, provider: PAYMENT_PROVIDER, status, displayText });
   } catch (error) {
+    if (error.code === "23505" && error.constraint?.includes("username")) {
+      return res.status(409).json({ success: false, message: "That username is already taken — try another." });
+    }
     console.error("❌ Payment initiation error:", error.response?.data || error.message);
     res.status(500).json({ success: false, message: error.response?.data?.message || error.message });
   }
@@ -182,6 +192,26 @@ paymentsRouter.post("/webhook/daraja", async (req, res) => {
   res.json({ ResultCode: 0, ResultDesc: "Accepted" }); // ack so Safaricom stops retrying
 });
 
+/** Shared response shape for both the MAC and username session-status lookups. */
+function sessionStatusPayload(session) {
+  if (!session) return { found: false, active: false, serverNow: Date.now() };
+
+  const serverNow = Date.now();
+  const expiresAt = session.expires_at ? new Date(session.expires_at).getTime() : null;
+  const active = expiresAt === null || expiresAt > serverNow;
+
+  return {
+    found: true,
+    active,
+    type: session.package_id === "earned" ? "earned" : "time",
+    expiresAt,
+    durationSecs: session.duration_secs,
+    packageId: session.package_id,
+    phone: session.client_phone,
+    serverNow,
+  };
+}
+
 /**
  * GET /api/session/:mac
  * Latest session status for a device, read from our own DB. Distinguishes
@@ -192,24 +222,25 @@ paymentsRouter.post("/webhook/daraja", async (req, res) => {
 paymentsRouter.get("/session/:mac", async (req, res) => {
   try {
     const session = await getLatestSessionForMac(req.params.mac);
-    if (!session) return res.json({ found: false, active: false, serverNow: Date.now() });
-
-    const serverNow = Date.now();
-    const expiresAt = session.expires_at ? new Date(session.expires_at).getTime() : null;
-    const active = expiresAt === null || expiresAt > serverNow;
-
-    res.json({
-      found: true,
-      active,
-      type: session.package_id === "earned" ? "earned" : "time",
-      expiresAt,
-      durationSecs: session.duration_secs,
-      packageId: session.package_id,
-      phone: session.client_phone,
-      serverNow,
-    });
+    res.json(sessionStatusPayload(session));
   } catch (error) {
     console.error("❌ Session status error:", error.message);
+    res.status(500).json({ found: false, active: false, reason: "error", message: error.message });
+  }
+});
+
+/**
+ * GET /api/session/by-username/:username
+ * Same as GET /session/:mac, keyed by the client's self-chosen username —
+ * the recovery path when this browser context never saw the router's MAC
+ * redirect (see the `clients.username` comment in schema.sql).
+ */
+paymentsRouter.get("/session/by-username/:username", async (req, res) => {
+  try {
+    const session = await getLatestSessionForUsername(req.params.username);
+    res.json(sessionStatusPayload(session));
+  } catch (error) {
+    console.error("❌ Session status (by username) error:", error.message);
     res.status(500).json({ found: false, active: false, reason: "error", message: error.message });
   }
 });

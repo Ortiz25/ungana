@@ -1,5 +1,5 @@
 <script>
-  import { ArrowLeft, Phone, MessageCircle } from '@lucide/svelte';
+  import { ArrowLeft, Phone, MessageCircle, User } from '@lucide/svelte';
   import ScreenBg from '$lib/components/ScreenBg.svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import { initiatePayment } from '$lib/api.js';
@@ -8,6 +8,8 @@
   let { pkg, activator, onPay, onBack } = $props();
 
   let phone = $state('');
+  let username = $state('');
+  let usernameError = $state('');
   let simulateFailure = $state(false);
   let submitting = $state(false);
   const ready = $derived(phone.length >= 9 && !submitting);
@@ -16,6 +18,7 @@
   async function handlePay() {
     if (!ready) return;
     submitting = true;
+    usernameError = '';
 
     // Best-effort: ask the backend to start a real (or simulated, depending
     // on its APP_MODE) STK push. If it's unreachable, `reference` stays
@@ -27,10 +30,19 @@
       packageId: pkg.id,
       activatorCode: activator?.id ?? 'SELF',
       durationSecs: pkg.demoSecs,
-      simulateFailure
+      simulateFailure,
+      username: username.trim() || undefined
     });
 
     submitting = false;
+
+    if (!result.ok && result.status === 409) {
+      // Username taken — a real rejection, not an "unreachable" case. Let
+      // the user fix it and retry rather than silently dropping it.
+      usernameError = result.data?.message || 'That username is taken — try another.';
+      return;
+    }
+
     onPay(phone, simulateFailure, result.ok ? result.data?.reference ?? null : null);
   }
 </script>
@@ -103,6 +115,34 @@
         </div>
         <span class="flex-1 px-4 py-3.5 text-[#C45C38] font-bold text-sm">{pkg.price.toLocaleString()}</span>
         <span class="pr-4 text-[10px] text-[#C45C38] opacity-60 font-medium">fixed</span>
+      </div>
+
+      <div>
+        <div
+          class="flex items-center rounded-2xl overflow-hidden border border-white/10"
+          style="background: #3C6A4A;"
+        >
+          <div class="px-4 py-3.5 border-r border-white/15 shrink-0">
+            <User size={13} color="#C4DAC0" />
+          </div>
+          <input
+            type="text"
+            value={username}
+            oninput={(e) => {
+              username = e.currentTarget.value.replace(/\s/g, '').slice(0, 24);
+              usernameError = '';
+            }}
+            placeholder="Username (optional)"
+            class="flex-1 bg-transparent px-4 py-3.5 text-[#E8D4B0] placeholder-[#7A9E7A] text-sm outline-none"
+          />
+        </div>
+        {#if usernameError}
+          <p class="text-[11px] text-[#F0A08A] mt-1.5 px-1">{usernameError}</p>
+        {:else}
+          <p class="text-[11px] mt-1.5 px-1" style="color: #7A9E7A;">
+            So you can check your session later from any browser
+          </p>
+        {/if}
       </div>
 
       <div class="flex justify-between items-center px-4 py-2.5 rounded-xl" style="background: rgba(255,255,255,0.14);">

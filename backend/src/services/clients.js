@@ -17,3 +17,13 @@ export async function upsertClient(macAddress, phone = null) {
   );
   return rows[0].id;
 }
+
+/**
+ * Claim a username for a client. Throws a Postgres unique-violation
+ * (error.code === "23505") if it's already taken by a different client —
+ * callers should catch that specifically and surface "username taken"
+ * rather than a generic 500.
+ */
+export async function setClientUsername(clientId, username) {
+  await query(`UPDATE clients SET username = $1 WHERE id = $2`, [username, clientId]);
+}
