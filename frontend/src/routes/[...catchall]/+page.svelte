@@ -210,6 +210,7 @@
       activator={selectedActivator}
       willFail={simulatePaymentFailure}
       reference={paymentReference}
+      mode={appMode}
       onContinue={() => (screen = 'connecting')}
       onFailed={(reason) => {
         paymentFailReason = reason;

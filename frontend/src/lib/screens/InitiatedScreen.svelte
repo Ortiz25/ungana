@@ -3,9 +3,10 @@
   import ScreenBg from '$lib/components/ScreenBg.svelte';
   import { verifyPayment } from '$lib/api.js';
 
-  let { pkg, phone, activator, willFail = false, reference = null, onContinue, onFailed } = $props();
+  let { pkg, phone, activator, willFail = false, reference = null, mode = 'simulation', onContinue, onFailed } = $props();
 
   let copied = $state(false);
+  let checking = $state(false);
   const localTxId = 'UNG-' + Math.random().toString(36).slice(2, 8).toUpperCase();
   // Prefer the backend's real reference when we have one, for display/copy.
   const displayTxId = reference || localTxId;
@@ -15,7 +16,9 @@
   // Local fallback path — used when there's no backend reference at all
   // (initiate-payment failed/unreachable) or the backend never resolves in
   // time. Mirrors the same `simulateFailure` intent the backend was asked
-  // to honour, so behaviour is consistent either way.
+  // to honour, so behaviour is consistent either way. Only ever reached in
+  // simulation mode or when the backend is genuinely unreachable — never
+  // used to short-circuit a real, still-pending payment.
   function localFallbackProceed() {
     if (willFail) onFailed(failureReason);
     else onContinue();
@@ -28,11 +31,55 @@
   // them into the local demo fallback. At least a minute before giving up.
   const POLL_DEADLINE_MS = 60000;
 
-  // Manual "skip the wait" button — resolves immediately without waiting on
-  // the poll loop, using the same simulated intent.
+  let pollTimer;
+  let pollCancelled = false;
+  let pollDeadline = Date.now() + POLL_DEADLINE_MS;
+
+  async function poll() {
+    if (pollCancelled || !reference) return;
+    checking = true;
+    const result = await verifyPayment(reference);
+    checking = false;
+    if (pollCancelled) return;
+
+    if (!result.ok && result.error) {
+      // Network/timeout — backend unreachable mid-flow, fall back.
+      localFallbackProceed();
+      return;
+    }
+
+    const status = result.data?.status;
+    if (result.data?.success && status === 'success') {
+      onContinue();
+      return;
+    }
+    if (status === 'failed') {
+      onFailed(failureReason);
+      return;
+    }
+    if (Date.now() > pollDeadline) {
+      localFallbackProceed();
+      return;
+    }
+    pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
+  }
+
+  // "Continue to Session" in simulation / offline-fallback: skip the wait
+  // using the same simulated intent the backend was asked to honour.
   function proceed() {
     localFallbackProceed();
   }
+
+  // "Check Status Now" in active mode with a real reference: re-queries the
+  // actual payment status immediately instead of waiting for the next
+  // scheduled poll tick. Never fabricates an outcome — a real payment must
+  // actually be confirmed by the provider before granting access.
+  function checkNow() {
+    clearTimeout(pollTimer);
+    poll();
+  }
+
+  const showCheckNow = $derived(mode === 'active' && !!reference);
 
   $effect(() => {
     if (!reference) {
@@ -40,40 +87,11 @@
       return () => clearTimeout(t);
     }
 
-    let cancelled = false;
-    let pollTimer;
-    const deadline = Date.now() + POLL_DEADLINE_MS;
-
-    async function poll() {
-      if (cancelled) return;
-      const result = await verifyPayment(reference);
-      if (cancelled) return;
-
-      if (!result.ok && result.error) {
-        // Network/timeout — backend unreachable mid-flow, fall back.
-        localFallbackProceed();
-        return;
-      }
-
-      const status = result.data?.status;
-      if (result.data?.success && status === 'success') {
-        onContinue();
-        return;
-      }
-      if (status === 'failed') {
-        onFailed(failureReason);
-        return;
-      }
-      if (Date.now() > deadline) {
-        localFallbackProceed();
-        return;
-      }
-      pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
-    }
-
+    pollCancelled = false;
+    pollDeadline = Date.now() + POLL_DEADLINE_MS;
     poll();
     return () => {
-      cancelled = true;
+      pollCancelled = true;
       clearTimeout(pollTimer);
     };
   });
@@ -138,11 +156,20 @@
   </div>
 
   <button
-    onclick={proceed}
-    class="w-full py-4 rounded-2xl font-bold text-base transition-all active:scale-95"
-    style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
+    onclick={showCheckNow ? checkNow : proceed}
+    disabled={showCheckNow && checking}
+    class="w-full py-4 rounded-2xl font-bold text-base transition-all active:scale-95 flex items-center justify-center gap-2"
+    style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff; opacity: {showCheckNow && checking ? 0.7 : 1};"
   >
-    Continue to Session
+    {#if showCheckNow}
+      {#if checking}
+        <div class="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin"></div>Checking…
+      {:else}
+        Check Status Now
+      {/if}
+    {:else}
+      Continue to Session
+    {/if}
   </button>
   <p class="text-[10px] text-[#7A8868] text-center mt-4">swap.ungana.app</p>
 </ScreenBg>
