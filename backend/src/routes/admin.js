@@ -10,6 +10,8 @@ import {
 import { createActivator, adminListActivators, updateActivator } from "../services/activators.js";
 import { createCoordinator, adminListCoordinators, updateCoordinator } from "../services/coordinators.js";
 import { uploadContentFile } from "../services/uploads.js";
+import { adminGetSettings, setEarnConnectThresholdSecs } from "../services/settings.js";
+import { getAdminAnalytics, getContentItemAnalytics } from "../services/analytics.js";
 
 export const adminRouter = Router();
 
@@ -44,17 +46,21 @@ adminRouter.get("/content", async (_req, res) => {
 });
 
 const CONTENT_SECTIONS = ["hero", "whats_new", "survey", "news", "watch_earn"];
+const VIEW_FREQUENCIES = ["once", "daily", "weekly", "monthly", "session"];
 
 /**
  * POST /api/admin/content
- * Body: { type, section?, title, category?, durationLabel?, earnSecs,
- *         minWatchSecs?, imgUrl?, bodyUrl?, surveyQuestions?, sortOrder? }
+ * Body: { type, section?, viewFrequency?, title, category?, durationLabel?,
+ *         earnSecs, minWatchSecs?, imgUrl?, bodyUrl?, surveyQuestions?, sortOrder? }
  * `section` picks which landing-feed zone this appears in — defaults to
- * 'whats_new' if omitted. `surveyQuestions` (array of question strings)
- * only matters for type='survey'.
+ * 'whats_new' if omitted. `viewFrequency` picks how often a client can
+ * re-earn this item's reward — defaults to 'once' (forever, per client) if
+ * omitted; 'daily'/'weekly'/'monthly' reset on a calendar boundary,
+ * 'session' resets whenever the client gets a new internet session.
+ * `surveyQuestions` (array of question strings) only matters for type='survey'.
  */
 adminRouter.post("/content", async (req, res) => {
-  const { type, title, earnSecs, section } = req.body;
+  const { type, title, earnSecs, section, viewFrequency } = req.body;
   if (!type || !title || earnSecs === undefined) {
     return res.status(400).json({ success: false, message: "type, title, and earnSecs are required" });
   }
@@ -63,6 +69,9 @@ adminRouter.post("/content", async (req, res) => {
   }
   if (section !== undefined && !CONTENT_SECTIONS.includes(section)) {
     return res.status(400).json({ success: false, message: `section must be one of ${CONTENT_SECTIONS.join(", ")}` });
+  }
+  if (viewFrequency !== undefined && !VIEW_FREQUENCIES.includes(viewFrequency)) {
+    return res.status(400).json({ success: false, message: `viewFrequency must be one of ${VIEW_FREQUENCIES.join(", ")}` });
   }
 
   try {
@@ -78,6 +87,9 @@ adminRouter.post("/content", async (req, res) => {
 adminRouter.patch("/content/:id", async (req, res) => {
   if (req.body.section !== undefined && !CONTENT_SECTIONS.includes(req.body.section)) {
     return res.status(400).json({ success: false, message: `section must be one of ${CONTENT_SECTIONS.join(", ")}` });
+  }
+  if (req.body.viewFrequency !== undefined && !VIEW_FREQUENCIES.includes(req.body.viewFrequency)) {
+    return res.status(400).json({ success: false, message: `viewFrequency must be one of ${VIEW_FREQUENCIES.join(", ")}` });
   }
 
   try {
@@ -204,6 +216,60 @@ adminRouter.patch("/coordinators/:id", async (req, res) => {
     res.json({ success: true, coordinator });
   } catch (error) {
     console.error("❌ Admin coordinator update error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ── Settings ─────────────────────────────────────────────────────────────
+
+/** GET /api/admin/settings */
+adminRouter.get("/settings", async (_req, res) => {
+  try {
+    const settings = await adminGetSettings();
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error("❌ Admin settings fetch error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** PATCH /api/admin/settings — Body: { earnConnectThresholdMinutes }. */
+adminRouter.patch("/settings", async (req, res) => {
+  const { earnConnectThresholdMinutes } = req.body;
+  if (earnConnectThresholdMinutes === undefined || !(Number(earnConnectThresholdMinutes) >= 0)) {
+    return res.status(400).json({ success: false, message: "earnConnectThresholdMinutes must be a non-negative number" });
+  }
+
+  try {
+    const settings = await setEarnConnectThresholdSecs(Number(earnConnectThresholdMinutes) * 60);
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error("❌ Admin settings update error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ── Analytics ────────────────────────────────────────────────────────────
+
+/** GET /api/admin/analytics — Watch & Earn engagement + purchase revenue summary. */
+adminRouter.get("/analytics", async (_req, res) => {
+  try {
+    const analytics = await getAdminAnalytics();
+    res.json({ success: true, analytics });
+  } catch (error) {
+    console.error("❌ Admin analytics error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** GET /api/admin/analytics/content/:id — per-item drill-down, including survey answer breakdown. */
+adminRouter.get("/analytics/content/:id", async (req, res) => {
+  try {
+    const detail = await getContentItemAnalytics(req.params.id);
+    if (!detail) return res.status(404).json({ success: false, message: "Content item not found" });
+    res.json({ success: true, detail });
+  } catch (error) {
+    console.error("❌ Admin content analytics error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });

@@ -126,6 +126,11 @@ export function completeContentItem(id, body) {
   return request(`/content/${encodeURIComponent(id)}/complete`, { method: 'POST', body: JSON.stringify(body) });
 }
 
+/** POST /api/content/:id/impression — fire-and-forget view count, analytics only. */
+export function recordContentImpression(id) {
+  return request(`/content/${encodeURIComponent(id)}/impression`, { method: 'POST', body: JSON.stringify({}) });
+}
+
 /** POST /api/content/claim-earned-session — Body: { mac }. Folds every unclaimed completion into a real, router-authorised session. */
 export function claimEarnedSession(mac) {
   return request('/content/claim-earned-session', { method: 'POST', body: JSON.stringify({ mac }), timeoutMs: 10000 });
@@ -238,4 +243,29 @@ export function adminCreateCoordinator(token, body) {
 /** PATCH /api/admin/coordinators/:id — partial update, including status suspend/activate. */
 export function adminUpdateCoordinator(token, id, body) {
   return request(`/admin/coordinators/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** GET /api/settings — public, admin-tunable values (e.g. { earnConnectThresholdSecs }). */
+export function getSettings() {
+  return request('/settings');
+}
+
+/** GET /api/admin/settings */
+export function adminGetSettings(token) {
+  return request('/admin/settings', authed(token));
+}
+
+/** PATCH /api/admin/settings — Body: { earnConnectThresholdMinutes }. */
+export function adminUpdateSettings(token, body) {
+  return request('/admin/settings', { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** GET /api/admin/analytics — Watch & Earn engagement + purchase revenue summary. */
+export function adminGetAnalytics(token) {
+  return request('/admin/analytics', authed(token));
+}
+
+/** GET /api/admin/analytics/content/:id — per-item drill-down, including survey answer breakdown. */
+export function adminGetContentAnalytics(token, id) {
+  return request(`/admin/analytics/content/${encodeURIComponent(id)}`, authed(token));
 }

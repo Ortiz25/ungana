@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { ArrowLeft, Zap, CheckCircle2, Play, Gift, FileText, ChevronRight } from '@lucide/svelte';
+  import { ArrowLeft, Zap, CheckCircle2, Play, Gift, FileText, ChevronRight, Unlock } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import TLContentCard from '$lib/components/TLContentCard.svelte';
   import {
@@ -13,7 +13,7 @@
     TL_TYPE_LABEL,
     TL_TYPE_COLOR
   } from '$lib/data.js';
-  import { getContent, getContentCompletions, completeContentItem, claimEarnedSession } from '$lib/api.js';
+  import { getContent, getContentCompletions, completeContentItem, claimEarnedSession, getSettings, recordContentImpression } from '$lib/api.js';
   import { getClientMac } from '$lib/device.js';
 
   let { onBuyAccess, onConnect, onBack } = $props();
@@ -104,6 +104,15 @@
   let progressTimer = null;
   let startedAt = 0;
 
+  // Admin-configurable (default 30 min — see backend/src/services/settings.js);
+  // fetched once on mount, falls back to the default if unreachable.
+  let connectThresholdSecs = $state(1800);
+  let justUnlocked = $state(false);
+  // Guards the "you just unlocked Connect Now" celebration so it only fires
+  // for a completion during this session, not for restoring an
+  // already-sufficient balance from the server on page load/reload.
+  let initialLoadDone = $state(false);
+
   onMount(async () => {
     mac = getClientMac();
 
@@ -114,6 +123,13 @@
     const rows = completionsResult.ok ? (completionsResult.data?.completions ?? []) : [];
     completedIds = new Set(rows.map((r) => r.content_item_id));
     realUnclaimedSecs = rows.filter((r) => !r.claimed).reduce((sum, r) => sum + (r.earn_secs ?? 0), 0);
+
+    const settingsResult = await getSettings();
+    if (settingsResult.ok && Number.isFinite(settingsResult.data?.earnConnectThresholdSecs)) {
+      connectThresholdSecs = settingsResult.data.earnConnectThresholdSecs;
+    }
+
+    initialLoadDone = true;
   });
 
   // Real items with no configured minimum still get a short, honest fill —
@@ -141,6 +157,11 @@
     claimError = false;
     videoCurrentTime = 0;
     startedAt = Date.now();
+
+    // Fire-and-forget — analytics only (admin dashboard's "impressions"),
+    // never blocks opening the viewer and never touches demo/padding items
+    // since they have no real backend record to increment.
+    if (item.isLive) recordContentImpression(item.id);
 
     if (item.type === 'survey' || hasNativePlayer(item)) return; // survey: answerSurveyQuestion(); native video: handleVideoTimeUpdate()
 
@@ -226,7 +247,27 @@
   const earnedFormatted = $derived(
     earnedHours > 0 ? `${earnedHours}h${earnedMins > 0 ? ` ${earnedMins}m` : ''}` : `${earnedMins}m`
   );
-  const canConnect = $derived(totalEarnedSecs >= 1800);
+  const canConnect = $derived(totalEarnedSecs >= connectThresholdSecs);
+  const connectProgressPct = $derived(
+    connectThresholdSecs > 0 ? Math.min(100, Math.round((totalEarnedSecs / connectThresholdSecs) * 100)) : 100
+  );
+
+  // Fires the "unlocked" celebration the moment canConnect flips from false
+  // to true — not on every render while it stays true, and not for the
+  // initial data restore on mount (see initialLoadDone) — only for a
+  // completion, during this session, that visibly crosses the line.
+  let wasAbleToConnect = false;
+  $effect(() => {
+    if (!initialLoadDone) {
+      wasAbleToConnect = canConnect;
+      return;
+    }
+    if (canConnect && !wasAbleToConnect) {
+      justUnlocked = true;
+      setTimeout(() => (justUnlocked = false), 4000);
+    }
+    wasAbleToConnect = canConnect;
+  });
 
   let connecting = $state(false);
   let connectError = $state(null);
@@ -438,6 +479,20 @@
       </div>
     </div>
 
+    <!-- Connect Now unlocked celebration -->
+    <div
+      style="position: absolute; top: 64px; left: 50%; transform: translateX(-50%) translateY({justUnlocked
+        ? '0'
+        : '-72px'}) scale({justUnlocked ? '1' : '0.92'}); opacity: {justUnlocked ? '1' : '0'}; transition: all 0.4s cubic-bezier(0.34,1.56,0.64,1); z-index: 51; pointer-events: none;"
+    >
+      <div class="flex items-center gap-2.5 pl-3 pr-4 py-2.5 rounded-full shadow-xl" style="background: linear-gradient(135deg, #C45C38, #CC8830); white-space: nowrap;">
+        <div class="w-6 h-6 rounded-full flex items-center justify-center shrink-0" style="background: rgba(255,255,255,0.25);">
+          <Unlock size={12} color="#fff" />
+        </div>
+        <span class="text-xs font-bold text-white">You can connect now!</span>
+      </div>
+    </div>
+
     <!-- Scrollable feed -->
     <div class="flex-1 overflow-y-auto">
       <!-- Hero section -->
@@ -593,7 +648,30 @@
               {connecting ? 'Connecting…' : 'Connect Now'}
             </button>
           {:else}
-            <p class="text-[11px] text-right shrink-0" style="color: #96B496;">Keep earning<br />to connect</p>
+            {@const remainingSecs = Math.max(connectThresholdSecs - totalEarnedSecs, 0)}
+            {@const remainingLabel = remainingSecs >= 60 ? `${Math.ceil(remainingSecs / 60)}m` : `${remainingSecs}s`}
+            <div class="flex items-center gap-2 shrink-0">
+              <div class="relative w-9 h-9 shrink-0">
+                <svg viewBox="0 0 36 36" class="w-full h-full" style="transform: rotate(-90deg);">
+                  <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="4" />
+                  <circle
+                    cx="18"
+                    cy="18"
+                    r="15"
+                    fill="none"
+                    stroke="#C45C38"
+                    stroke-width="4"
+                    stroke-linecap="round"
+                    stroke-dasharray={`${(connectProgressPct / 100) * 94.2} 94.2`}
+                    style="transition: stroke-dasharray 0.4s ease;"
+                  />
+                </svg>
+                <div class="absolute inset-0 flex items-center justify-center">
+                  <span class="text-[9px] font-bold" style="color: #E8D4B0;">{connectProgressPct}%</span>
+                </div>
+              </div>
+              <p class="text-[11px] text-right leading-tight" style="color: #96B496;">{remainingLabel} more<br />to connect</p>
+            </div>
           {/if}
         {:else}
           <div class="flex-1 min-w-0">

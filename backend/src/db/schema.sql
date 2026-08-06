@@ -107,6 +107,26 @@ CREATE TABLE IF NOT EXISTS admin_users (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ── App settings ─────────────────────────────────────────────────────────
+-- Small generic key/value store for admin-tunable values that don't
+-- deserve their own column/table (e.g. the Earn Free Access "Connect Now"
+-- threshold) — cheaper to extend later than adding a new column per knob.
+-- Values are always stored as text; each reader parses to its own type.
+CREATE TABLE IF NOT EXISTS app_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS app_settings_set_updated_at ON app_settings;
+CREATE TRIGGER app_settings_set_updated_at
+  BEFORE UPDATE ON app_settings
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Default: 30 minutes of earned content before "Connect Now" unlocks.
+INSERT INTO app_settings (key, value) VALUES ('earn_connect_threshold_secs', '1800')
+ON CONFLICT (key) DO NOTHING;
+
 -- ── Clients ──────────────────────────────────────────────────────────────
 -- One row per end-user device, keyed by MAC address — the actual identity
 -- the router/captive-portal deals in. `phone` is the most recently used
@@ -237,6 +257,13 @@ CREATE TABLE IF NOT EXISTS content_items (
   img_url          TEXT,
   body_url         TEXT,                           -- video/article URL, or article body text
   survey_questions JSONB,                          -- only set when type = 'survey'
+  -- How often a client can re-earn this item's reward. 'once' = today's
+  -- original behaviour (forever, per client) — see content_completions'
+  -- period_key for how the others (daily/weekly/monthly reset on a
+  -- calendar boundary; 'session' resets whenever the client is granted a
+  -- new internet session, paid or earned) are actually enforced.
+  view_frequency   TEXT NOT NULL DEFAULT 'once',
+  impressions      BIGINT NOT NULL DEFAULT 0,       -- times a client has opened this item in the viewer (not just completed) — POST /api/content/:id/impression
   is_active        BOOLEAN NOT NULL DEFAULT true,
   sort_order       INTEGER NOT NULL DEFAULT 0,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -244,13 +271,19 @@ CREATE TABLE IF NOT EXISTS content_items (
 );
 
 -- Idempotent for databases that already had content_items before dwell-time
--- validation / section placement existed.
+-- validation / section placement / view-frequency existed.
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS min_watch_secs INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE content_items ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'whats_new';
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS view_frequency TEXT NOT NULL DEFAULT 'once';
+ALTER TABLE content_items ADD COLUMN IF NOT EXISTS impressions BIGINT NOT NULL DEFAULT 0;
 
 ALTER TABLE content_items DROP CONSTRAINT IF EXISTS content_items_section_check;
 ALTER TABLE content_items ADD CONSTRAINT content_items_section_check
   CHECK (section IN ('hero', 'whats_new', 'survey', 'news', 'watch_earn'));
+
+ALTER TABLE content_items DROP CONSTRAINT IF EXISTS content_items_view_frequency_check;
+ALTER TABLE content_items ADD CONSTRAINT content_items_view_frequency_check
+  CHECK (view_frequency IN ('once', 'daily', 'weekly', 'monthly', 'session'));
 
 DROP TRIGGER IF EXISTS content_items_set_updated_at ON content_items;
 CREATE TRIGGER content_items_set_updated_at
@@ -276,9 +309,26 @@ CREATE TABLE IF NOT EXISTS content_completions (
   response           JSONB,                        -- survey answers; null for video/article/lesson
   claimed            BOOLEAN NOT NULL DEFAULT false,
   claimed_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
+  -- Which "period" this completion belongs to, per the item's
+  -- view_frequency at the time: 'once' (constant, so it behaves like the
+  -- original forever-unique row); a date/ISO-week/year-month string for
+  -- daily/weekly/monthly; or the client's session id (text) for 'session'.
+  -- The client+item+period combination is what's actually unique — a new
+  -- period means a fresh completion is allowed. See services/content.js
+  -- getCurrentPeriodKey().
+  period_key         TEXT NOT NULL DEFAULT 'once',
   completed_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (client_id, content_item_id)
+  UNIQUE (client_id, content_item_id, period_key)
 );
+
+-- Idempotent for databases that already had content_completions before
+-- periodic view-frequency existed — widen the old 2-column uniqueness
+-- (client_id, content_item_id) to include period_key.
+ALTER TABLE content_completions ADD COLUMN IF NOT EXISTS period_key TEXT NOT NULL DEFAULT 'once';
+ALTER TABLE content_completions DROP CONSTRAINT IF EXISTS content_completions_client_id_content_item_id_key;
+ALTER TABLE content_completions DROP CONSTRAINT IF EXISTS content_completions_client_item_period_key;
+ALTER TABLE content_completions ADD CONSTRAINT content_completions_client_item_period_key
+  UNIQUE (client_id, content_item_id, period_key);
 
 CREATE INDEX IF NOT EXISTS idx_content_completions_client ON content_completions(client_id);
 CREATE INDEX IF NOT EXISTS idx_content_completions_unclaimed ON content_completions(client_id) WHERE claimed = false;

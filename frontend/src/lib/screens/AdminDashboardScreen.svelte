@@ -2,22 +2,30 @@
   import { onMount } from 'svelte';
   import {
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
-    ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone
+    ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
+    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu
   } from '@lucide/svelte';
+  import BarChartMini from '$lib/components/BarChartMini.svelte';
   import {
     adminGetContent, adminCreateContent, adminUpdateContent,
     adminGetActivators, adminCreateActivator, adminUpdateActivator,
     adminGetCoordinators, adminCreateCoordinator, adminUpdateCoordinator,
-    adminUploadContentFile
+    adminUploadContentFile, adminGetSettings, adminUpdateSettings, adminGetAnalytics, adminGetContentAnalytics
   } from '$lib/api.js';
 
   let { token, username, onLogout } = $props();
 
-  let tab = $state('content');
+  let tab = $state('analytics');
+  // Sidebar is always visible on wide screens (md:), and an off-canvas
+  // drawer toggled by the hamburger button on narrow ones — see the
+  // `md:` variants in the markup below.
+  let sidebarOpen = $state(false);
   const TABS = [
+    { id: 'analytics', label: 'Analytics', Icon: BarChart3 },
     { id: 'content', label: 'Content', Icon: FileText },
     { id: 'activators', label: 'Activators', Icon: Users },
-    { id: 'coordinators', label: 'Coordinators', Icon: ShieldCheck }
+    { id: 'coordinators', label: 'Coordinators', Icon: ShieldCheck },
+    { id: 'settings', label: 'Settings', Icon: Settings2 }
   ];
 
   const TYPE_ICON = { video: Video, article: FileText, survey: ClipboardList, lesson: BookOpen };
@@ -32,6 +40,18 @@
     { id: 'watch_earn', label: 'Watch & Earn' }
   ];
   const SECTION_LABEL = Object.fromEntries(SECTIONS.map((s) => [s.id, s.label]));
+
+  // How often a client can re-earn a content item's reward. 'session' ties
+  // to a fresh internet session (paid or earned) rather than a calendar
+  // boundary — see backend/src/utils/periodKey.js.
+  const VIEW_FREQUENCIES = [
+    { id: 'once', label: 'Once' },
+    { id: 'daily', label: 'Daily' },
+    { id: 'weekly', label: 'Weekly' },
+    { id: 'monthly', label: 'Monthly' },
+    { id: 'session', label: 'Per Session' }
+  ];
+  const VIEW_FREQUENCY_LABEL = Object.fromEntries(VIEW_FREQUENCIES.map((f) => [f.id, f.label]));
 
   let contentItems = $state([]);
   let activators = $state([]);
@@ -51,15 +71,50 @@
     if (r.ok) coordinators = r.data.coordinators;
   }
 
+  let earnConnectThresholdMinutes = $state('30');
+  async function loadSettings() {
+    const r = await adminGetSettings(token);
+    if (r.ok) earnConnectThresholdMinutes = String(Math.round((r.data.settings?.earnConnectThresholdSecs ?? 1800) / 60));
+  }
+
+  let analytics = $state(null);
+  let analyticsLoading = $state(true);
+  async function loadAnalytics() {
+    analyticsLoading = true;
+    const r = await adminGetAnalytics(token);
+    if (r.ok) analytics = r.data.analytics;
+    analyticsLoading = false;
+  }
+
+  // Per-content drill-down (impressions/completions/survey answer
+  // breakdown) — expanded inline under the clicked row in Content Overview.
+  let expandedContentId = $state(null);
+  let contentDetail = $state(null);
+  let contentDetailLoading = $state(false);
+
+  async function toggleContentAnalytics(id) {
+    if (expandedContentId === id) {
+      expandedContentId = null;
+      contentDetail = null;
+      return;
+    }
+    expandedContentId = id;
+    contentDetail = null;
+    contentDetailLoading = true;
+    const r = await adminGetContentAnalytics(token, id);
+    contentDetailLoading = false;
+    if (r.ok) contentDetail = r.data.detail;
+  }
+
   onMount(async () => {
-    await Promise.all([loadContent(), loadActivators(), loadCoordinators()]);
+    await Promise.all([loadContent(), loadActivators(), loadCoordinators(), loadSettings(), loadAnalytics()]);
     loading = false;
   });
 
   // ── Content form ─────────────────────────────────────────────────────────
   const DEFAULT_CONTENT_DRAFT = {
-    type: 'video', section: 'whats_new', title: '', category: '', durationLabel: '', earnMinutes: '30', minWatchSecs: '0',
-    imgUrl: '', bodyUrl: '', surveyQuestionsText: ''
+    type: 'video', section: 'whats_new', viewFrequency: 'once', title: '', category: '', durationLabel: '', earnMinutes: '30',
+    minWatchSecs: '0', imgUrl: '', bodyUrl: '', surveyQuestionsText: ''
   };
   let showContentForm = $state(false);
   let contentDraft = $state({ ...DEFAULT_CONTENT_DRAFT });
@@ -70,6 +125,7 @@
     return {
       type: draft.type,
       section: draft.section,
+      viewFrequency: draft.viewFrequency,
       title: draft.title.trim(),
       category: draft.category.trim() || undefined,
       durationLabel: draft.durationLabel.trim() || undefined,
@@ -145,6 +201,7 @@
     contentEditDraft = {
       type: item.type,
       section: item.section,
+      viewFrequency: item.view_frequency,
       title: item.title,
       category: item.category ?? '',
       durationLabel: item.duration_label ?? '',
@@ -363,6 +420,31 @@
     await loadCoordinators();
   }
 
+  // ── Settings ─────────────────────────────────────────────────────────────
+  let settingsSaving = $state(false);
+  let settingsError = $state('');
+  let settingsSaved = $state(false);
+
+  async function saveSettings() {
+    if (!(Number(earnConnectThresholdMinutes) >= 0)) {
+      settingsError = 'Enter a non-negative number of minutes';
+      return;
+    }
+    settingsError = '';
+    settingsSaving = true;
+
+    const result = await adminUpdateSettings(token, { earnConnectThresholdMinutes: Number(earnConnectThresholdMinutes) });
+    settingsSaving = false;
+
+    if (!result.ok || !result.data?.success) {
+      settingsError = result.data?.message || 'Could not save — check your connection';
+      return;
+    }
+
+    settingsSaved = true;
+    setTimeout(() => (settingsSaved = false), 2500);
+  }
+
   function formatEarn(secs) {
     const h = Math.floor(secs / 3600);
     const m = Math.round((secs % 3600) / 60);
@@ -430,37 +512,108 @@
   </div>
 {/snippet}
 
-<div style="min-height: 100dvh; background: #E8D4B0;">
-  <!-- Header -->
-  <div class="px-5 pt-6 pb-5" style="background: #1D3C2A;">
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <div class="w-9 h-9 rounded-2xl flex items-center justify-center" style="background: rgba(196,92,56,0.30);">
-          <ShieldCheck size={17} color="#C45C38" />
-        </div>
-        <div>
-          <p class="text-[9px] text-[#96B496] font-semibold uppercase tracking-widest">Admin</p>
-          <p class="text-sm font-bold text-[#E8D4B0]">{username}</p>
-        </div>
-      </div>
-      <button onclick={onLogout} class="w-8 h-8 rounded-full flex items-center justify-center" style="background: rgba(255,255,255,0.1);">
-        <LogOut size={14} color="#C4DAC0" />
-      </button>
+{#snippet statCard(Icon, label, value, color)}
+  <div class="rounded-2xl px-4 py-3.5 flex items-center gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid {color}22;">
+    <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: {color}22;">
+      <Icon size={16} color={color} />
+    </div>
+    <div class="min-w-0">
+      <p class="text-base font-bold text-[#E8D4B0] truncate">{value}</p>
+      <p class="text-[10px] text-[#96B496] uppercase tracking-wider">{label}</p>
     </div>
   </div>
+{/snippet}
 
-  <!-- Tab bar -->
-  <div class="flex mx-4 -mt-3 mb-4 rounded-2xl overflow-hidden p-1 gap-0.5 shadow-lg" style="background: #2E5A3E;">
-    {#each TABS as t (t.id)}
-      {@const Icon = t.Icon}
-      <button onclick={() => (tab = t.id)} class="flex-1 py-2.5 rounded-xl flex flex-col items-center gap-0.5 transition-all" style="background: {tab === t.id ? '#162C1E' : 'transparent'};">
-        <Icon size={14} color={tab === t.id ? '#C45C38' : '#C4DAC0'} />
-        <span class="text-[10px] font-bold" style="color: {tab === t.id ? '#E8D4B0' : '#C4DAC0'};">{t.label}</span>
-      </button>
-    {/each}
+{#snippet viewFrequencyPicker(value, onSelect)}
+  <div>
+    <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">View frequency — how often it resets</p>
+    <div class="flex gap-1.5 flex-wrap">
+      {#each VIEW_FREQUENCIES as f (f.id)}
+        <button
+          type="button"
+          onclick={() => onSelect(f.id)}
+          class="flex items-center gap-1 px-3 py-1.5 rounded-full text-[11px] font-semibold"
+          style="background: {value === f.id ? '#CC8830' : 'rgba(255,255,255,0.1)'}; color: {value === f.id ? '#fff' : '#C4DAC0'};"
+        >
+          {#if f.id !== 'once'}<Repeat size={10} />{/if}
+          {f.label}
+        </button>
+      {/each}
+    </div>
   </div>
+{/snippet}
 
-  <div class="px-4 pb-10 flex flex-col gap-3">
+<div class="flex" style="min-height: 100dvh; background: #E8D4B0;">
+  <!-- Mobile sidebar backdrop -->
+  {#if sidebarOpen}
+    <button
+      type="button"
+      aria-label="Close menu"
+      onclick={() => (sidebarOpen = false)}
+      class="fixed inset-0 z-40 md:hidden"
+      style="background: rgba(0,0,0,0.55); border: none; padding: 0; cursor: default;"
+    ></button>
+  {/if}
+
+  <!-- Sidebar — fixed off-canvas drawer on mobile (toggled by the hamburger
+       button in the top bar below), always-visible sticky column on md+. -->
+  <aside
+    class="fixed md:sticky top-0 left-0 h-dvh w-64 z-50 flex flex-col shrink-0 transition-transform duration-300 ease-out {sidebarOpen
+      ? 'translate-x-0'
+      : '-translate-x-full'} md:translate-x-0"
+    style="background: linear-gradient(180deg, #1D3C2A 0%, #16311F 60%, #122A1A 100%); box-shadow: {sidebarOpen ? '8px 0 24px rgba(0,0,0,0.3)' : 'none'};"
+  >
+    <div class="px-5 pt-6 pb-5 flex items-center justify-between shrink-0" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
+      <div class="flex items-center gap-2.5 min-w-0">
+        <div class="w-10 h-10 rounded-2xl flex items-center justify-center shadow-md shrink-0" style="background: linear-gradient(135deg, rgba(196,92,56,0.4), rgba(204,136,48,0.3)); border: 1px solid rgba(196,92,56,0.35);">
+          <ShieldCheck size={18} color="#C45C38" />
+        </div>
+        <div class="min-w-0">
+          <div class="flex items-center gap-1.5">
+            <p class="text-[9px] text-[#96B496] font-semibold uppercase tracking-widest">Admin</p>
+            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: #4E8050; box-shadow: 0 0 6px #4E8050;"></span>
+          </div>
+          <p class="text-sm font-bold text-[#E8D4B0] truncate" style="font-family: 'Playfair Display', serif;">{username}</p>
+        </div>
+      </div>
+      <button onclick={() => (sidebarOpen = false)} class="w-8 h-8 rounded-full flex items-center justify-center shrink-0 md:hidden" style="background: rgba(255,255,255,0.1);">
+        <X size={15} color="#C4DAC0" />
+      </button>
+    </div>
+
+    <nav class="flex-1 px-3 py-4 flex flex-col gap-1 overflow-y-auto">
+      {#each TABS as t (t.id)}
+        {@const Icon = t.Icon}
+        <button
+          onclick={() => { tab = t.id; sidebarOpen = false; }}
+          class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left transition-all"
+          style="background: {tab === t.id ? 'linear-gradient(135deg, rgba(196,92,56,0.28), rgba(204,136,48,0.16))' : 'transparent'}; border: 1px solid {tab === t.id ? 'rgba(196,92,56,0.35)' : 'transparent'};"
+        >
+          <Icon size={16} color={tab === t.id ? '#C45C38' : '#C4DAC0'} />
+          <span class="text-sm font-semibold" style="color: {tab === t.id ? '#E8D4B0' : '#C4DAC0'};">{t.label}</span>
+        </button>
+      {/each}
+    </nav>
+
+    <div class="p-3 shrink-0" style="border-top: 1px solid rgba(255,255,255,0.08);">
+      <button onclick={onLogout} class="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-all active:scale-[0.98]" style="background: rgba(184,80,56,0.12);">
+        <LogOut size={15} color="#E08A6A" />
+        <span class="text-sm font-semibold" style="color: #E08A6A;">Sign out</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <div class="flex-1 min-w-0">
+    <!-- Mobile top bar (hidden on md+, where the sidebar is always visible) -->
+    <div class="sticky top-0 z-30 px-4 py-3.5 flex items-center gap-3 md:hidden shadow-md" style="background: #1D3C2A;">
+      <button onclick={() => (sidebarOpen = true)} class="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style="background: rgba(255,255,255,0.1);">
+        <Menu size={16} color="#C4DAC0" />
+      </button>
+      <p class="text-sm font-bold text-[#E8D4B0]">{TABS.find((t) => t.id === tab)?.label}</p>
+    </div>
+
+  <div class="px-4 py-5 pb-10 md:px-8 md:py-8 flex flex-col gap-3 md:max-w-6xl">
     {#if loading}
       <div class="flex items-center justify-center py-12">
         <div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div>
@@ -475,7 +628,7 @@
       </button>
 
       {#if showContentForm}
-        <div class="rounded-3xl p-5 flex flex-col gap-3" style="background: #2E5A3E;">
+        <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
           <div>
             <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Type</p>
             <div class="flex gap-2">
@@ -491,6 +644,7 @@
             </div>
           </div>
           {@render sectionPicker(contentDraft.section, (id) => (contentDraft.section = id))}
+          {@render viewFrequencyPicker(contentDraft.viewFrequency, (id) => (contentDraft.viewFrequency = id))}
           {@render inputField('Title', contentDraft.title, (e) => (contentDraft.title = e.currentTarget.value))}
           {@render inputField('Category', contentDraft.category, (e) => (contentDraft.category = e.currentTarget.value), { placeholder: 'e.g. Education' })}
           {@render inputField('Duration label', contentDraft.durationLabel, (e) => (contentDraft.durationLabel = e.currentTarget.value), { placeholder: 'e.g. 5 min' })}
@@ -545,9 +699,10 @@
       {/if}
 
       <p class="text-xs text-[#3C6A4A] font-semibold px-1">{contentItems.length} items</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
       {#each contentItems as item (item.id)}
         {@const Icon = TYPE_ICON[item.type]}
-        <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; opacity: {item.is_active ? 1 : 0.5};">
+        <div class="rounded-2xl overflow-hidden shadow-sm" style="background: #2E5A3E; opacity: {item.is_active ? 1 : 0.5};">
           <div class="flex items-center gap-3 px-4 py-3.5">
             <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
               <Icon size={16} color="#C45C38" />
@@ -557,7 +712,11 @@
               <p class="text-[10px] text-[#AECAAE]">
                 <span class="font-semibold" style="color: #C45C38;">{SECTION_LABEL[item.section] ?? item.section}</span>
                 · {item.category || item.type} · {formatEarn(item.earn_secs)} reward{item.min_watch_secs > 0 ? ` · ${item.min_watch_secs}s min` : ''}
+                {#if item.view_frequency && item.view_frequency !== 'once'}
+                  · <span style="color: #CC8830;">{VIEW_FREQUENCY_LABEL[item.view_frequency]}</span>
+                {/if}
               </p>
+              <p class="text-[10px] text-[#96B496] flex items-center gap-1 mt-0.5"><Eye size={9} />{Number(item.impressions ?? 0).toLocaleString()} views</p>
             </div>
             <div class="flex flex-col gap-1.5 shrink-0 items-end">
               <button
@@ -595,6 +754,7 @@
                 </div>
               </div>
               {@render sectionPicker(contentEditDraft.section, (id) => (contentEditDraft.section = id))}
+              {@render viewFrequencyPicker(contentEditDraft.viewFrequency, (id) => (contentEditDraft.viewFrequency = id))}
               {@render inputField('Title', contentEditDraft.title, (e) => (contentEditDraft.title = e.currentTarget.value))}
               {@render inputField('Category', contentEditDraft.category, (e) => (contentEditDraft.category = e.currentTarget.value), { placeholder: 'e.g. Education' })}
               {@render inputField('Duration label', contentEditDraft.durationLabel, (e) => (contentEditDraft.durationLabel = e.currentTarget.value), { placeholder: 'e.g. 5 min' })}
@@ -648,6 +808,7 @@
           {/if}
         </div>
       {/each}
+      </div>
     {:else if tab === 'activators'}
       <button
         onclick={() => (showActivatorForm = !showActivatorForm)}
@@ -658,7 +819,7 @@
       </button>
 
       {#if showActivatorForm}
-        <div class="rounded-3xl p-5 flex flex-col gap-3" style="background: #2E5A3E;">
+        <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
           <div class="grid grid-cols-2 gap-3">
             {@render inputField('Code', activatorDraft.code, (e) => (activatorDraft.code = e.currentTarget.value), { placeholder: 'ACT-009' })}
             {@render inputField('Name', activatorDraft.name, (e) => (activatorDraft.name = e.currentTarget.value))}
@@ -703,8 +864,9 @@
       {/if}
 
       <p class="text-xs text-[#3C6A4A] font-semibold px-1">{activators.length} activators</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
       {#each activators as a (a.id)}
-        <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; opacity: {a.status === 'active' ? 1 : 0.5};">
+        <div class="rounded-2xl overflow-hidden shadow-sm" style="background: #2E5A3E; opacity: {a.status === 'active' ? 1 : 0.5};">
           <div class="flex items-center gap-3 px-4 py-3.5">
             <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-xs font-bold" style="background: rgba(196,92,56,0.28); color: #C45C38;">
               {a.code.slice(-2)}
@@ -780,6 +942,7 @@
           {/if}
         </div>
       {/each}
+      </div>
     {:else if tab === 'coordinators'}
       <button
         onclick={() => (showCoordinatorForm = !showCoordinatorForm)}
@@ -790,7 +953,7 @@
       </button>
 
       {#if showCoordinatorForm}
-        <div class="rounded-3xl p-5 flex flex-col gap-3" style="background: #2E5A3E;">
+        <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
           {@render inputField('Name', coordinatorDraft.name, (e) => (coordinatorDraft.name = e.currentTarget.value))}
           <div class="grid grid-cols-2 gap-3">
             {@render inputField('Phone', coordinatorDraft.phone, (e) => (coordinatorDraft.phone = e.currentTarget.value), { placeholder: '254700000000' })}
@@ -814,8 +977,9 @@
       {/if}
 
       <p class="text-xs text-[#3C6A4A] font-semibold px-1">{coordinators.length} coordinators</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
       {#each coordinators as c (c.id)}
-        <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; opacity: {c.status === 'active' ? 1 : 0.5};">
+        <div class="rounded-2xl overflow-hidden shadow-sm" style="background: #2E5A3E; opacity: {c.status === 'active' ? 1 : 0.5};">
           <div class="flex items-center gap-3 px-4 py-3.5">
             <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
               <ShieldCheck size={16} color="#C45C38" />
@@ -872,6 +1036,188 @@
           {/if}
         </div>
       {/each}
+      </div>
+    {:else if tab === 'analytics'}
+      {#if analyticsLoading}
+        <div class="flex items-center justify-center py-12">
+          <div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div>
+        </div>
+      {:else if !analytics}
+        <p class="text-xs text-[#96B496] text-center py-8">Could not load analytics — check your connection.</p>
+      {:else}
+        <div class="flex items-center gap-2 mb-1 px-1">
+          <div class="w-8 h-8 rounded-xl flex items-center justify-center" style="background: rgba(196,92,56,0.28);">
+            <Zap size={14} color="#C45C38" />
+          </div>
+          <h3 class="text-sm font-bold text-[#1D3C2A]">Watch & Earn</h3>
+        </div>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+          {@render statCard(Eye, 'Impressions', analytics.earned.totalImpressions.toLocaleString(), '#C45C38')}
+          {@render statCard(CheckCircle2, 'Completions', analytics.earned.totalCompletions.toLocaleString(), '#4E8050')}
+          {@render statCard(Users, 'Clients Engaged', analytics.earned.uniqueClientsEngaged.toLocaleString(), '#5B8ED6')}
+          {@render statCard(Award, 'Granted Sessions', analytics.earned.sessionsGrantedViaEarning.toLocaleString(), '#CC8830')}
+        </div>
+
+        <div class="grid md:grid-cols-2 gap-3 items-start">
+          <div class="rounded-2xl px-4 py-3.5 shadow-md" style="background: #2E5A3E;">
+            <p class="text-[10px] text-[#96B496] uppercase tracking-wider mb-1">Reward time earned / claimed</p>
+            <p class="text-lg font-bold text-[#E8D4B0]">
+              {formatEarn(analytics.earned.totalEarnedSecs)} <span class="text-xs text-[#96B496] font-normal">earned</span>
+              <span class="text-[#4A6842] mx-1">·</span>
+              {formatEarn(analytics.earned.totalClaimedSecs)} <span class="text-xs text-[#96B496] font-normal">claimed</span>
+            </p>
+          </div>
+
+          {#if analytics.earned.contentOverview.length > 0}
+            <div class="rounded-2xl overflow-hidden shadow-md" style="background: #2E5A3E;">
+              <div class="px-4 pt-3.5 pb-2">
+                <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Content Overview</p>
+                <p class="text-[10px] text-[#96B496]">Tap an item for interaction details</p>
+              </div>
+              {#each analytics.earned.contentOverview as c, i (c.id)}
+                <button
+                  type="button"
+                  onclick={() => toggleContentAnalytics(c.id)}
+                  class="w-full flex items-center gap-3 px-4 py-2.5 text-left"
+                  style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.1)' : 'none'}; opacity: {c.isActive ? 1 : 0.55};"
+                >
+                  <span class="text-xs font-bold w-4 shrink-0 text-center" style="color: #96B496;">{i + 1}</span>
+                  <p class="flex-1 min-w-0 text-xs text-[#E8D4B0] truncate">{c.title}</p>
+                  <span class="text-[10px] text-[#96B496] shrink-0 flex items-center gap-1"><Eye size={9} />{c.impressions}</span>
+                  <span class="text-[10px] font-bold shrink-0" style="color: #4E8050;">{c.completions} done</span>
+                </button>
+
+                {#if expandedContentId === c.id}
+                  <div class="px-4 py-3" style="background: rgba(0,0,0,0.15); border-top: 1px solid rgba(255,255,255,0.08);">
+                    {#if contentDetailLoading}
+                      <div class="flex justify-center py-4"><div class="w-5 h-5 rounded-full border-2 border-white/20 border-t-white/70 animate-spin"></div></div>
+                    {:else if contentDetail}
+                      <div class="grid grid-cols-2 gap-2 mb-3">
+                        <div>
+                          <p class="text-[9px] text-[#96B496] uppercase tracking-wider">Impressions</p>
+                          <p class="text-sm font-bold text-[#E8D4B0]">{contentDetail.impressions.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p class="text-[9px] text-[#96B496] uppercase tracking-wider">Completions</p>
+                          <p class="text-sm font-bold text-[#E8D4B0]">{contentDetail.completions.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p class="text-[9px] text-[#96B496] uppercase tracking-wider">Unique Clients</p>
+                          <p class="text-sm font-bold text-[#E8D4B0]">{contentDetail.uniqueClients.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p class="text-[9px] text-[#96B496] uppercase tracking-wider">Completion Rate</p>
+                          <p class="text-sm font-bold text-[#E8D4B0]">{contentDetail.completionRate != null ? `${Math.round(contentDetail.completionRate * 100)}%` : '—'}</p>
+                        </div>
+                      </div>
+                      <p class="text-[10px] text-[#96B496] mb-3">Total reward time awarded: <span class="font-bold text-[#C45C38]">{formatEarn(contentDetail.totalEarnSecsAwarded)}</span></p>
+
+                      {#if contentDetail.type === 'survey' && contentDetail.surveyQuestions}
+                        <p class="text-[10px] font-bold text-[#C4DAC0] uppercase tracking-wider mb-2">Answer breakdown</p>
+                        {#each contentDetail.surveyQuestions as q, qi (qi)}
+                          {@const answers = contentDetail.surveyBreakdown?.[String(qi)] ?? []}
+                          {@const totalAnswers = answers.reduce((s, a) => s + a.count, 0)}
+                          <div class="mb-3 last:mb-0">
+                            <p class="text-xs text-[#E8D4B0] mb-1.5">{q}</p>
+                            {#if totalAnswers === 0}
+                              <p class="text-[10px] text-[#96B496]">No answers yet</p>
+                            {:else}
+                              {#each answers as a (a.answer)}
+                                {@const pct = Math.round((a.count / totalAnswers) * 100)}
+                                <div class="flex items-center gap-2 mb-1 last:mb-0">
+                                  <span class="text-[10px] w-16 shrink-0 text-right" style="color: #C4DAC0;">{a.answer}</span>
+                                  <div class="flex-1 h-2 rounded-full overflow-hidden" style="background: rgba(255,255,255,0.1);">
+                                    <div class="h-full rounded-full" style="width: {pct}%; background: #C45C38;"></div>
+                                  </div>
+                                  <span class="text-[10px] w-10 shrink-0" style="color: #96B496;">{pct}%</span>
+                                </div>
+                              {/each}
+                            {/if}
+                          </div>
+                        {/each}
+                      {/if}
+                    {:else}
+                      <p class="text-[10px] text-[#96B496] text-center py-2">Could not load details.</p>
+                    {/if}
+                  </div>
+                {/if}
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <div class="h-px my-1" style="background: rgba(29,60,42,0.12);"></div>
+
+        <div class="flex items-center gap-2 mb-1 px-1">
+          <div class="w-8 h-8 rounded-xl flex items-center justify-center" style="background: rgba(78,128,80,0.28);">
+            <Wallet size={14} color="#4E8050" />
+          </div>
+          <h3 class="text-sm font-bold text-[#1D3C2A]">Purchases</h3>
+        </div>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+          {@render statCard(CheckCircle2, 'Paid Sessions', analytics.purchased.totalPaidSessions.toLocaleString(), '#4E8050')}
+          {@render statCard(Radio, 'Active Now', analytics.purchased.activeSessionsNow.toLocaleString(), '#5B8ED6')}
+          {@render statCard(Wallet, 'Revenue', `KES ${analytics.purchased.totalRevenueKes.toLocaleString()}`, '#C45C38')}
+          {@render statCard(Award, 'Commission Paid', `KES ${analytics.purchased.totalCommissionKes.toLocaleString()}`, '#CC8830')}
+        </div>
+
+        <div class="grid md:grid-cols-2 gap-3 items-start">
+          {#if analytics.purchased.byPackage.length > 0}
+            <div class="rounded-2xl overflow-hidden shadow-md" style="background: #2E5A3E;">
+              <div class="px-4 pt-3.5 pb-1">
+                <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Revenue by Package</p>
+              </div>
+              <div style="height: 120px; margin: 8px 8px 4px -6px;">
+                <BarChartMini data={analytics.purchased.byPackage} yKey="revenueKes" xKey="packageId" height={120} color="#C45C38" barSize={26} radius={4} showGrid />
+              </div>
+            </div>
+          {/if}
+
+          {#if analytics.purchased.byProvider.length > 0}
+            <div class="rounded-2xl overflow-hidden shadow-md" style="background: #2E5A3E;">
+              <div class="px-4 pt-3.5 pb-2">
+                <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">By Payment Provider</p>
+              </div>
+              {#each analytics.purchased.byProvider as p, i (p.provider)}
+                <div class="flex items-center justify-between px-4 py-2.5" style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.1)' : 'none'};">
+                  <span class="text-xs text-[#E8D4B0] capitalize">{p.provider}</span>
+                  <span class="text-xs text-[#96B496]">{p.count} sessions · <span class="font-bold" style="color: #C45C38;">KES {p.revenueKes.toLocaleString()}</span></span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    {:else if tab === 'settings'}
+      <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
+        <div class="flex items-center gap-2 mb-1">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
+            <Zap size={16} color="#C45C38" />
+          </div>
+          <div>
+            <p class="text-sm font-bold text-[#E8D4B0]">Earn Free Access — Connect threshold</p>
+            <p class="text-[10px] text-[#96B496]">Minutes of earned content required before "Connect Now" unlocks</p>
+          </div>
+        </div>
+        {@render inputField('Minutes required', earnConnectThresholdMinutes, (e) => (earnConnectThresholdMinutes = e.currentTarget.value), { type: 'number' })}
+
+        {#if settingsError}
+          <p class="text-xs text-[#E08A6A]">{settingsError}</p>
+        {/if}
+        {#if settingsSaved}
+          <p class="text-xs" style="color: #4E8050;">Saved.</p>
+        {/if}
+
+        <button
+          onclick={saveSettings}
+          disabled={settingsSaving}
+          class="w-full py-3 rounded-2xl font-bold text-sm text-white"
+          style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {settingsSaving ? 0.7 : 1};"
+        >
+          {settingsSaving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
     {/if}
+  </div>
   </div>
 </div>

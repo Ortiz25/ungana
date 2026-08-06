@@ -5,6 +5,7 @@ import {
   recordCompletion,
   claimUnclaimedCompletions,
   attachClaimedSession,
+  recordImpression,
 } from "../services/content.js";
 import { upsertClient } from "../services/clients.js";
 import { createPendingSession } from "../services/sessions.js";
@@ -35,6 +36,25 @@ contentRouter.get("/completions", async (req, res) => {
   } catch (error) {
     console.error("❌ Content completions error:", error.message);
     res.status(500).json({ completions: [], message: error.message });
+  }
+});
+
+/**
+ * POST /api/content/:id/impression — fired when a client opens an item in
+ * the viewer, independent of whether they finish it. Fire-and-forget from
+ * the frontend (analytics only, never blocks the viewer) — no mac/body
+ * needed since impressions are aggregate counts, not per-client records.
+ */
+contentRouter.post("/:id/impression", async (req, res) => {
+  const contentItemId = Number(req.params.id);
+  if (!Number.isInteger(contentItemId)) return res.status(400).json({ ok: false, message: "invalid content id" });
+
+  try {
+    await recordImpression(contentItemId);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("❌ Content impression error:", error.message);
+    res.status(500).json({ ok: false, message: error.message });
   }
 });
 
