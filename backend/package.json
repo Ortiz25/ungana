@@ -8,6 +8,7 @@
     "dev": "node --watch src/server.js",
     "db:migrate": "node src/db/migrate.js",
     "db:seed": "node src/db/seed.js",
+    "db:fix-phones": "node src/db/fixPhoneFormat.js",
     "admin:create": "node src/db/createAdmin.js"
   },
   "dependencies": {
