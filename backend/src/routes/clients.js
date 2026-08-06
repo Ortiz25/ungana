@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getClientByMac, isUsernameAvailable } from "../services/clients.js";
+import { getClientByMac, isUsernameAvailable, getClientAssignedActivator } from "../services/clients.js";
 
 export const clientsRouter = Router();
 
@@ -11,6 +11,23 @@ clientsRouter.get("/by-mac/:mac/username", async (req, res) => {
   } catch (error) {
     console.error("❌ Client lookup error:", error.message);
     res.status(500).json({ username: null, message: error.message });
+  }
+});
+
+/**
+ * GET /api/clients/by-mac/:mac/activator
+ * Auto-fill + lock support for checkout. `locked: true` means this MAC's
+ * activator assignment is permanent (see clients.activator_locked) —
+ * `activator` is either the assigned one or null (permanently self-onboarded).
+ * `locked: false` means still free to choose (new MAC, or no purchase yet).
+ */
+clientsRouter.get("/by-mac/:mac/activator", async (req, res) => {
+  try {
+    const result = await getClientAssignedActivator(req.params.mac);
+    res.json(result);
+  } catch (error) {
+    console.error("❌ Client activator lookup error:", error.message);
+    res.status(500).json({ locked: false, activator: null, message: error.message });
   }
 });
 

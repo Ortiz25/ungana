@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import {
     ShieldCheck, MapPin, LogOut, ArrowLeft, TrendingUp, TrendingDown, Minus, Radio, Users,
     Wallet, Award, AlertTriangle, Clock, Edit3, MessageCircle, Send, CheckCircle2, Eye,
@@ -8,8 +9,39 @@
   import {
     ACCESS_POINTS, COORD_ACTS, INIT_ESCALATIONS, ACT_WEEKLY, ACT_MONTHLY, ACT_DAYS, ACT_YEARLY
   } from '$lib/data.js';
+  import { getCoordinatorActivators, getCoordinatorEarnings } from '$lib/api.js';
 
   let { coordinator, onLogout } = $props();
+
+  // Real login (see CoordinatorLoginScreen) carries a JWT; the offline
+  // demo fallback doesn't. Network health/APs and escalations below are
+  // facility-wide mock data unrelated to which coordinator is logged in —
+  // that's a separate feature (real AP monitoring + a ticketing system)
+  // that doesn't exist yet, so those two tabs stay demo-only in both modes.
+  // Team performance vs. weekly/monthly targets (COORD_ACTS) IS
+  // coordinator-specific data the backend can now provide for real, so that
+  // part switches to live data when isReal — without the target-tracking
+  // UI, since no real per-activator targets exist to track against.
+  const isReal = !!coordinator.token;
+  let realActivators = $state([]);
+  let realEarnings = $state(null);
+  let loadingReal = $state(isReal);
+
+  onMount(async () => {
+    if (!isReal) return;
+    const [activatorsResult, earningsResult] = await Promise.all([
+      getCoordinatorActivators(coordinator.token),
+      getCoordinatorEarnings(coordinator.token)
+    ]);
+    if (activatorsResult.ok) realActivators = activatorsResult.data?.activators ?? [];
+    if (earningsResult.ok) realEarnings = earningsResult.data?.earnings ?? null;
+    loadingReal = false;
+  });
+
+  const realGrossKes = $derived(Number(realEarnings?.gross_kes ?? 0));
+  const realCommissionKes = $derived(Number(realEarnings?.commission_kes ?? 0));
+  const realPaidSessions = $derived(Number(realEarnings?.paid_sessions ?? 0));
+  const realActivatorCount = $derived(Number(realEarnings?.activator_count ?? realActivators.length));
 
   let tab = $state('overview');
   let escalations = $state(INIT_ESCALATIONS.map((e) => ({ ...e })));
@@ -336,7 +368,7 @@
 
     <!-- Floating stats strip -->
     <div class="mx-4 -mt-12 rounded-3xl shadow-xl mb-4 grid grid-cols-3 divide-x overflow-hidden" style="background: #162C1E;">
-      {#each [{ label: 'Active Users', value: totalUsers, sub: `of ${totalCapacity} capacity`, alert: false, dest: 'network' }, { label: 'Activators', value: COORD_ACTS.length, sub: `${COORD_ACTS.filter((a) => actPct(a) >= 100).length} on target`, alert: false, dest: 'activators' }, { label: 'Escalations', value: openEscs.length, sub: 'open tickets', alert: openEscs.length > 0, dest: 'escalations' }] as s (s.label)}
+      {#each [{ label: 'Active Users', value: totalUsers, sub: `of ${totalCapacity} capacity`, alert: false, dest: 'network' }, isReal ? { label: 'Activators', value: realActivatorCount, sub: `${realPaidSessions} paid sessions`, alert: false, dest: 'activators' } : { label: 'Activators', value: COORD_ACTS.length, sub: `${COORD_ACTS.filter((a) => actPct(a) >= 100).length} on target`, alert: false, dest: 'activators' }, { label: 'Escalations', value: openEscs.length, sub: 'open tickets', alert: openEscs.length > 0, dest: 'escalations' }] as s (s.label)}
         <button onclick={() => (tab = s.dest)} class="flex flex-col items-center py-3 px-2 active:opacity-70 transition-opacity" style="border-color: rgba(255,255,255,0.14);">
           <span class="text-base font-bold" style="color: {s.alert ? '#B85038' : '#C45C38'};">{s.value}</span>
           <span class="text-[9px] uppercase tracking-wider mt-0.5 text-center" style="color: {s.alert ? '#C07860' : '#C4DAC0'};">{s.label}</span>
@@ -381,6 +413,23 @@
           </button>
         {/if}
 
+        {#if isReal}
+          <!-- Real summary — no targets, trends, streaks, or dormancy here:
+               none of that is tracked by the backend yet, so a "team vs
+               target" widget would have nothing real to compare against. -->
+          <div class="rounded-2xl px-4 pt-4 pb-4" style="background: #2E5A3E;">
+            <div class="flex items-center gap-2 mb-3">
+              <Wallet size={14} color="#C45C38" />
+              <p class="text-[10px] text-[#C4DAC0] font-semibold uppercase tracking-wider">Team Commission (all-time)</p>
+            </div>
+            <p class="text-2xl font-bold text-[#E8D4B0]" style="font-family: 'Playfair Display', serif;">KES {realCommissionKes.toLocaleString()}</p>
+            <p class="text-[9px] text-[#96B496] mt-0.5">from KES {realGrossKes.toLocaleString()} gross · {realPaidSessions} paid sessions across {realActivatorCount} activator{realActivatorCount === 1 ? '' : 's'}</p>
+          </div>
+          <button onclick={() => (tab = 'activators')} class="w-full rounded-2xl px-4 py-3 flex items-center justify-between" style="background: rgba(46,90,62,0.1); border: 1px solid rgba(46,90,62,0.2);">
+            <span class="text-xs font-semibold text-[#1D3C2A]">View team breakdown by activator</span>
+            <ChevronRight size={14} color="#3C6A4A" />
+          </button>
+        {:else}
         <!-- Revenue card -->
         <div class="rounded-2xl px-4 pt-4 pb-3" style="background: #2E5A3E;">
           <div class="flex items-center justify-between mb-3">
@@ -466,6 +515,7 @@
             {/each}
           </div>
         {/if}
+        {/if}
       {/if}
 
       <!-- NETWORK -->
@@ -521,6 +571,37 @@
 
       <!-- TEAM -->
       {#if tab === 'activators'}
+        {#if isReal}
+          <!-- Plain real list — no target/streak/drill-down UI, since none
+               of that exists for real activators (see Overview's comment). -->
+          <p class="text-xs text-[#3C6A4A] font-semibold">{realActivators.length} activator{realActivators.length === 1 ? '' : 's'}</p>
+          {#if loadingReal}
+            <div class="flex justify-center py-8"><div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div></div>
+          {:else if realActivators.length === 0}
+            <div class="rounded-2xl px-4 py-8 flex flex-col items-center gap-2" style="background: #2E5A3E;">
+              <Users size={24} color="#96B496" />
+              <p class="text-xs text-[#96B496]">No activators assigned yet</p>
+            </div>
+          {:else}
+            {#each [...realActivators].sort((a, b) => Number(b.commission_kes) - Number(a.commission_kes)) as act (act.id)}
+              <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; opacity: {act.status === 'active' ? 1 : 0.5};">
+                <div class="flex items-center gap-3 px-4 py-3.5">
+                  <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 text-xs font-bold" style="background: rgba(196,92,56,0.28); color: #C45C38;">{inits(act.name)}</div>
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm font-bold text-[#E8D4B0] truncate">{act.name} <span class="text-[10px] text-[#96B496] font-normal">· {act.code}</span></p>
+                    <p class="text-[10px] text-[#C4DAC0] flex items-center gap-1">
+                      {#if act.territory}<MapPin size={9} />{act.territory} · {/if}{act.paid_sessions} sessions
+                    </p>
+                  </div>
+                  <div class="text-right shrink-0">
+                    <p class="text-sm font-bold text-[#C45C38]">KES {Number(act.commission_kes).toLocaleString()}</p>
+                    <p class="text-[9px] text-[#96B496]">{act.status}</p>
+                  </div>
+                </div>
+              </div>
+            {/each}
+          {/if}
+        {:else}
         <div class="flex rounded-2xl overflow-hidden" style="background: rgba(46,90,62,0.12);">
           {#each ['day', 'week', 'month', 'year'] as p (p)}
             <button onclick={() => (teamPeriod = p)} class="flex-1 py-2 text-[10px] font-bold" style="background: {teamPeriod === p ? '#2E5A3E' : 'transparent'}; color: {teamPeriod === p ? '#E8D4B0' : '#96B496'};">
@@ -630,6 +711,7 @@
             </div>
           </div>
         {/each}
+        {/if}
       {/if}
 
       <!-- ESCALATIONS -->

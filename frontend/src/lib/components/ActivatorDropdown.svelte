@@ -1,10 +1,13 @@
 <script>
   import { onMount } from 'svelte';
-  import { UserCheck, ChevronDown, Search, CheckCircle2 } from '@lucide/svelte';
+  import { UserCheck, ChevronDown, Search, CheckCircle2, Lock } from '@lucide/svelte';
   import { ACTIVATORS } from '$lib/data.js';
   import { getActivators } from '$lib/api.js';
 
-  let { value = null, onChange, error = false } = $props();
+  // `locked` — this MAC already has a permanent activator assignment from
+  // an earlier purchase (or is permanently self-onboarded); display-only,
+  // can't be reopened/changed. See PackageScreen's checkout auto-fill.
+  let { value = null, onChange, error = false, locked = false } = $props();
 
   let open = $state(false);
   let query = $state('');
@@ -52,16 +55,16 @@
   <!-- Trigger -->
   <button
     type="button"
+    disabled={locked}
     onclick={() => {
+      if (locked) return;
       open = !open;
       query = '';
     }}
     class="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-left transition-all"
-    style="background: {open ? '#2E5A3E' : 'rgba(46,90,62,0.08)'}; border: {error
-      ? '1.5px solid #B85038'
-      : open
-        ? '1.5px solid #C45C38'
-        : '1.5px solid transparent'};"
+    style="background: {open ? '#2E5A3E' : 'rgba(46,90,62,0.08)'}; opacity: {locked
+      ? 0.8
+      : 1}; border: {error ? '1.5px solid #B85038' : open ? '1.5px solid #C45C38' : '1.5px solid transparent'};"
   >
     <div
       class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
@@ -77,20 +80,31 @@
         <p class="text-sm" style="color: #9AB498;">Select your activator</p>
       {/if}
     </div>
-    <ChevronDown
-      size={16}
-      color={open ? '#C45C38' : '#3C6A4A'}
-      style="transform: {open ? 'rotate(180deg)' : 'rotate(0deg)'}; transition: transform 0.2s;"
-    />
+    {#if locked}
+      <Lock size={14} color="#3C6A4A" />
+    {:else}
+      <ChevronDown
+        size={16}
+        color={open ? '#C45C38' : '#3C6A4A'}
+        style="transform: {open ? 'rotate(180deg)' : 'rotate(0deg)'}; transition: transform 0.2s;"
+      />
+    {/if}
   </button>
 
+  <!-- Locked hint -->
+  {#if locked}
+    <p class="text-[11px] mt-1.5 px-1" style="color: #9AB498;">
+      {value ? 'Locked to your activator from a previous purchase' : 'Locked — you started self-onboarded'}
+    </p>
+  {/if}
+
   <!-- Error hint -->
-  {#if error && !open}
+  {#if error && !open && !locked}
     <p class="text-[11px] text-[#B85038] mt-1.5 px-1">Please select an activator to continue</p>
   {/if}
 
   <!-- Panel -->
-  {#if open}
+  {#if open && !locked}
     <div
       class="absolute left-0 right-0 mt-2 rounded-2xl overflow-hidden z-50"
       style="background: #2E5A3E; box-shadow: 0 16px 48px rgba(0,0,0,0.25); border: 1px solid rgba(196,92,56,0.35);"

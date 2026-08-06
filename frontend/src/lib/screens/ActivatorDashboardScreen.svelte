@@ -1,7 +1,8 @@
 <script>
+  import { onMount } from 'svelte';
   import {
     MapPin, Edit3, LogOut, ArrowUpRight, TrendingUp, BarChart2, UserCheck, Wallet, User,
-    Clock, CheckCircle2, MessageCircle, Bell, Award, CreditCard, Save, Copy
+    Clock, CheckCircle2, MessageCircle, Bell, Award, CreditCard, Save, Copy, Smartphone
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import AreaChartMini from '$lib/components/AreaChartMini.svelte';
@@ -9,8 +10,40 @@
     MOCK_ROSTER, daysUntilExpiry, COMMISSION_RATE, ALL_DAILY, MONTHLY_DATA,
     LIFETIME_TOTAL, THIS_WEEK, LAST_WEEK, WEEK_GROWTH, TODAY_EARN, YESTERDAY
   } from '$lib/data.js';
+  import { getActivatorSessions, getActivatorEarnings } from '$lib/api.js';
 
   let { activator, onLogout } = $props();
+
+  // A real backend login (see ActivatorLoginScreen) carries a JWT; the
+  // offline demo-fallback login doesn't. Everywhere below that shows actual
+  // money/session numbers branches on this — the mock dataset (MOCK_ROSTER,
+  // ALL_DAILY, PAYOUT_HISTORY, weekly/daily goals) is the same fixed demo
+  // data regardless of which activator logs in, so showing it next to a
+  // real activator's real numbers would be actively misleading, not just
+  // incomplete. Real mode intentionally shows less (no history charts, no
+  // goals, no payout ledger) rather than fabricate those.
+  const isReal = !!activator.token;
+  let realSessions = $state([]);
+  let realEarnings = $state(null);
+  let loadingReal = $state(isReal);
+
+  onMount(async () => {
+    if (!isReal) return;
+    const [sessionsResult, earningsResult] = await Promise.all([
+      getActivatorSessions(activator.token),
+      getActivatorEarnings(activator.token)
+    ]);
+    if (sessionsResult.ok) realSessions = sessionsResult.data?.sessions ?? [];
+    if (earningsResult.ok) realEarnings = earningsResult.data?.earnings ?? null;
+    loadingReal = false;
+  });
+
+  const realGrossKes = $derived(Number(realEarnings?.gross_kes ?? 0));
+  const realCommissionKes = $derived(Number(realEarnings?.commission_kes ?? 0));
+  const realPaidSessions = $derived(Number(realEarnings?.paid_sessions ?? 0));
+  const realUniqueDevices = $derived(new Set(realSessions.map((s) => s.client_mac)).size);
+  const realCommissionRate = $derived(activator.commissionRate != null ? Math.round(activator.commissionRate * 100) : 20);
+  const realRecentSessions = $derived([...realSessions].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 8));
 
   let nudged = $state({});
   let reminded = $state({});
@@ -107,11 +140,19 @@
     return name.split(' ').map((n) => n[0]).join('');
   }
 
-  const statsStrip = $derived([
-    { label: 'This Week', value: `KES ${THIS_WEEK.toLocaleString()}`, sub: 'payout Fri', alert: THIS_WEEK < LAST_WEEK },
-    { label: 'Users', value: MOCK_ROSTER.length, sub: `${activeUsers} active`, alert: false },
-    { label: 'Dormant', value: dormantUsers.length, sub: 'need nudging', alert: dormantUsers.length > 0 }
-  ]);
+  const statsStrip = $derived(
+    isReal
+      ? [
+          { label: 'Paid Sessions', value: realPaidSessions, sub: 'all-time', alert: false },
+          { label: 'Devices', value: realUniqueDevices, sub: 'unique clients', alert: false },
+          { label: 'Commission', value: `KES ${realCommissionKes.toLocaleString()}`, sub: 'all-time', alert: false }
+        ]
+      : [
+          { label: 'This Week', value: `KES ${THIS_WEEK.toLocaleString()}`, sub: 'payout Fri', alert: THIS_WEEK < LAST_WEEK },
+          { label: 'Users', value: MOCK_ROSTER.length, sub: `${activeUsers} active`, alert: false },
+          { label: 'Dormant', value: dormantUsers.length, sub: 'need nudging', alert: dormantUsers.length > 0 }
+        ]
+  );
 
   const profileFields = $derived([
     { icon: User, label: 'Display name', key: 'name', placeholder: 'How you want to be known', value: editingProfile ? profileDraft.name : displayName },
@@ -182,13 +223,19 @@
     <!-- Hero lifetime earnings -->
     <div>
       <p class="text-xs text-[#AECAAE] uppercase tracking-widest font-semibold mb-1">Total lifetime earnings</p>
-      <p class="text-4xl font-bold text-[#E8D4B0]" style="letter-spacing: -1.5px;">KES {LIFETIME_TOTAL.toLocaleString()}</p>
+      {#if isReal && loadingReal}
+        <div class="h-9 w-40 rounded-lg animate-pulse" style="background: rgba(255,255,255,0.14);"></div>
+      {:else}
+        <p class="text-4xl font-bold text-[#E8D4B0]" style="letter-spacing: -1.5px;">KES {(isReal ? realCommissionKes : LIFETIME_TOTAL).toLocaleString()}</p>
+      {/if}
       <div class="flex items-center gap-2 mt-2">
-        <div class="flex items-center gap-1 px-2 py-0.5 rounded-full" style="background: {WEEK_GROWTH >= 0 ? 'rgba(78,128,80,0.35)' : 'rgba(192,97,74,0.2)'};">
-          <ArrowUpRight size={12} color={WEEK_GROWTH >= 0 ? '#4E8050' : '#B85038'} />
-          <span class="text-[11px] font-bold" style="color: {WEEK_GROWTH >= 0 ? '#4E8050' : '#B85038'};">{WEEK_GROWTH}% vs last week</span>
-        </div>
-        <span class="text-[10px] text-[#AECAAE]">20% commission rate</span>
+        {#if !isReal}
+          <div class="flex items-center gap-1 px-2 py-0.5 rounded-full" style="background: {WEEK_GROWTH >= 0 ? 'rgba(78,128,80,0.35)' : 'rgba(192,97,74,0.2)'};">
+            <ArrowUpRight size={12} color={WEEK_GROWTH >= 0 ? '#4E8050' : '#B85038'} />
+            <span class="text-[11px] font-bold" style="color: {WEEK_GROWTH >= 0 ? '#4E8050' : '#B85038'};">{WEEK_GROWTH}% vs last week</span>
+          </div>
+        {/if}
+        <span class="text-[10px] text-[#AECAAE]">{isReal ? realCommissionRate : 20}% commission rate</span>
       </div>
     </div>
   </div>
@@ -219,6 +266,44 @@
   <div class="px-4 pb-8 flex flex-col gap-3">
     <!-- OVERVIEW -->
     {#if tab === 'overview'}
+      {#if isReal}
+        <!-- Real summary — no goals/plan-mix/dormancy here: those need
+             per-day time-series or engagement tracking the backend doesn't
+             have yet, so showing them would just be the same fixed demo
+             numbers regardless of who's logged in. -->
+        <div class="rounded-3xl overflow-hidden" style="background: #2E5A3E;">
+          <div class="px-5 pt-4 pb-4">
+            <p class="text-[10px] text-[#C4DAC0] uppercase tracking-widest font-semibold mb-1">All-time commission</p>
+            <p class="text-2xl font-bold text-[#E8D4B0]" style="font-family: 'Playfair Display', serif;">KES {realCommissionKes.toLocaleString()}</p>
+            <p class="text-[10px] text-[#96B496] mt-1">from KES {realGrossKes.toLocaleString()} in referred purchases · {realPaidSessions} paid sessions</p>
+          </div>
+        </div>
+
+        <div class="rounded-3xl overflow-hidden" style="background: #2E5A3E;">
+          <div class="px-4 pt-4 pb-2">
+            <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Recent Sessions</p>
+          </div>
+          {#if loadingReal}
+            <div class="px-4 pb-4"><div class="h-6 w-6 rounded-full border-2 border-white/20 border-t-white/70 animate-spin mx-auto"></div></div>
+          {:else if realRecentSessions.length === 0}
+            <p class="text-xs text-[#96B496] px-4 pb-4">No sessions referred yet.</p>
+          {:else}
+            {#each realRecentSessions as s, i (s.id)}
+              <div class="flex items-center gap-3 px-4 py-3" style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.14)' : 'none'};">
+                <div class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.30);">
+                  <Smartphone size={13} color="#C45C38" />
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="text-xs font-semibold text-[#E8D4B0] truncate">{s.client_phone || s.client_mac}</p>
+                  <p class="text-[10px] text-[#AECAAE]">{s.package_id} · {new Date(s.created_at).toLocaleDateString()} · {s.payment_status}</p>
+                </div>
+                <p class="text-xs font-bold text-[#C45C38] shrink-0">+KES {Number(s.commission_kes).toLocaleString()}</p>
+              </div>
+            {/each}
+          {/if}
+          <div class="h-3"></div>
+        </div>
+      {:else}
       <!-- Daily goal -->
       <div class="rounded-3xl px-5 py-4" style="background: #2E5A3E; border: 1px solid {dailyColor}33;">
         <div class="flex items-center justify-between mb-3">
@@ -380,10 +465,30 @@
         {/each}
         <div class="h-3"></div>
       </div>
+      {/if}
     {/if}
 
     <!-- EARNINGS -->
     {#if tab === 'earnings'}
+      {#if isReal}
+        <!-- No period charts here — the backend only tracks all-time
+             totals per activator, not a day-by-day breakdown, so a "This
+             Week / 30 Days" chart would have to be fabricated. -->
+        <div class="rounded-3xl px-5 py-4" style="background: #2E5A3E;">
+          <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider mb-3">All-time breakdown</p>
+          {#each [
+            { label: 'Gross referred purchases', value: realGrossKes, highlight: false },
+            { label: `Your commission (${realCommissionRate}%)`, value: realCommissionKes, highlight: true },
+            { label: 'Paid sessions', value: realPaidSessions, highlight: false, isCount: true }
+          ] as row (row.label)}
+            <div class="flex justify-between items-center py-2.5" style="border-bottom: 1px solid rgba(255,255,255,0.14);">
+              <span class="text-xs text-[#C4DAC0]">{row.label}</span>
+              <span class="text-sm font-bold" style="color: {row.highlight ? '#C45C38' : '#E8D4B0'};">{row.isCount ? row.value : `KES ${row.value.toLocaleString()}`}</span>
+            </div>
+          {/each}
+        </div>
+        <p class="text-[10px] text-[#96B496] text-center px-4">Detailed weekly/monthly earnings history isn't tracked yet — this shows all-time totals only.</p>
+      {:else}
       <div class="flex rounded-2xl overflow-hidden p-1 gap-1" style="background: rgba(46,90,62,0.12);">
         {#each PERIODS as p (p.id)}
           <button onclick={() => (period = p.id)} class="flex-1 py-2 rounded-xl text-[11px] font-bold transition-all" style="background: {period === p.id ? '#2E5A3E' : 'transparent'}; color: {period === p.id ? '#C45C38' : '#3C6A4A'};">
@@ -422,10 +527,47 @@
           </div>
         {/each}
       </div>
+      {/if}
     {/if}
 
     <!-- USERS -->
     {#if tab === 'users'}
+      {#if isReal}
+        <!-- Real sessions, not "users" — clients aren't named in this
+             system (identified by MAC/phone only), so this is a session
+             ledger rather than the roster-with-nudge-buttons concept below,
+             which depends on fictional plan/dormancy/lastActive fields. -->
+        <p class="text-xs text-[#3C6A4A] font-semibold">{realSessions.length} session{realSessions.length === 1 ? '' : 's'} · {realUniqueDevices} unique device{realUniqueDevices === 1 ? '' : 's'}</p>
+        {#if loadingReal}
+          <div class="flex justify-center py-8"><div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div></div>
+        {:else if realSessions.length === 0}
+          <div class="rounded-2xl px-4 py-8 flex flex-col items-center gap-2" style="background: rgba(46,90,62,0.08);">
+            <UserCheck size={24} color="#96B496" />
+            <p class="text-xs text-[#96B496]">No sessions referred yet</p>
+          </div>
+        {:else}
+          {#each [...realSessions].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) as s (s.id)}
+            {@const isActive = s.expires_at ? new Date(s.expires_at).getTime() > Date.now() : false}
+            <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E;">
+              <div class="flex items-center gap-3 px-4 py-3.5">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
+                  <Smartphone size={15} color="#C45C38" />
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-semibold text-[#E8D4B0] truncate">{s.client_phone || s.client_mac}</p>
+                  <p class="text-[10px] text-[#AECAAE]">{s.package_id} · {new Date(s.created_at).toLocaleDateString()}</p>
+                </div>
+                <div class="flex flex-col items-end gap-1 shrink-0">
+                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background: {isActive ? 'rgba(78,128,80,0.30)' : 'rgba(255,255,255,0.1)'}; color: {isActive ? '#4E8050' : '#96B496'};">
+                    {s.payment_status === 'success' ? (isActive ? 'Active' : 'Expired') : s.payment_status}
+                  </span>
+                  <p class="text-[10px] font-bold text-[#C45C38]">+KES {Number(s.commission_kes).toLocaleString()}</p>
+                </div>
+              </div>
+            </div>
+          {/each}
+        {/if}
+      {:else}
       <p class="text-xs text-[#3C6A4A] font-semibold">{MOCK_ROSTER.length} total · sorted by value · {expiringUsers.length} expiring soon</p>
       {#each sortedRoster as u, rank (u.name)}
         {@const isDormant = u.status === 'dormant'}
@@ -467,10 +609,25 @@
           </div>
         </div>
       {/each}
+      {/if}
     {/if}
 
     <!-- PAYOUTS -->
     {#if tab === 'payouts'}
+      {#if isReal}
+        <!-- No real payout ledger exists yet — commission is tracked, but
+             nothing marks it as "paid out" vs. "owed". Showing the old fake
+             payout dates/amounts here would look like real transaction
+             history, so this is a plain balance summary instead. -->
+        <div class="rounded-3xl px-5 py-5" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.35);">
+          <div class="flex items-center gap-2 mb-3">
+            <Wallet size={16} color="#C45C38" />
+            <p class="text-xs text-[#C4DAC0] uppercase tracking-widest font-semibold">All-time commission earned</p>
+          </div>
+          <p class="text-4xl font-bold text-[#C45C38]" style="letter-spacing: -1px;">KES {realCommissionKes.toLocaleString()}</p>
+          <p class="text-xs text-[#AECAAE] mt-1">Payout tracking isn't wired up yet — talk to your coordinator about settlement.</p>
+        </div>
+      {:else}
       <div class="rounded-3xl px-5 py-5" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.35);">
         <div class="flex items-center gap-2 mb-3">
           <Wallet size={16} color="#C45C38" />
@@ -513,6 +670,7 @@
         {/each}
         <div class="h-3"></div>
       </div>
+      {/if}
     {/if}
 
     <!-- PROFILE -->

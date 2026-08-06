@@ -25,7 +25,7 @@ export const ACTIVATORS = [
 
 // ─── Packages ─────────────────────────────────────────────────────────────────
 export const PACKAGES = [
-  { id: 'test', label: 'Test', duration: '5 minutes', price: 5, icon: Beaker, badge: 'Test', demoSecs: 300 },
+  { id: 'test', label: 'Test', duration: '5 minutes', price: 2, icon: Beaker, badge: 'Test', demoSecs: 300 },
   { id: 'daily', label: 'Daily', duration: '24 hours', price: 50, icon: Sun, badge: null, demoSecs: 45 },
   { id: 'weekly', label: 'Weekly', duration: '7 days', price: 250, icon: Calendar, badge: 'Best Value', demoSecs: 45 },
   { id: 'monthly', label: 'Monthly', duration: '30 days', price: 750, icon: Sparkles, badge: null, demoSecs: 45 }
@@ -69,7 +69,8 @@ export const TL_SURVEY = {
   duration: '2 min',
   earnLabel: '1h',
   earnSecs: 3600,
-  img: ''
+  img: '',
+  surveyQuestions: ['How do you use the internet?', 'What content matters most?', 'Rate your experience']
 };
 export const TL_ARTICLES = [
   { id: 'a1', type: 'article', title: 'Nairobi Tech Scene 2026', category: 'Technology', duration: '3 min', earnLabel: '30m', earnSecs: 1800, img: 'https://images.unsplash.com/photo-1623299677833-9f077d1a2e92?w=400&q=80' },

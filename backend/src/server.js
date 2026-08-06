@@ -1,12 +1,26 @@
 import express from "express";
 import cors from "cors";
-import { PORT, APP_MODE, PAYMENT_PROVIDER, PAYSTACK_SECRET_KEY, DARAJA_CONSUMER_KEY } from "./config.js";
+import {
+  PORT,
+  APP_MODE,
+  PAYMENT_PROVIDER,
+  PAYSTACK_SECRET_KEY,
+  DARAJA_CONSUMER_KEY,
+  BTCPAY_URL,
+  BTCPAY_API_KEY,
+  BTCPAY_STORE_ID,
+} from "./config.js";
 import { paymentsRouter } from "./routes/payments.js";
 import { activatorsRouter } from "./routes/activators.js";
+import { coordinatorsRouter } from "./routes/coordinators.js";
 import { catalogRouter } from "./routes/catalog.js";
 import { clientsRouter } from "./routes/clients.js";
+import { btcRouter } from "./routes/btc.js";
+import { contentRouter } from "./routes/content.js";
+import { adminRouter } from "./routes/admin.js";
 import { retryPaidAuthorizations } from "./services/authorization.js";
 import { login } from "./services/unifi.js";
+import { UPLOADS_DIR } from "./services/uploads.js";
 
 if (APP_MODE === "active") {
   const missingCreds =
@@ -17,6 +31,12 @@ if (APP_MODE === "active") {
       `⚠️  APP_MODE=active but no credentials found for PAYMENT_PROVIDER=${PAYMENT_PROVIDER} — ` +
         `real payment calls will fail until .env is filled in (see PAYMENTS.md).`
     );
+  }
+  // BTC is a parallel, optional checkout method — only warn if it looks
+  // half-configured (BTCPAY_URL set but the rest missing), not if it's
+  // simply not set up yet (BTC checkout then just uses simulated invoices).
+  if (BTCPAY_URL && (!BTCPAY_API_KEY || !BTCPAY_STORE_ID)) {
+    console.warn("⚠️  BTCPAY_URL is set but BTCPAY_API_KEY/BTCPAY_STORE_ID are missing — BTC checkout will use simulated invoices until .env is complete.");
   }
 }
 
@@ -40,8 +60,13 @@ app.get("/api", (_req, res) => {
 
 app.use("/api", paymentsRouter);
 app.use("/api", catalogRouter);
+app.use("/api", btcRouter);
 app.use("/api/clients", clientsRouter);
 app.use("/api/activators", activatorsRouter);
+app.use("/api/coordinators", coordinatorsRouter);
+app.use("/api/content", contentRouter);
+app.use("/api/admin", adminRouter);
+app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ── Background retry sweep ────────────────────────────────────────────────
 // Re-attempts router authorisation for payments that succeeded but whose

@@ -9,7 +9,7 @@ import {
   markSessionFailed,
 } from "../services/sessions.js";
 import { completeAuthorization } from "../services/authorization.js";
-import { findActivatorByCode } from "../services/activators.js";
+import { resolveClientActivator } from "../services/activators.js";
 import { getPackageById } from "../services/catalog.js";
 import { authorizeClient } from "../services/unifi.js";
 import { APP_MODE, PAYMENT_PROVIDER, ENABLE_TEST_ROUTE } from "../config.js";
@@ -22,7 +22,10 @@ export const paymentsRouter = Router();
  *         duration?, durationSecs?, expire_number?, expire_unit?, data?,
  *         simulateFailure?, username? }
  * `activatorCode` is the referral code chosen in the portal; omit or send
- * 'SELF' for a self-onboarded user (no activator credited).
+ * 'SELF' for a self-onboarded user (no activator credited). Only honoured
+ * on a client's first-ever purchase — a returning client's activator
+ * assignment (or lack of one) is permanent, resolved server-side
+ * regardless of what's sent here. See resolveClientActivator().
  * `duration` is whole minutes (matches the UniFi voucher API); `durationSecs`
  * gives sub-minute precision. Both are only honoured when APP_MODE=simulation
  * (the frontend's accelerated demo timers) — in APP_MODE=active a
@@ -57,8 +60,10 @@ paymentsRouter.post("/initiate-payment", async (req, res) => {
   }
 
   try {
-    const activator =
-      activatorCode && activatorCode !== "SELF" ? await findActivatorByCode(activatorCode) : null;
+    // Ignored entirely for a returning client with a locked assignment —
+    // see resolveClientActivator's own comment. `activatorCode` here only
+    // ever matters on a client's genuinely first purchase.
+    const resolvedActivatorId = await resolveClientActivator(clientMac, activatorCode);
 
     const { reference, status, displayText } = await initiatePayment({
       phone: phoneNumber,
@@ -88,7 +93,7 @@ paymentsRouter.post("/initiate-payment", async (req, res) => {
       phone: phoneNumber,
       clientMac,
       packageId,
-      activatorId: activator?.id ?? null,
+      activatorId: resolvedActivatorId,
       amountKES: amount,
       paymentProvider: PAYMENT_PROVIDER,
       durationSecs,

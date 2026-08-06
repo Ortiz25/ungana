@@ -9,7 +9,7 @@
   // Android opens captive-portal logins in an isolated WebView with its own
   // storage, separate from the user's regular browser. `onFound` receives
   // the raw session-status payload; `onSkip` goes to the normal purchase flow.
-  let { onFound, onSkip, onActivatorLogin, onCoordinatorLogin } = $props();
+  let { onFound, onSkip, onActivatorLogin, onCoordinatorLogin, onAdminLogin } = $props();
 
   let username = $state('');
   let loading = $state(false);
@@ -115,6 +115,15 @@
     >
       <ShieldCheck size={12} />
       Coordinator
+    </button>
+    <span class="text-[#C4A870]">·</span>
+    <button
+      onclick={onAdminLogin}
+      class="flex items-center gap-1.5 text-[11px] font-semibold transition-opacity active:opacity-60"
+      style="color: #96B496;"
+    >
+      <ShieldCheck size={12} />
+      Admin
     </button>
   </div>
 </ScreenBg>

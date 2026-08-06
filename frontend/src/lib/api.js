@@ -11,16 +11,23 @@
 //     example-nginx-config.txt at the repo root)
 // Override either with VITE_API_BASE_URL if you need something else.
 const API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://localhost:5000/api' : '/backend/api');
+// Same dev/prod split as API_BASE, minus the /api suffix — for resolving the
+// relative "/uploads/…" path the upload endpoint returns into a URL that's
+// actually fetchable from the frontend's own origin (or localhost:5000 in dev).
+const BACKEND_ORIGIN = import.meta.env.VITE_BACKEND_ORIGIN || (import.meta.env.DEV ? 'http://localhost:5000' : '/backend');
 const TIMEOUT_MS = 5000;
 
-async function request(path, options = {}) {
+async function request(path, { timeoutMs = TIMEOUT_MS, ...options } = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  // FormData needs the browser to set its own multipart boundary — an
+  // explicit Content-Type here would break that.
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
 
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      headers: { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) },
       signal: controller.signal
     });
     const data = await res.json().catch(() => null);
@@ -59,6 +66,20 @@ export function verifyPayment(reference) {
   return request(`/verify-payment/${encodeURIComponent(reference)}`);
 }
 
+/**
+ * POST /api/initiate-btc-payment — generates a Lightning invoice. A real
+ * BTCPay round-trip (create invoice + fetch its payment methods) can take
+ * longer than the default timeout, so this gets a longer one.
+ */
+export function initiateBtcPayment(body) {
+  return request('/initiate-btc-payment', { method: 'POST', body: JSON.stringify(body), timeoutMs: 10000 });
+}
+
+/** GET /api/verify-btc-payment/:reference */
+export function verifyBtcPayment(reference) {
+  return request(`/verify-btc-payment/${encodeURIComponent(reference)}`);
+}
+
 /** GET /api/session/:mac */
 export function getSessionStatus(mac) {
   return request(`/session/${encodeURIComponent(mac)}`);
@@ -80,6 +101,36 @@ export function checkUsernameAvailable(username, mac) {
   return request(`/clients/username-available?${params}`);
 }
 
+/**
+ * GET /api/clients/by-mac/:mac/activator — checkout auto-fill/lock. Returns
+ * { locked, activator } — `locked: true` means this MAC's activator
+ * assignment is permanent (activator may still be null, meaning
+ * self-onboarded); `locked: false` means still free to choose.
+ */
+export function getActivatorForMac(mac) {
+  return request(`/clients/by-mac/${encodeURIComponent(mac)}/activator`);
+}
+
+/** GET /api/content — live Watch & Earn catalogue. */
+export function getContent() {
+  return request('/content');
+}
+
+/** GET /api/content/completions?mac=X — items this device has already finished, for UI restore after reload. */
+export function getContentCompletions(mac) {
+  return request(`/content/completions?mac=${encodeURIComponent(mac)}`);
+}
+
+/** POST /api/content/:id/complete — Body: { mac, elapsedSecs, response }. Server validates real dwell time / survey answers before crediting. */
+export function completeContentItem(id, body) {
+  return request(`/content/${encodeURIComponent(id)}/complete`, { method: 'POST', body: JSON.stringify(body) });
+}
+
+/** POST /api/content/claim-earned-session — Body: { mac }. Folds every unclaimed completion into a real, router-authorised session. */
+export function claimEarnedSession(mac) {
+  return request('/content/claim-earned-session', { method: 'POST', body: JSON.stringify({ mac }), timeoutMs: 10000 });
+}
+
 /** POST /api/activators/login — Body: { phone, pin } */
 export function activatorLogin(phone, pin) {
   return request('/activators/login', { method: 'POST', body: JSON.stringify({ phone, pin }) });
@@ -93,4 +144,98 @@ export function getActivatorSessions(token) {
 /** GET /api/activators/me/earnings — Bearer token required */
 export function getActivatorEarnings(token) {
   return request('/activators/me/earnings', { headers: { Authorization: `Bearer ${token}` } });
+}
+
+/** POST /api/coordinators/login — Body: { phone, pin } */
+export function coordinatorLogin(phone, pin) {
+  return request('/coordinators/login', { method: 'POST', body: JSON.stringify({ phone, pin }) });
+}
+
+/** GET /api/coordinators/me/activators — Bearer token required */
+export function getCoordinatorActivators(token) {
+  return request('/coordinators/me/activators', { headers: { Authorization: `Bearer ${token}` } });
+}
+
+/** GET /api/coordinators/me/earnings — Bearer token required */
+export function getCoordinatorEarnings(token) {
+  return request('/coordinators/me/earnings', { headers: { Authorization: `Bearer ${token}` } });
+}
+
+// ── Admin panel ──────────────────────────────────────────────────────────
+// Every function below (except adminLogin) requires the bearer token
+// returned by adminLogin.
+
+function authed(token) {
+  return { headers: { Authorization: `Bearer ${token}` } };
+}
+
+/** POST /api/admin/login — Body: { username, password } */
+export function adminLogin(username, password) {
+  return request('/admin/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+}
+
+/** GET /api/admin/content — every item, including deactivated ones. */
+export function adminGetContent(token) {
+  return request('/admin/content', authed(token));
+}
+
+/** POST /api/admin/content — Body matches services/content.js createContentItem fields. */
+export function adminCreateContent(token, body) {
+  return request('/admin/content', { method: 'POST', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** PATCH /api/admin/content/:id — partial update. */
+export function adminUpdateContent(token, id, body) {
+  return request(`/admin/content/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** DELETE /api/admin/content/:id — deactivates (soft-delete). */
+export function adminDeleteContent(token, id) {
+  return request(`/admin/content/${encodeURIComponent(id)}`, { method: 'DELETE', ...authed(token) });
+}
+
+/**
+ * POST /api/admin/content/upload — uploads an image/video file (admin
+ * content form's "or upload a file" option). Resolves the backend's
+ * relative "/uploads/…" response into a full URL so the caller can drop it
+ * straight into imgUrl/bodyUrl with no further logic needed.
+ */
+export async function adminUploadContentFile(token, file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const result = await request('/admin/content/upload', { method: 'POST', body: formData, timeoutMs: 60000, ...authed(token) });
+  if (result.ok && result.data?.url) {
+    return { ...result, data: { ...result.data, url: `${BACKEND_ORIGIN}${result.data.url}` } };
+  }
+  return result;
+}
+
+/** GET /api/admin/activators — every activator with performance numbers. */
+export function adminGetActivators(token) {
+  return request('/admin/activators', authed(token));
+}
+
+/** POST /api/admin/activators — Body: { code, name, phone, pin, territory?, mpesaNumber?, commissionRate?, coordinatorId? } */
+export function adminCreateActivator(token, body) {
+  return request('/admin/activators', { method: 'POST', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** PATCH /api/admin/activators/:id — partial update, including status suspend/activate. */
+export function adminUpdateActivator(token, id, body) {
+  return request(`/admin/activators/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** GET /api/admin/coordinators — every coordinator with a performance rollup of their activators. */
+export function adminGetCoordinators(token) {
+  return request('/admin/coordinators', authed(token));
+}
+
+/** POST /api/admin/coordinators — Body: { name, phone, pin, territory? } */
+export function adminCreateCoordinator(token, body) {
+  return request('/admin/coordinators', { method: 'POST', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** PATCH /api/admin/coordinators/:id — partial update, including status suspend/activate. */
+export function adminUpdateCoordinator(token, id, body) {
+  return request(`/admin/coordinators/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
 }

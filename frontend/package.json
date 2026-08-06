@@ -19,5 +19,8 @@
     "svelte-check": "^4.1.0",
     "tailwindcss": "^4.1.12",
     "vite": "^6.3.5"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
   }
 }

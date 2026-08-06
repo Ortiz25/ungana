@@ -56,3 +56,14 @@ export const DARAJA_CALLBACK_URL = process.env.DARAJA_CALLBACK_URL;
 export const DARAJA_ACCOUNT_REF = process.env.DARAJA_ACCOUNT_REF || "HOTSPOT";
 export const DARAJA_BASE_URL =
   DARAJA_ENV === "production" ? "https://api.safaricom.co.ke" : "https://sandbox.safaricom.co.ke";
+
+// ── BTCPay Server (Lightning/Bitcoin) ──────────────────────────────────────
+// Independent of PAYMENT_PROVIDER — this is a second, parallel payment
+// method (M-Pesa vs BTC is a per-checkout choice, not a global setting) via
+// its own /initiate-btc-payment route. Dormant until BTCPAY_URL is set, same
+// convention as UNIFI_URL — until then, BTC checkout always uses the
+// simulated invoice generator regardless of APP_MODE.
+export const BTCPAY_URL = process.env.BTCPAY_URL; // e.g. https://btcpay.yourdomain.com
+export const BTCPAY_API_KEY = process.env.BTCPAY_API_KEY;
+export const BTCPAY_STORE_ID = process.env.BTCPAY_STORE_ID;
+export const BTCPAY_WEBHOOK_SECRET = process.env.BTCPAY_WEBHOOK_SECRET;

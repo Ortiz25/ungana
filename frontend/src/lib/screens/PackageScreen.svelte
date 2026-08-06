@@ -4,10 +4,11 @@
   import ScreenBg from '$lib/components/ScreenBg.svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import ActivatorDropdown from '$lib/components/ActivatorDropdown.svelte';
-  import { PACKAGES } from '$lib/data.js';
-  import { getPackages } from '$lib/api.js';
+  import { PACKAGES, ACTIVATORS } from '$lib/data.js';
+  import { getPackages, getActivatorForMac } from '$lib/api.js';
+  import { getClientMac } from '$lib/device.js';
 
-  let { mode = 'simulation', onSelect, onActivatorLogin, onCoordinatorLogin, onEarnAccess } = $props();
+  let { mode = 'simulation', onSelect, onActivatorLogin, onCoordinatorLogin, onAdminLogin, onEarnAccess } = $props();
 
   // Static PACKAGES supplies icon/badge/demoSecs (frontend-only demo/UI
   // concerns); price + label are refreshed from the backend when reachable
@@ -44,7 +45,22 @@
   let selected = $state('weekly');
   let activator = $state(null);
   let activatorError = $state(false);
+  // This MAC's activator assignment is permanent once a first purchase has
+  // happened (commission integrity — see backend schema.sql) — fetched and
+  // locked here so a returning client can't be re-attributed, deliberately
+  // or not. `locked` with a null activator means permanently self-onboarded.
+  let activatorLocked = $state(false);
   const chosen = $derived(packages.find((p) => p.id === selected) ?? packages[0]);
+
+  onMount(async () => {
+    const result = await getActivatorForMac(getClientMac());
+    if (!result.ok || !result.data?.locked) return;
+
+    activatorLocked = true;
+    activator = result.data.activator
+      ? { id: result.data.activator.code, name: result.data.activator.name, area: result.data.activator.territory ?? '' }
+      : ACTIVATORS.find((a) => a.id === 'SELF');
+  });
 </script>
 
 <ScreenBg>
@@ -58,9 +74,16 @@
   <div class="mb-5">
     <div class="flex items-center gap-2 mb-2">
       <h2 class="text-sm font-bold text-[#1D3C2A]">Your Activator</h2>
-      <span class="text-[10px] font-bold px-2 py-0.5 rounded-full text-white" style="background: #C45C38;">Required</span>
+      <span
+        class="text-[10px] font-bold px-2 py-0.5 rounded-full text-white"
+        style="background: {activatorLocked ? '#3C6A4A' : '#C45C38'};"
+      >
+        {activatorLocked ? 'Locked' : 'Required'}
+      </span>
     </div>
-    <p class="text-xs mb-3" style="color: #2E5A3E;">Who introduced you to Ungana?</p>
+    <p class="text-xs mb-3" style="color: #2E5A3E;">
+      {activatorLocked ? 'Set on your first purchase — cannot be changed' : 'Who introduced you to Ungana?'}
+    </p>
     <ActivatorDropdown
       value={activator}
       onChange={(a) => {
@@ -68,6 +91,7 @@
         activatorError = false;
       }}
       error={activatorError}
+      locked={activatorLocked}
     />
     {#if activator}
       <div
@@ -205,6 +229,15 @@
       >
         <ShieldCheck size={12} />
         Coordinator
+      </button>
+      <span class="text-[#C4A870]">·</span>
+      <button
+        onclick={onAdminLogin}
+        class="flex items-center gap-1.5 text-[11px] font-semibold transition-opacity active:opacity-60"
+        style="color: #96B496;"
+      >
+        <ShieldCheck size={12} />
+        Admin
       </button>
     </div>
   </div>

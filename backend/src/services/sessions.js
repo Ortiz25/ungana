@@ -1,5 +1,5 @@
 import { query } from "../db/pool.js";
-import { upsertClient, setClientUsername } from "./clients.js";
+import { upsertClient, setClientUsername, lockClientActivator } from "./clients.js";
 
 /**
  * Create the pending session row for a fresh payment attempt (or an earned
@@ -18,19 +18,39 @@ export async function createPendingSession({
   paymentProvider,
   durationSecs,
   username,
+  amountSats, // BTC only — sats amount at invoice-creation time, for audit/reconciliation
+  btcRateKes, // BTC only — KES/BTC rate at invoice-creation time, for audit/reconciliation
 }) {
   const clientId = await upsertClient(clientMac, phone);
   // Throws (Postgres 23505) if `username` is already claimed by another
   // client — left to the caller to catch and turn into a 409.
   if (username) await setClientUsername(clientId, username);
+  // No-op after the first purchase (see clients.activator_locked) — fixes
+  // this client's commission attribution permanently, `activatorId` here
+  // already having been resolved by resolveClientActivator() to whatever
+  // is authoritative (the caller's request only matters the very first time).
+  await lockClientActivator(clientId, activatorId ?? null);
 
   const { rows } = await query(
     `INSERT INTO sessions
        (reference, client_id, client_mac, package_id, activator_id, source,
-        amount_kes, payment_provider, duration_secs, payment_status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
+        amount_kes, payment_provider, duration_secs, payment_status,
+        amount_sats, btc_rate_kes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11)
      RETURNING *`,
-    [reference, clientId, clientMac, packageId, activatorId, source, amountKES, paymentProvider, durationSecs]
+    [
+      reference,
+      clientId,
+      clientMac,
+      packageId,
+      activatorId,
+      source,
+      amountKES,
+      paymentProvider,
+      durationSecs,
+      amountSats ?? null,
+      btcRateKes ?? null,
+    ]
   );
 
   await logPaymentEvent(rows[0].id, "initiated", { reference, phone, clientMac, packageId, amountKES });

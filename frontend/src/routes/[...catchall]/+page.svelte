@@ -16,6 +16,8 @@
   import CoordinatorDashboardScreen from '$lib/screens/CoordinatorDashboardScreen.svelte';
   import TimelineScreen from '$lib/screens/TimelineScreen.svelte';
   import CheckSessionScreen from '$lib/screens/CheckSessionScreen.svelte';
+  import AdminLoginScreen from '$lib/screens/AdminLoginScreen.svelte';
+  import AdminDashboardScreen from '$lib/screens/AdminDashboardScreen.svelte';
   import { PACKAGES, getWarningThreshold } from '$lib/data.js';
   import { getSessionStatus, getAppInfo } from '$lib/api.js';
   import { getClientMac, getStoredClientMac } from '$lib/device.js';
@@ -31,6 +33,7 @@
   let selectedActivator = $state(null);
   let loggedInActivator = $state(null);
   let loggedInCoordinator = $state(null);
+  let loggedInAdmin = $state(null);
   let phone = $state('');
   let warningRemaining = $state(getWarningThreshold(selectedPkg.demoSecs));
   let paymentFailReason = $state(null);
@@ -129,6 +132,7 @@
       }}
       onActivatorLogin={() => (screen = 'activator-login')}
       onCoordinatorLogin={() => (screen = 'coordinator-login')}
+      onAdminLogin={() => (screen = 'admin-login')}
       onEarnAccess={() => (screen = 'timeline')}
     />
   {/if}
@@ -140,6 +144,7 @@
       onSkip={goPackages}
       onActivatorLogin={() => (screen = 'activator-login')}
       onCoordinatorLogin={() => (screen = 'coordinator-login')}
+      onAdminLogin={() => (screen = 'admin-login')}
     />
   {/if}
   {#if screen === 'timeline'}
@@ -192,6 +197,25 @@
       }}
     />
   {/if}
+  {#if screen === 'admin-login'}
+    <AdminLoginScreen
+      onLogin={(admin) => {
+        loggedInAdmin = admin;
+        screen = 'admin-dashboard';
+      }}
+      onBack={goPackages}
+    />
+  {/if}
+  {#if screen === 'admin-dashboard' && loggedInAdmin}
+    <AdminDashboardScreen
+      token={loggedInAdmin.token}
+      username={loggedInAdmin.username}
+      onLogout={() => {
+        loggedInAdmin = null;
+        screen = 'packages';
+      }}
+    />
+  {/if}
   {#if screen === 'payment'}
     <PaymentScreen
       pkg={selectedPkg}
@@ -202,6 +226,14 @@
         simulatePaymentFailure = fail;
         paymentReference = reference;
         screen = 'initiated';
+      }}
+      onBtcPaid={() => {
+        // Polling already confirmed settlement inside PaymentScreen itself
+        // (the QR panel IS the "awaiting confirmation" UI) — go straight to
+        // connecting, same as the watch-to-earn flow skips a payment step.
+        phone = 'BTC';
+        activeInitialRemaining = null;
+        screen = 'connecting';
       }}
     />
   {/if}

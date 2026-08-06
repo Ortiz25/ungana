@@ -1,27 +1,49 @@
 <script>
   import { ShieldCheck, Eye, EyeOff, AlertTriangle, ChevronRight } from '@lucide/svelte';
   import { MOCK_COORDINATORS } from '$lib/data.js';
+  import { coordinatorLogin } from '$lib/api.js';
 
   let { onLogin, onBack } = $props();
 
-  let id = $state('');
+  let phone = $state('');
   let pin = $state('');
   let showPin = $state(false);
   let error = $state('');
   let loading = $state(false);
 
-  function handleLogin() {
-    error = '';
-    const coord = MOCK_COORDINATORS.find((c) => c.id.toLowerCase() === id.trim().toLowerCase());
-    if (!coord || pin !== '5678') {
-      error = 'Invalid coordinator ID or PIN';
+  async function handleLogin() {
+    if (phone.length < 9) {
+      error = 'Enter a valid phone number';
       return;
     }
+    if (pin.length < 4) {
+      error = 'Enter your PIN';
+      return;
+    }
+    error = '';
     loading = true;
-    setTimeout(() => {
-      loading = false;
-      onLogin(coord);
-    }, 900);
+
+    const result = await coordinatorLogin(`+254${phone}`, pin);
+    loading = false;
+
+    if (result.ok && result.data?.success) {
+      const c = result.data.coordinator;
+      onLogin({ id: c.id, name: c.name, area: c.territory, token: result.data.token });
+      return;
+    }
+
+    if (result.ok) {
+      // Backend reachable, credentials genuinely rejected.
+      error = result.data?.message || 'Invalid phone or PIN';
+      return;
+    }
+
+    // Backend unreachable — fall back to local demo validation.
+    if (pin === '5678') {
+      onLogin({ ...MOCK_COORDINATORS[0], token: undefined });
+    } else {
+      error = 'Incorrect PIN. Try 5678 for this demo.';
+    }
   }
 </script>
 
@@ -37,12 +59,16 @@
 
   <div class="mx-4 rounded-3xl overflow-hidden shadow-lg" style="background: #2E5A3E;">
     <div class="px-5 pt-5 pb-1">
-      <p class="text-[10px] text-[#C4DAC0] uppercase tracking-widest font-semibold mb-3">Coordinator ID</p>
+      <p class="text-[10px] text-[#C4DAC0] uppercase tracking-widest font-semibold mb-3">Phone Number</p>
       <div class="flex items-center gap-3 px-4 py-3 rounded-2xl mb-4" style="background: rgba(0,0,0,0.2);">
-        <ShieldCheck size={16} color="#C4DAC0" />
+        <span class="text-[#C4DAC0] font-semibold text-sm">+254</span>
         <input
-          bind:value={id}
-          placeholder="e.g. COORD-01"
+          value={phone}
+          oninput={(e) => {
+            phone = e.currentTarget.value.replace(/[^0-9]/g, '').slice(0, 9);
+            error = '';
+          }}
+          placeholder="700 000 000"
           class="flex-1 bg-transparent text-sm font-semibold text-[#E8D4B0] outline-none placeholder:text-[#4A6842]"
         />
       </div>
@@ -50,8 +76,12 @@
       <div class="flex items-center gap-3 px-4 py-3 rounded-2xl mb-1" style="background: rgba(0,0,0,0.2);">
         <ShieldCheck size={16} color="#C4DAC0" />
         <input
-          bind:value={pin}
+          value={pin}
           type={showPin ? 'text' : 'password'}
+          oninput={(e) => {
+            pin = e.currentTarget.value.replace(/\D/g, '').slice(0, 6);
+            error = '';
+          }}
           placeholder="••••"
           class="flex-1 bg-transparent text-sm font-semibold text-[#E8D4B0] outline-none placeholder:text-[#4A6842]"
         />
@@ -69,7 +99,7 @@
     {/if}
 
     <div class="px-5 mt-3 pb-2 flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(196,92,56,0.08);">
-      <p class="text-[10px] text-[#AECAAE]">Demo: ID <span class="font-bold text-[#C45C38]">COORD-01</span> · PIN <span class="font-bold text-[#C45C38]">5678</span></p>
+      <p class="text-[10px] text-[#AECAAE]">Demo (offline only): any phone + PIN <span class="font-bold text-[#C45C38]">5678</span></p>
     </div>
 
     <div class="px-5 pt-3 pb-5">
