@@ -7,7 +7,7 @@ import {
   attachClaimedSession,
   recordImpression,
 } from "../services/content.js";
-import { upsertClient } from "../services/clients.js";
+import { upsertClient, setClientUsername } from "../services/clients.js";
 import { createPendingSession } from "../services/sessions.js";
 import { completeAuthorization } from "../services/authorization.js";
 import { resolveClientActivator } from "../services/activators.js";
@@ -81,7 +81,7 @@ contentRouter.post("/:id/complete", async (req, res) => {
 });
 
 /**
- * POST /api/content/claim-earned-session — Body: { mac }.
+ * POST /api/content/claim-earned-session — Body: { mac, username? }.
  * Sums every unclaimed completion's earn_secs for this device, creates a
  * `source: 'earned'` session for the total, and runs it through the same
  * real UniFi-authorise path a paid session uses (services/authorization.js)
@@ -90,13 +90,24 @@ contentRouter.post("/:id/complete", async (req, res) => {
  * session, if the router is briefly unreachable the session is left 'paid'
  * for the background retry sweep in server.js to pick up — the client's
  * earned time is never lost, just delayed.
+ * `username` is optional and only meaningful the first time — same
+ * privacy-conscious recovery mechanism as the paid checkout flow (see
+ * clients.username in schema.sql); a client that already has one locked in
+ * doesn't need to send it again.
  */
 contentRouter.post("/claim-earned-session", async (req, res) => {
-  const { mac } = req.body;
+  const { mac, username } = req.body;
   if (!mac) return res.status(400).json({ success: false, message: "mac is required" });
 
   try {
     const clientId = await upsertClient(mac);
+
+    // Set (and validate) the username BEFORE claiming any completions — a
+    // collision must fail here, before content_completions rows get marked
+    // claimed=true, or a failed attempt would silently consume the
+    // client's balance with no session ever created to show for it.
+    if (username) await setClientUsername(clientId, username);
+
     const { ids, totalSecs } = await claimUnclaimedCompletions(clientId);
 
     if (totalSecs <= 0) {
@@ -118,6 +129,8 @@ contentRouter.post("/claim-earned-session", async (req, res) => {
       amountKES: 0,
       paymentProvider: null,
       durationSecs: totalSecs,
+      // Already set above (if provided) — omit here so createPendingSession
+      // doesn't redundantly re-run the same UPDATE.
     });
 
     // Link before authorising so these completions can never be claimed a
@@ -138,6 +151,9 @@ contentRouter.post("/claim-earned-session", async (req, res) => {
       message: "Access granted. Activating your session — please wait…",
     });
   } catch (error) {
+    if (error.code === "23505" && error.constraint?.includes("username")) {
+      return res.status(409).json({ success: false, message: "That username is already taken — try another." });
+    }
     console.error("❌ Claim earned session error:", error.response?.data || error.message);
     res.status(500).json({ success: false, message: error.message });
   }

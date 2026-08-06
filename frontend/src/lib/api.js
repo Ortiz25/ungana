@@ -131,9 +131,13 @@ export function recordContentImpression(id) {
   return request(`/content/${encodeURIComponent(id)}/impression`, { method: 'POST', body: JSON.stringify({}) });
 }
 
-/** POST /api/content/claim-earned-session — Body: { mac }. Folds every unclaimed completion into a real, router-authorised session. */
-export function claimEarnedSession(mac) {
-  return request('/content/claim-earned-session', { method: 'POST', body: JSON.stringify({ mac }), timeoutMs: 10000 });
+/** POST /api/content/claim-earned-session — Body: { mac, username? }. Folds every unclaimed completion into a real, router-authorised session. */
+export function claimEarnedSession(mac, username) {
+  return request('/content/claim-earned-session', {
+    method: 'POST',
+    body: JSON.stringify({ mac, username: username || undefined }),
+    timeoutMs: 10000
+  });
 }
 
 /** POST /api/activators/login — Body: { phone, pin } */

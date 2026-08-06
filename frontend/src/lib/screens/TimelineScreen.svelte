@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { ArrowLeft, Zap, CheckCircle2, Play, Gift, FileText, ChevronRight, Unlock } from '@lucide/svelte';
+  import { ArrowLeft, Zap, CheckCircle2, CircleX, Play, Gift, FileText, ChevronRight, Unlock, User } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import TLContentCard from '$lib/components/TLContentCard.svelte';
   import {
@@ -13,7 +13,16 @@
     TL_TYPE_LABEL,
     TL_TYPE_COLOR
   } from '$lib/data.js';
-  import { getContent, getContentCompletions, completeContentItem, claimEarnedSession, getSettings, recordContentImpression } from '$lib/api.js';
+  import {
+    getContent,
+    getContentCompletions,
+    completeContentItem,
+    claimEarnedSession,
+    getSettings,
+    recordContentImpression,
+    getUsernameForMac,
+    checkUsernameAvailable
+  } from '$lib/api.js';
   import { getClientMac } from '$lib/device.js';
 
   let { onBuyAccess, onConnect, onBack } = $props();
@@ -113,6 +122,16 @@
   // already-sufficient balance from the server on page load/reload.
   let initialLoadDone = $state(false);
 
+  // Same privacy-conscious username-based session recovery as the paid
+  // checkout flow (PaymentScreen) — optional, only prompted for a device
+  // that doesn't already have one locked in. Never the phone number.
+  let username = $state('');
+  let usernameError = $state('');
+  let usernameLocked = $state(false); // already set for this MAC — no need to prompt again
+  let usernameStatus = $state(null); // null | 'checking' | 'available' | 'taken'
+  let showUsernamePrompt = $state(false);
+  let usernameCheckTimer;
+
   onMount(async () => {
     mac = getClientMac();
 
@@ -129,8 +148,33 @@
       connectThresholdSecs = settingsResult.data.earnConnectThresholdSecs;
     }
 
+    const usernameResult = await getUsernameForMac(mac);
+    if (usernameResult.ok && usernameResult.data?.username) {
+      username = usernameResult.data.username;
+      usernameLocked = true;
+    }
+
     initialLoadDone = true;
   });
+
+  function onUsernameInput(e) {
+    username = e.currentTarget.value.replace(/\s/g, '').slice(0, 24);
+    usernameError = '';
+    clearTimeout(usernameCheckTimer);
+
+    if (!username) {
+      usernameStatus = null;
+      return;
+    }
+
+    usernameStatus = 'checking';
+    const checkedValue = username;
+    usernameCheckTimer = setTimeout(async () => {
+      const result = await checkUsernameAvailable(checkedValue, mac);
+      if (checkedValue !== username) return; // stale — field changed again while this was in flight
+      usernameStatus = result.ok ? (result.data?.available ? 'available' : 'taken') : null;
+    }, 400);
+  }
 
   // Real items with no configured minimum still get a short, honest fill —
   // same ~6s pace the old fixed demo timer used — rather than completing
@@ -272,7 +316,21 @@
   let connecting = $state(false);
   let connectError = $state(null);
 
-  async function handleConnect() {
+  // Entry point from the "Connect Now" button. A device with no username
+  // yet gets one chance to set one — purely optional, for session recovery
+  // later — before the real claim actually fires; a returning device that
+  // already has one (or the local-only demo fallback, which has no real
+  // session to attach a username to) skips straight to performConnect().
+  function handleConnect() {
+    if (realUnclaimedSecs > 0 && !usernameLocked) {
+      usernameError = '';
+      showUsernamePrompt = true;
+      return;
+    }
+    performConnect();
+  }
+
+  async function performConnect() {
     // Nothing real to claim — either the backend's unreachable, or every
     // completion so far was a demo/padding item. Same old client-only flow,
     // using only the demo balance (never the real one, since there isn't one).
@@ -283,8 +341,16 @@
 
     connecting = true;
     connectError = null;
-    const result = await claimEarnedSession(mac);
+    const result = await claimEarnedSession(mac, username.trim() || undefined);
     connecting = false;
+
+    if (!result.ok && result.status === 409) {
+      // Username taken — a real rejection, not an "unreachable" case. Stay
+      // on the prompt so they can fix it and retry, same as PaymentScreen.
+      usernameError = result.data?.message || 'That username is taken — try another.';
+      showUsernamePrompt = true;
+      return;
+    }
 
     // Both a confirmed authorisation and a "router still catching up"
     // response mean the session was created for real — the background
@@ -295,6 +361,7 @@
     // isn't trusted here) — any demoBonusSecs on top is never folded in,
     // so a demo completion can never inflate a real, router-authorised grant.
     if (result.data?.success || result.data?.retrying) {
+      showUsernamePrompt = false;
       onConnect(result.data.durationSecs ?? realUnclaimedSecs);
       return;
     }
@@ -688,5 +755,84 @@
         {/if}
       </div>
     </div>
+
+    <!-- Username prompt — shown once, before the first real claim, for a
+         device with no username locked in yet. Optional (Skip proceeds
+         with no username); same privacy-conscious recovery mechanism as
+         PaymentScreen's checkout field. -->
+    {#if showUsernamePrompt}
+      <div class="fixed inset-0 z-[60] flex items-end justify-center">
+        <div class="absolute inset-0" style="background: rgba(0,0,0,0.55);"></div>
+        <div class="relative w-full rounded-t-3xl p-5" style="background: #1D3C2A; max-width: 480px;">
+          <div class="flex items-center gap-2 mb-1">
+            <div class="w-9 h-9 rounded-2xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
+              <User size={16} color="#C45C38" />
+            </div>
+            <div>
+              <p class="text-sm font-bold text-[#E8D4B0]">Set a username</p>
+              <p class="text-[11px] text-[#96B496]">Optional — so you can check your session later from any browser</p>
+            </div>
+          </div>
+
+          <div class="mt-4">
+            <div class="flex items-center rounded-2xl overflow-hidden border border-white/10" style="background: #2E5A3E;">
+              <div class="px-4 py-3.5 border-r border-white/15 shrink-0">
+                <User size={13} color="#C4DAC0" />
+              </div>
+              <input
+                type="text"
+                value={username}
+                oninput={onUsernameInput}
+                placeholder="e.g. swiftrunner42"
+                class="flex-1 bg-transparent px-4 py-3.5 text-[#E8D4B0] placeholder-[#7A9E7A] text-sm outline-none"
+              />
+              <div class="pr-4 shrink-0">
+                {#if usernameStatus === 'checking'}
+                  <div class="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin"></div>
+                {:else if usernameStatus === 'available'}
+                  <CheckCircle2 size={14} color="#7EC88E" />
+                {:else if usernameStatus === 'taken'}
+                  <CircleX size={14} color="#F0A08A" />
+                {/if}
+              </div>
+            </div>
+            {#if usernameError}
+              <p class="text-[11px] mt-1.5 px-1" style="color: #F0A08A;">{usernameError}</p>
+            {:else if usernameStatus === 'taken'}
+              <p class="text-[11px] mt-1.5 px-1" style="color: #F0A08A;">That username is taken — try another</p>
+            {/if}
+          </div>
+
+          {#if connectError}
+            <p class="text-[11px] text-center mt-3" style="color: #E08A6A;">{connectError}</p>
+          {/if}
+
+          <div class="flex gap-2 mt-4">
+            <button
+              onclick={() => {
+                showUsernamePrompt = false;
+                username = '';
+                usernameStatus = null;
+                usernameError = '';
+                performConnect();
+              }}
+              disabled={connecting}
+              class="flex-1 py-3 rounded-2xl font-semibold text-sm"
+              style="background: rgba(255,255,255,0.1); color: #C4DAC0;"
+            >
+              Skip
+            </button>
+            <button
+              onclick={performConnect}
+              disabled={connecting || usernameStatus === 'taken'}
+              class="flex-1 py-3 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-1.5"
+              style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {connecting ? 0.7 : 1};"
+            >
+              {connecting ? 'Connecting…' : 'Continue'}
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
   </div>
 {/if}
