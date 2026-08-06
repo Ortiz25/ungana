@@ -49,6 +49,21 @@
   }
 
   function buildPkgFromSession(data) {
+    // 'earned' sessions (claim-earned-session) aren't in PACKAGES — that
+    // array is the purchase-screen catalogue, and 'earned' isn't something
+    // a client can buy. Handled separately here rather than added to
+    // PACKAGES, so it can never leak into the package-selection list.
+    if (data.packageId === 'earned') {
+      return {
+        id: 'earned',
+        label: 'Earned',
+        duration: 'Earned access',
+        price: 0,
+        icon: Zap,
+        badge: 'Earned via content',
+        demoSecs: data.durationSecs ?? 0
+      };
+    }
     const local = PACKAGES.find((p) => p.id === data.packageId);
     if (!local) return null;
     return { ...local, demoSecs: data.durationSecs ?? local.demoSecs };

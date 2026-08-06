@@ -5,7 +5,7 @@ import { getCurrentPeriodKey } from "../utils/periodKey.js";
 /** Public catalogue for the Watch & Earn screen — active items only. */
 export async function listActiveContent() {
   const { rows } = await query(
-    `SELECT id, type, section, title, category, duration_label, earn_secs, min_watch_secs, img_url, body_url, survey_questions
+    `SELECT id, type, section, view_frequency, title, category, duration_label, earn_secs, min_watch_secs, img_url, body_url, survey_questions
      FROM content_items
      WHERE is_active = true
      ORDER BY sort_order, id`

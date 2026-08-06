@@ -44,6 +44,13 @@ ON CONFLICT (id) DO NOTHING;
 -- its old price — ON CONFLICT DO NOTHING above won't touch an existing row.
 UPDATE packages SET price_kes = 2 WHERE id = 'test';
 
+-- 'earned' is a durable package_id for watch-to-earn sessions (see
+-- content.js claim-earned-session), not something a client can buy —
+-- GET /api/packages (the purchase-screen catalogue) should never list it.
+-- Idempotent: is_active defaults to true on INSERT, so existing databases
+-- need this explicit correction too.
+UPDATE packages SET is_active = false WHERE id = 'earned';
+
 -- ── Activators ───────────────────────────────────────────────────────────
 -- Field agents who refer users and earn commission on their purchases.
 CREATE TABLE IF NOT EXISTS activators (
