@@ -1,17 +1,23 @@
 <script>
   import { CheckCircle2, Zap } from '@lucide/svelte';
-  import { TL_TYPE_ICON } from '$lib/data.js';
+  import { TL_TYPE_ICON, doneLabelForFrequency } from '$lib/data.js';
 
   let { item, completedIds, onStart, width = 140, height = 175 } = $props();
 
   const Icon = $derived(TL_TYPE_ICON[item.type]);
   const done = $derived(completedIds.has(item.id));
+  // Says WHEN it re-unlocks (e.g. "Viewed today") rather than a flat
+  // "Done" — a daily/weekly/monthly item that's already been claimed for
+  // its current period still looks tappable otherwise, which is what let
+  // someone re-open (and re-attempt to claim) it without realising.
+  const badgeLabel = $derived(done ? doneLabelForFrequency(item.viewFrequency) : item.earnLabel);
 </script>
 
 <button
   onclick={() => onStart(item)}
+  disabled={done}
   class="shrink-0 rounded-3xl overflow-hidden relative active:scale-95 transition-transform"
-  style="width: {width}px; height: {height}px;"
+  style="width: {width}px; height: {height}px; opacity: {done ? 0.75 : 1};"
 >
   {#if item.img}
     <img src={item.img} alt={item.title} class="w-full h-full object-cover" />
@@ -23,7 +29,7 @@
   <!-- earn badge -->
   <div class="absolute top-2.5 right-2.5 flex items-center gap-0.5 px-2 py-1 rounded-full" style="background: {done ? '#2E5A3E' : '#C45C38'};">
     {#if done}<CheckCircle2 size={9} color="#fff" />{:else}<Zap size={9} color="#fff" />{/if}
-    <span class="text-[9px] font-bold text-white ml-0.5">{done ? 'Done' : item.earnLabel}</span>
+    <span class="text-[9px] font-bold text-white ml-0.5">{badgeLabel}</span>
   </div>
 
   <!-- type badge -->

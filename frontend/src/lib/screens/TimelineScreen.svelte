@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { ArrowLeft, Zap, CheckCircle2, CircleX, Play, Gift, FileText, Unlock, User, ExternalLink, Wallet, X } from '@lucide/svelte';
+  import { ArrowLeft, Zap, CheckCircle2, CircleX, Play, Gift, FileText, Unlock, User, ExternalLink, Wallet, X, Clock } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import TLContentCard from '$lib/components/TLContentCard.svelte';
   import {
@@ -11,7 +11,8 @@
     TL_VIDEOS,
     TL_TYPE_ICON,
     TL_TYPE_LABEL,
-    TL_TYPE_COLOR
+    TL_TYPE_COLOR,
+    doneLabelForFrequency
   } from '$lib/data.js';
   import {
     getContent,
@@ -73,6 +74,7 @@
       id: row.id,
       type: row.type,
       section: row.section,
+      viewFrequency: row.view_frequency || 'once',
       title: row.title,
       category: row.category || fallback.category || '',
       duration: row.duration_label || fallback.duration || '',
@@ -114,6 +116,10 @@
   let claimError = $state(false);
   let completedIds = $state(new Set());
   let earnedBanner = $state(null);
+  // Shown instead of earnedBanner when a claim comes back alreadyCompleted
+  // (nothing new was actually credited) — holds the period-aware label
+  // ('Viewed today' etc.) rather than lying with a "+X earned!" toast.
+  let lockedNotice = $state(null);
   // Real unclaimed balance mirrors the backend (server-authoritative — this
   // is the only thing "Connect Now" ever actually grants); demoBonusSecs is
   // client-only, from completing demo/padding items, and only ever used via
@@ -279,6 +285,7 @@
   async function claimReward() {
     if (!viewingItem) return;
     const item = viewingItem;
+    let wasAlreadyCompleted = false;
 
     if (item.isLive) {
       // Real playback position for a native video player (honest — can't
@@ -293,16 +300,29 @@
         claimError = true;
         return;
       }
-      if (!result.data.alreadyCompleted) realUnclaimedSecs = realUnclaimedSecs + result.data.earnSecs;
+      wasAlreadyCompleted = !!result.data.alreadyCompleted;
+      if (!wasAlreadyCompleted) realUnclaimedSecs = realUnclaimedSecs + result.data.earnSecs;
     } else {
       demoBonusSecs = demoBonusSecs + item.earnSecs;
     }
 
     completedIds = new Set([...completedIds, item.id]);
-    earnedBanner = item.earnLabel;
     viewingItem = null;
     viewProgress = 0;
     viewDone = false;
+
+    if (wasAlreadyCompleted) {
+      // The backend is the real gate against double-crediting — this only
+      // fires if something let the viewer reopen an item already claimed
+      // for its current period (e.g. a stale completedIds snapshot from
+      // before this session refreshed). Say so honestly rather than
+      // showing a "+X earned!" toast for nothing.
+      lockedNotice = doneLabelForFrequency(item.viewFrequency);
+      setTimeout(() => (lockedNotice = null), 3500);
+      return;
+    }
+
+    earnedBanner = item.earnLabel;
     setTimeout(() => (earnedBanner = null), 3500);
   }
 
@@ -511,8 +531,13 @@
 
 {#if viewingItem}
   <!-- ── Content Viewer ── -->
-  <div class="flex flex-col" style="height: 100dvh; background: #0E1F14;">
-    <div class="flex items-center gap-3 px-4 pt-6 pb-4">
+  <!-- Natural document scroll, not a nested overflow-y-auto region — the
+       captive-portal WebView this app runs in (see [...catchall]/+page.svelte's
+       comments) doesn't reliably handle nested scroll containers; scrolling
+       down could get stuck unable to scroll back up. The header stays
+       pinned via `sticky` instead. -->
+  <div class="flex flex-col" style="min-height: 100dvh; background: #0E1F14;">
+    <div class="flex items-center gap-3 px-4 pt-6 pb-4" style="position: sticky; top: 0; z-index: 20; background: #0E1F14;">
       <button onclick={dismissViewer} class="w-9 h-9 rounded-full flex items-center justify-center active:scale-90" style="background: rgba(255,255,255,0.12);">
         <ArrowLeft size={18} color="#E8D4B0" />
       </button>
@@ -618,7 +643,7 @@
       </div>
     {/snippet}
 
-    <div class="px-4 mt-5 flex-1 overflow-y-auto">
+    <div class="px-4 mt-5 pb-10">
       {#if viewingItem.type === 'article'}
         <!-- Magazine-style article reader — kicker, serif headline, accent
              rule, then typeset body copy with a drop-cap opening
@@ -789,9 +814,16 @@
   </div>
 {:else}
   <!-- ── Main Feed ── -->
-  <div class="flex flex-col overflow-hidden" style="height: 100dvh; background: #0E1F14; position: relative;">
+  <!-- Natural document scroll rather than a nested overflow-y-auto region
+       — see the matching comment in the Content Viewer above for why
+       (the captive-portal WebView doesn't reliably support nested
+       scrolling). Header stays pinned via `sticky`, the Connect Now bar
+       via `fixed`, and the transient banners via `fixed` too (they used to
+       ride along with document flow via `position: absolute`, which only
+       looked right because the page never used to scroll past them). -->
+  <div class="flex flex-col" style="min-height: 100dvh; background: #0E1F14;">
     <!-- Header -->
-    <div class="px-4 pt-5 pb-3 flex items-center justify-between shrink-0" style="background: #1D3C2A;">
+    <div class="px-4 pt-5 pb-3 flex items-center justify-between shrink-0" style="background: #1D3C2A; position: sticky; top: 0; z-index: 40;">
       <div class="flex items-center gap-2">
         <UnganaLogoMark height={26} />
         <span class="text-base font-bold" style="color: #E8D4B0; font-family: 'Playfair Display', serif;">Ungana</span>
@@ -824,7 +856,7 @@
          until a completion sets earnedBanner; fades + slides in showing how
          much was just earned, then auto-dismisses on its own. -->
     <div
-      style="position: absolute; top: 64px; left: 50%; transform: translateX(-50%) translateY({earnedBanner
+      style="position: fixed; top: 64px; left: 50%; transform: translateX(-50%) translateY({earnedBanner
         ? '0'
         : '-16px'}); opacity: {earnedBanner ? '1' : '0'}; transition: all 0.35s cubic-bezier(0.34,1.56,0.64,1); z-index: 50; pointer-events: none;"
     >
@@ -834,9 +866,21 @@
       </div>
     </div>
 
+    <!-- Already-completed notice — see lockedNotice in claimReward(). -->
+    <div
+      style="position: fixed; top: 64px; left: 50%; transform: translateX(-50%) translateY({lockedNotice
+        ? '0'
+        : '-16px'}); opacity: {lockedNotice ? '1' : '0'}; transition: all 0.35s cubic-bezier(0.34,1.56,0.64,1); z-index: 50; pointer-events: none;"
+    >
+      <div class="flex items-center gap-2 px-4 py-2 rounded-full shadow-xl" style="background: #4A3820; border: 1px solid rgba(232,212,176,0.2); white-space: nowrap;">
+        <Clock size={13} color="#CC8830" />
+        <span class="text-xs font-bold" style="color: #E8D4B0;">{lockedNotice} — nothing new earned</span>
+      </div>
+    </div>
+
     <!-- Connect Now unlocked celebration -->
     <div
-      style="position: absolute; top: 64px; left: 50%; transform: translateX(-50%) translateY({justUnlocked
+      style="position: fixed; top: 64px; left: 50%; transform: translateX(-50%) translateY({justUnlocked
         ? '0'
         : '-72px'}) scale({justUnlocked ? '1' : '0.92'}); opacity: {justUnlocked ? '1' : '0'}; transition: all 0.4s cubic-bezier(0.34,1.56,0.64,1); z-index: 51; pointer-events: none;"
     >
@@ -848,8 +892,9 @@
       </div>
     </div>
 
-    <!-- Scrollable feed -->
-    <div class="flex-1 overflow-y-auto">
+    <!-- Feed content — normal document flow now; pb-24 keeps the last
+         items clear of the fixed Connect Now bar below. -->
+    <div class="pb-24">
       <!-- Hero section -->
       {#if featured}
         <div class="px-4 pt-4 pb-6" style="background: #1D3C2A;">
@@ -858,8 +903,9 @@
 
           <button
             onclick={() => startContent(featured)}
+            disabled={completedIds.has(featured.id)}
             class="w-full rounded-3xl overflow-hidden relative active:scale-[0.98] transition-transform"
-            style="height: 200px; display: block;"
+            style="height: 200px; display: block; opacity: {completedIds.has(featured.id) ? 0.75 : 1};"
           >
             {#if featured.img}
               <img src={featured.img} alt={featured.title} class="w-full h-full object-cover" />
@@ -879,7 +925,7 @@
             {#if completedIds.has(featured.id)}
               <div class="absolute top-3 left-3 flex items-center gap-1 px-2 py-1 rounded-full" style="background: #2E5A3E;">
                 <CheckCircle2 size={10} color="#fff" />
-                <span class="text-[9px] font-bold text-white">Done</span>
+                <span class="text-[9px] font-bold text-white">{doneLabelForFrequency(featured.viewFrequency)}</span>
               </div>
             {/if}
             <div class="absolute bottom-0 left-0 right-0 p-4">
@@ -954,8 +1000,13 @@
       </div>
     </div>
 
-    <!-- Bottom bar -->
-    <div class="px-4 py-3 flex flex-col gap-2 shrink-0" style="background: #1D3C2A; border-top: 1px solid rgba(232,212,176,0.1);">
+    <!-- Bottom bar — fixed to the viewport (the page scrolls under it now)
+         so Connect Now stays reachable no matter how far the feed is
+         scrolled. -->
+    <div
+      class="px-4 py-3 flex flex-col gap-2"
+      style="background: #1D3C2A; border-top: 1px solid rgba(232,212,176,0.1); position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;"
+    >
       {#if connectError}
         <p class="text-[11px] text-center" style="color: #E08A6A;">{connectError}</p>
       {/if}

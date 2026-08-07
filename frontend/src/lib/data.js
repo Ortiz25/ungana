@@ -127,6 +127,26 @@ export const TL_TYPE_ICON = { video: Play, quiz: HelpCircle, survey: FileText, l
 export const TL_TYPE_LABEL = { video: 'Video', quiz: 'Quiz', survey: 'Survey', lesson: 'Lesson', article: 'Article' };
 export const TL_TYPE_COLOR = { video: '#C45C38', quiz: '#CC8830', survey: '#2E7D52', lesson: '#5C8C3C', article: '#5A6BA0' };
 
+// A flat "Done" badge doesn't say WHEN an item re-unlocks, which reads as
+// "completed forever" even for daily/weekly/monthly items that reset —
+// this is what actually let someone re-open (and re-attempt to claim) an
+// already-completed-today item without realising it was already done.
+// Used by TLContentCard and the hero card's own completed badge.
+export function doneLabelForFrequency(viewFrequency) {
+  switch (viewFrequency) {
+    case 'daily':
+      return 'Viewed today';
+    case 'weekly':
+      return 'Viewed this week';
+    case 'monthly':
+      return 'Viewed this month';
+    case 'session':
+      return 'Viewed this session';
+    default:
+      return 'Done';
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 export function formatTime(secs) {
   const h = Math.floor(secs / 3600);

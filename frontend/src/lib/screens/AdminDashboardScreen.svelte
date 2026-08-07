@@ -3,7 +3,7 @@
   import {
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
     ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
-    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent
+    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import {
@@ -1159,6 +1159,19 @@
       {/each}
       </div>
     {:else if tab === 'analytics'}
+      <div class="flex items-center justify-between px-1 mb-1">
+        <h2 class="text-sm font-bold text-[#1D3C2A]">Analytics overview</h2>
+        <button
+          onclick={loadAnalytics}
+          disabled={analyticsLoading}
+          class="flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-full transition-all active:scale-95"
+          style="background: rgba(29,60,42,0.1); color: #1D3C2A; opacity: {analyticsLoading ? 0.6 : 1};"
+        >
+          <RefreshCw size={12} class={analyticsLoading ? 'animate-spin' : ''} />
+          Refresh
+        </button>
+      </div>
+
       {#if analyticsLoading}
         <div class="flex items-center justify-center py-12">
           <div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div>
