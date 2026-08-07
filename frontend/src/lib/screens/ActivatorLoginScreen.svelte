@@ -29,7 +29,15 @@
 
     if (result.ok && result.data?.success) {
       const a = result.data.activator;
-      onLogin({ id: a.code, name: a.name, area: a.territory, sessions: 0, token: result.data.token, commissionRate: a.commissionRate });
+      onLogin({
+        id: a.code,
+        name: a.name,
+        area: a.territory,
+        mpesaNumber: a.mpesaNumber,
+        sessions: 0,
+        token: result.data.token,
+        commissionRate: a.commissionRate
+      });
       return;
     }
 

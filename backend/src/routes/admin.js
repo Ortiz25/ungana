@@ -10,7 +10,7 @@ import {
 import { createActivator, adminListActivators, updateActivator } from "../services/activators.js";
 import { createCoordinator, adminListCoordinators, updateCoordinator } from "../services/coordinators.js";
 import { uploadContentFile } from "../services/uploads.js";
-import { adminGetSettings, setEarnConnectThresholdSecs } from "../services/settings.js";
+import { adminGetSettings, setEarnConnectThresholdSecs, setDefaultActivatorCommissionRate } from "../services/settings.js";
 import { getAdminAnalytics, getContentItemAnalytics } from "../services/analytics.js";
 
 export const adminRouter = Router();
@@ -57,7 +57,7 @@ const VIEW_FREQUENCIES = ["once", "daily", "weekly", "monthly", "session"];
  * re-earn this item's reward — defaults to 'once' (forever, per client) if
  * omitted; 'daily'/'weekly'/'monthly' reset on a calendar boundary,
  * 'session' resets whenever the client gets a new internet session.
- * `surveyQuestions` (array of question strings) only matters for type='survey'.
+ * `surveyQuestions` (array of { question, answers[] }) only matters for type='survey'.
  */
 adminRouter.post("/content", async (req, res) => {
   const { type, title, earnSecs, section, viewFrequency } = req.body;
@@ -233,15 +233,34 @@ adminRouter.get("/settings", async (_req, res) => {
   }
 });
 
-/** PATCH /api/admin/settings — Body: { earnConnectThresholdMinutes }. */
+/**
+ * PATCH /api/admin/settings — Body: { earnConnectThresholdMinutes?, defaultActivatorCommissionPct? }.
+ * Either or both may be provided in the same request.
+ */
 adminRouter.patch("/settings", async (req, res) => {
-  const { earnConnectThresholdMinutes } = req.body;
-  if (earnConnectThresholdMinutes === undefined || !(Number(earnConnectThresholdMinutes) >= 0)) {
+  const { earnConnectThresholdMinutes, defaultActivatorCommissionPct } = req.body;
+
+  if (earnConnectThresholdMinutes === undefined && defaultActivatorCommissionPct === undefined) {
+    return res.status(400).json({ success: false, message: "Nothing to update" });
+  }
+  if (earnConnectThresholdMinutes !== undefined && !(Number(earnConnectThresholdMinutes) >= 0)) {
     return res.status(400).json({ success: false, message: "earnConnectThresholdMinutes must be a non-negative number" });
+  }
+  if (
+    defaultActivatorCommissionPct !== undefined &&
+    !(Number(defaultActivatorCommissionPct) >= 0 && Number(defaultActivatorCommissionPct) <= 100)
+  ) {
+    return res.status(400).json({ success: false, message: "defaultActivatorCommissionPct must be between 0 and 100" });
   }
 
   try {
-    const settings = await setEarnConnectThresholdSecs(Number(earnConnectThresholdMinutes) * 60);
+    let settings;
+    if (earnConnectThresholdMinutes !== undefined) {
+      settings = await setEarnConnectThresholdSecs(Number(earnConnectThresholdMinutes) * 60);
+    }
+    if (defaultActivatorCommissionPct !== undefined) {
+      settings = await setDefaultActivatorCommissionRate(Number(defaultActivatorCommissionPct) / 100);
+    }
     res.json({ success: true, settings });
   } catch (error) {
     console.error("❌ Admin settings update error:", error.message);

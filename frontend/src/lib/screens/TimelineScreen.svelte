@@ -1,12 +1,12 @@
 <script>
   import { onMount } from 'svelte';
-  import { ArrowLeft, Zap, CheckCircle2, CircleX, Play, Gift, FileText, ChevronRight, Unlock, User } from '@lucide/svelte';
+  import { ArrowLeft, Zap, CheckCircle2, CircleX, Play, Gift, FileText, Unlock, User, ExternalLink, Wallet, X } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import TLContentCard from '$lib/components/TLContentCard.svelte';
   import {
     TL_FEATURED,
     TL_NEW,
-    TL_SURVEY,
+    TL_SURVEYS,
     TL_ARTICLES,
     TL_VIDEOS,
     TL_TYPE_ICON,
@@ -58,6 +58,15 @@
     survey: { img: '', category: 'Survey', duration: '2 min' }
   };
 
+  // survey_questions is JSONB with no fixed shape — older rows (or a
+  // pre-migration remote DB) may still hold plain question strings. Upgrade
+  // those on read so the carousel never has to special-case both shapes.
+  function normalizeSurveyQuestions(raw) {
+    return (raw ?? []).map((q) =>
+      typeof q === 'string' ? { question: q, answers: ['Disagree', 'Neutral', 'Agree'] } : q
+    );
+  }
+
   function normalizeLiveItem(row) {
     const fallback = TYPE_FALLBACK[row.type] ?? {};
     return {
@@ -70,7 +79,7 @@
       earnLabel: formatEarnLabel(row.earn_secs),
       earnSecs: row.earn_secs,
       minWatchSecs: row.min_watch_secs ?? 0,
-      surveyQuestions: row.survey_questions ?? [],
+      surveyQuestions: normalizeSurveyQuestions(row.survey_questions),
       img: row.img_url || fallback.img || '',
       bodyUrl: row.body_url || '',
       isLive: true
@@ -80,19 +89,20 @@
   const normalized = $derived(liveItems.map(normalizeLiveItem));
   const DEMO_FEATURED = { ...TL_FEATURED, isLive: false };
   const DEMO_NEW = TL_NEW.map((i) => ({ ...i, isLive: false }));
-  const DEMO_SURVEY = { ...TL_SURVEY, isLive: false };
+  const DEMO_SURVEYS = TL_SURVEYS.map((i) => ({ ...i, isLive: false }));
   const DEMO_ARTICLES = TL_ARTICLES.map((i) => ({ ...i, isLive: false }));
   const DEMO_VIDEOS = TL_VIDEOS.map((i) => ({ ...i, isLive: false }));
 
   // Section placement is an explicit admin choice (content_items.section),
   // not inferred from type — matches the five fixed zones this screen has
-  // always had: one hero, "What's new", the survey card, "News & Stories",
-  // and "Watch & Earn". 'hero'/'survey' are meant to hold one active real
-  // item; if the admin marks several, only the first (by sort_order) is
-  // used as the hero/survey card slot.
+  // always had: one hero, "What's new", surveys, "News & Stories", and
+  // "Watch & Earn". Only 'hero' is meant to hold a single active real item;
+  // if the admin marks several, only the first (by sort_order) is used as
+  // the hero slot. 'survey' (like the other list sections) can hold many —
+  // every active real survey shows as its own card, demo surveys appended.
   const featured = $derived(normalized.find((i) => i.section === 'hero') ?? DEMO_FEATURED);
   const newItems = $derived([...normalized.filter((i) => i.section === 'whats_new'), ...DEMO_NEW]);
-  const survey = $derived(normalized.find((i) => i.section === 'survey') ?? DEMO_SURVEY);
+  const surveys = $derived([...normalized.filter((i) => i.section === 'survey'), ...DEMO_SURVEYS]);
   const articles = $derived([...normalized.filter((i) => i.section === 'news'), ...DEMO_ARTICLES]);
   const videos = $derived([...normalized.filter((i) => i.section === 'watch_earn'), ...DEMO_VIDEOS]);
 
@@ -100,6 +110,7 @@
   let viewProgress = $state(0);
   let viewDone = $state(false);
   let surveyAnswers = $state({});
+  let surveyIndex = $state(0); // which question the carousel is currently showing
   let claimError = $state(false);
   let completedIds = $state(new Set());
   let earnedBanner = $state(null);
@@ -117,6 +128,7 @@
   // fetched once on mount, falls back to the default if unreachable.
   let connectThresholdSecs = $state(1800);
   let justUnlocked = $state(false);
+  let showEarnedModal = $state(false);
   // Guards the "you just unlocked Connect Now" celebration so it only fires
   // for a completion during this session, not for restoring an
   // already-sufficient balance from the server on page load/reload.
@@ -198,6 +210,7 @@
     viewProgress = 0;
     viewDone = false;
     surveyAnswers = {};
+    surveyIndex = 0;
     claimError = false;
     videoCurrentTime = 0;
     startedAt = Date.now();
@@ -207,7 +220,10 @@
     // since they have no real backend record to increment.
     if (item.isLive) recordContentImpression(item.id);
 
-    if (item.type === 'survey' || hasNativePlayer(item)) return; // survey: answerSurveyQuestion(); native video: handleVideoTimeUpdate()
+    // survey: answerSurveyQuestion(); native video: handleVideoTimeUpdate();
+    // article: the "I've finished reading" button sets viewDone directly —
+    // no wall-clock timer, since there's no progress bar to drive.
+    if (item.type === 'survey' || item.type === 'article' || hasNativePlayer(item)) return;
 
     const requiredSecs = item.minWatchSecs > 0 ? item.minWatchSecs : FALLBACK_WATCH_SECS;
     progressTimer = setInterval(() => {
@@ -233,10 +249,31 @@
     if (viewProgress >= 100) viewDone = true;
   }
 
+  // Carousel — one question on screen at a time, matching the feed's
+  // survey card language rather than the old "all questions stacked in a
+  // list" layout. Answering auto-advances to the next unanswered question
+  // after a brief pause (so the selection is visible); goToSurveyQuestion
+  // lets the user step back and forth manually too.
   function answerSurveyQuestion(index, value) {
-    surveyAnswers = { ...surveyAnswers, [index]: value };
+    const updated = { ...surveyAnswers, [index]: value };
+    surveyAnswers = updated;
+
     const questions = viewingItem?.surveyQuestions ?? [];
-    if (questions.length > 0 && Object.keys(surveyAnswers).length >= questions.length) viewDone = true;
+    if (questions.length > 0 && Object.keys(updated).length >= questions.length) {
+      viewDone = true;
+      return;
+    }
+
+    if (index < questions.length - 1) {
+      setTimeout(() => {
+        if (surveyIndex === index) surveyIndex = index + 1;
+      }, 300);
+    }
+  }
+
+  function goToSurveyQuestion(index) {
+    const questions = viewingItem?.surveyQuestions ?? [];
+    surveyIndex = Math.max(0, Math.min(index, questions.length - 1));
   }
 
   async function claimReward() {
@@ -286,11 +323,12 @@
     };
   });
 
-  const earnedHours = $derived(Math.floor(totalEarnedSecs / 3600));
-  const earnedMins = $derived(Math.floor((totalEarnedSecs % 3600) / 60));
-  const earnedFormatted = $derived(
-    earnedHours > 0 ? `${earnedHours}h${earnedMins > 0 ? ` ${earnedMins}m` : ''}` : `${earnedMins}m`
-  );
+  function formatMinutesLabel(secs) {
+    const hours = Math.floor(secs / 3600);
+    const mins = Math.floor((secs % 3600) / 60);
+    return hours > 0 ? `${hours}h${mins > 0 ? ` ${mins}m` : ''}` : `${mins}m`;
+  }
+  const earnedFormatted = $derived(formatMinutesLabel(totalEarnedSecs));
   const canConnect = $derived(totalEarnedSecs >= connectThresholdSecs);
   const connectProgressPct = $derived(
     connectThresholdSecs > 0 ? Math.min(100, Math.round((totalEarnedSecs / connectThresholdSecs) * 100)) : 100
@@ -386,6 +424,89 @@
   const playableVideoUrl = $derived(
     viewingItem?.type === 'video' && viewingItem?.bodyUrl ? viewingItem.bodyUrl : null
   );
+
+  // Article reading body — bodyUrl doubles as either an external link or
+  // pasted body copy (see schema comment on content_items.body_url). A
+  // link reads as a "Read the full article ↗" CTA; raw text is parsed into
+  // a lightweight "writing for the web" structure: an intro paragraph,
+  // ## / ### subheadings, - / 1. lists, **bold** for key terms, and an
+  // optional trailing "Source: ..." line rendered as an APA-style citation.
+  const articleIsExternalLink = $derived(/^https?:\/\//i.test(viewingItem?.bodyUrl || ''));
+
+  function escapeHtml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function renderInline(text) {
+    return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  }
+
+  function parseArticleBody(raw) {
+    if (!raw) return [];
+    const blocks = [];
+    let listBuffer = null; // { type: 'ul' | 'ol', items: [] }
+    let paraBuffer = [];
+
+    const flushPara = () => {
+      if (paraBuffer.length) {
+        blocks.push({ type: 'p', text: paraBuffer.join(' ').trim() });
+        paraBuffer = [];
+      }
+    };
+    const flushList = () => {
+      if (listBuffer) {
+        blocks.push(listBuffer);
+        listBuffer = null;
+      }
+    };
+
+    for (const rawLine of raw.split('\n')) {
+      const line = rawLine.trim();
+      if (!line) {
+        flushPara();
+        flushList();
+        continue;
+      }
+      if (/^source:\s*/i.test(line)) {
+        flushPara();
+        flushList();
+        blocks.push({ type: 'citation', text: line.replace(/^source:\s*/i, '') });
+      } else if (/^###\s+/.test(line)) {
+        flushPara();
+        flushList();
+        blocks.push({ type: 'h3', text: line.replace(/^###\s+/, '') });
+      } else if (/^##\s+/.test(line)) {
+        flushPara();
+        flushList();
+        blocks.push({ type: 'h2', text: line.replace(/^##\s+/, '') });
+      } else if (/^[-*]\s+/.test(line)) {
+        flushPara();
+        if (!listBuffer || listBuffer.type !== 'ul') {
+          flushList();
+          listBuffer = { type: 'ul', items: [] };
+        }
+        listBuffer.items.push(line.replace(/^[-*]\s+/, ''));
+      } else if (/^\d+\.\s+/.test(line)) {
+        flushPara();
+        if (!listBuffer || listBuffer.type !== 'ol') {
+          flushList();
+          listBuffer = { type: 'ol', items: [] };
+        }
+        listBuffer.items.push(line.replace(/^\d+\.\s+/, ''));
+      } else {
+        flushList();
+        paraBuffer.push(line);
+      }
+    }
+    flushPara();
+    flushList();
+    return blocks;
+  }
+
+  const articleBlocks = $derived(
+    viewingItem?.type === 'article' && viewingItem?.bodyUrl && !articleIsExternalLink
+      ? parseArticleBody(viewingItem.bodyUrl)
+      : []
+  );
 </script>
 
 {#if viewingItem}
@@ -421,7 +542,10 @@
             <track kind="captions" />
           </video>
         {/if}
-      {:else}
+      {:else if viewingItem.type === 'video'}
+        <!-- No real player (demo/placeholder video) — the original "tap to
+             play" treatment: a strong, opaque circular play button reads
+             unambiguously as video, which is correct here. -->
         {#if viewingItem.img}<img src={viewingItem.img} alt={viewingItem.title} class="w-full h-full object-cover" />{/if}
         <div class="absolute inset-0" style="background: linear-gradient(0deg, rgba(14,31,20,0.9) 0%, rgba(14,31,20,0.15) 65%, transparent 100%);"></div>
         {#if !viewDone}
@@ -437,6 +561,46 @@
             </div>
           </div>
         {/if}
+      {:else if viewingItem.type === 'survey'}
+        <!-- Survey isn't "playable" — no play-button, just the same
+             icon-badge language as the feed's survey card, so it never reads
+             as a video campaign. An admin-set image (if any) sits behind the
+             badge instead of the flat brand gradient. -->
+        {#if viewingItem.img}
+          <img src={viewingItem.img} alt={viewingItem.title} class="w-full h-full object-cover" />
+          <div class="absolute inset-0" style="background: linear-gradient(160deg, rgba(29,60,42,0.82), rgba(14,31,20,0.62));"></div>
+        {:else}
+          <div class="absolute inset-0" style="background: linear-gradient(135deg, #2E5A3E, #1D3C2A);"></div>
+        {/if}
+        <div class="absolute inset-0 flex items-center justify-center">
+          <div
+            class="w-16 h-16 rounded-full flex items-center justify-center"
+            style="background: {viewDone ? '#2E5A3E' : 'rgba(196,92,56,0.28)'}; box-shadow: 0 0 40px {viewDone ? 'rgba(46,90,62,0.8)' : 'rgba(196,92,56,0.3)'};"
+          >
+            {#if viewDone}
+              <CheckCircle2 size={30} color="#E8D4B0" />
+            {:else}
+              <FileText size={26} color="#C45C38" />
+            {/if}
+          </div>
+        </div>
+      {:else}
+        <!-- article/lesson — reading material, not video: keep the cover
+             image if there is one, but never the "tap to play" circle. -->
+        {#if viewingItem.img}<img src={viewingItem.img} alt={viewingItem.title} class="w-full h-full object-cover" />{/if}
+        <div class="absolute inset-0" style="background: linear-gradient(0deg, rgba(14,31,20,0.9) 0%, rgba(14,31,20,0.15) 65%, transparent 100%);"></div>
+        <div class="absolute inset-0 flex items-center justify-center">
+          <div
+            class="w-14 h-14 rounded-full flex items-center justify-center"
+            style="background: {viewDone ? '#2E5A3E' : 'rgba(196,92,56,0.28)'}; box-shadow: 0 0 30px {viewDone ? 'rgba(46,90,62,0.8)' : 'rgba(196,92,56,0.25)'};"
+          >
+            {#if viewDone}
+              <CheckCircle2 size={26} color="#E8D4B0" />
+            {:else}
+              <ViewerIcon size={22} color="#C45C38" />
+            {/if}
+          </div>
+        </div>
       {/if}
       <div class="absolute top-3 right-3 flex items-center gap-1 px-2.5 py-1.5 rounded-full" style="background: #C45C38;">
         <Zap size={11} color="#fff" />
@@ -444,45 +608,156 @@
       </div>
     </div>
 
-    <div class="px-4 mt-5 flex-1 overflow-y-auto">
-      <div class="flex items-center gap-2 mb-2">
-        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full text-white" style="background: {viewerTypeColor};">{viewingItem.category}</span>
-        <span class="text-[11px]" style="color: #96B496;">{viewingItem.duration}</span>
+    {#snippet progressBar()}
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs" style="color: #96B496;">{viewDone ? 'Complete!' : 'Progress'}</span>
+        <span class="text-xs font-bold" style="color: #C45C38;">{Math.round(viewProgress)}%</span>
       </div>
-      <h2 class="text-xl font-bold mb-4" style="color: #E8D4B0; font-family: 'Playfair Display', serif;">{viewingItem.title}</h2>
+      <div class="h-2 rounded-full overflow-hidden mb-5" style="background: rgba(255,255,255,0.1);">
+        <div class="h-full rounded-full transition-all duration-300" style="width: {viewProgress}%; background: {viewDone ? '#2E7D52' : '#C45C38'};"></div>
+      </div>
+    {/snippet}
 
-      {#if viewingItem.type === 'survey'}
-        <div class="flex flex-col gap-4 mb-5">
-          {#each viewingItem.surveyQuestions ?? [] as q, i (i)}
-            <div>
-              <p class="text-xs font-semibold mb-2" style="color: #C4DAC0;">{q}</p>
-              <div class="flex gap-2">
-                {#each ['Disagree', 'Neutral', 'Agree'] as opt (opt)}
+    <div class="px-4 mt-5 flex-1 overflow-y-auto">
+      {#if viewingItem.type === 'article'}
+        <!-- Magazine-style article reader — kicker, serif headline, accent
+             rule, then typeset body copy with a drop-cap opening
+             paragraph, mirroring an editorial/travel-blog layout. -->
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-[10px] font-bold uppercase tracking-[0.2em]" style="color: #C45C38;">{viewingItem.category || 'Article'}</span>
+          <span class="w-1 h-1 rounded-full" style="background: #96B496;"></span>
+          <span class="text-[11px]" style="color: #96B496;">{viewingItem.duration}</span>
+        </div>
+        <h2 class="text-2xl leading-snug font-bold mb-3" style="color: #E8D4B0; font-family: 'Playfair Display', serif;">{viewingItem.title}</h2>
+        <div class="w-10 rounded-full mb-5" style="height: 3px; background: #C45C38;"></div>
+
+        {#if articleIsExternalLink}
+          <a
+            href={viewingItem.bodyUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-1.5 text-sm font-semibold mb-6"
+            style="color: #C45C38;"
+          >
+            Read the full article <ExternalLink size={14} />
+          </a>
+        {:else if articleBlocks.length > 0}
+          <div class="article-body mb-6">
+            {#each articleBlocks as block, i (i)}
+              {#if block.type === 'h2'}
+                <h3 class="article-h2">{@html renderInline(block.text)}</h3>
+              {:else if block.type === 'h3'}
+                <h4 class="article-h3">{@html renderInline(block.text)}</h4>
+              {:else if block.type === 'ul'}
+                <ul class="article-list">
+                  {#each block.items as li (li)}<li>{@html renderInline(li)}</li>{/each}
+                </ul>
+              {:else if block.type === 'ol'}
+                <ol class="article-list">
+                  {#each block.items as li (li)}<li>{@html renderInline(li)}</li>{/each}
+                </ol>
+              {:else if block.type === 'citation'}
+                <p class="article-citation">
+                  <span class="article-citation-label">Source —</span>
+                  {@html renderInline(block.text)}
+                </p>
+              {:else}
+                <p class={i === 0 ? 'article-dropcap' : ''}>{@html renderInline(block.text)}</p>
+              {/if}
+            {/each}
+          </div>
+        {/if}
+
+        {#if !viewDone}
+          <button
+            type="button"
+            onclick={() => (viewDone = true)}
+            class="w-full py-3.5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-all mb-1"
+            style="background: rgba(196,92,56,0.18); color: #C45C38; border: 1px solid rgba(196,92,56,0.4);"
+          >
+            <CheckCircle2 size={16} />
+            I've finished reading
+          </button>
+        {/if}
+      {:else}
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-[10px] font-bold px-2 py-0.5 rounded-full text-white" style="background: {viewerTypeColor};">{viewingItem.category}</span>
+          <span class="text-[11px]" style="color: #96B496;">{viewingItem.duration}</span>
+        </div>
+        <h2 class="text-xl font-bold mb-4" style="color: #E8D4B0; font-family: 'Playfair Display', serif;">{viewingItem.title}</h2>
+
+        {#if viewingItem.type === 'survey'}
+        {@const questions = viewingItem.surveyQuestions ?? []}
+        {@const currentQuestion = questions[surveyIndex]}
+        <div class="mb-5">
+          <!-- Carousel progress dots — filled once that question is
+               answered, wide + highlighted for the one currently shown.
+               Tapping a dot jumps straight to that question. -->
+          <div class="flex items-center justify-center gap-1.5 mb-4">
+            {#each questions as q, i (i)}
+              <button
+                type="button"
+                onclick={() => goToSurveyQuestion(i)}
+                aria-label={`Go to question ${i + 1}`}
+                class="rounded-full transition-all duration-200"
+                style="width: {i === surveyIndex ? '18px' : '6px'}; height: 6px; background: {surveyAnswers[i] !== undefined
+                  ? '#C45C38'
+                  : i === surveyIndex
+                    ? 'rgba(196,92,56,0.5)'
+                    : 'rgba(255,255,255,0.15)'};"
+              ></button>
+            {/each}
+          </div>
+
+          {#key surveyIndex}
+            <div class="survey-slide rounded-2xl p-5" style="background: rgba(255,255,255,0.06);">
+              <p class="text-[10px] font-bold uppercase tracking-wider mb-2" style="color: #96B496;">
+                Question {surveyIndex + 1} of {questions.length}
+              </p>
+              <p class="text-sm font-semibold mb-4" style="color: #E8D4B0;">{currentQuestion?.question}</p>
+              <div class="flex flex-wrap gap-2">
+                {#each currentQuestion?.answers ?? [] as opt (opt)}
                   <button
                     type="button"
-                    onclick={() => answerSurveyQuestion(i, opt)}
-                    class="flex-1 py-2 rounded-xl text-[11px] font-semibold transition-all active:scale-95"
-                    style="background: {surveyAnswers[i] === opt ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {surveyAnswers[i] === opt ? '#fff' : '#C4DAC0'};"
+                    onclick={() => answerSurveyQuestion(surveyIndex, opt)}
+                    class="py-2.5 px-3.5 rounded-xl text-[11px] font-semibold transition-all active:scale-95"
+                    style="background: {surveyAnswers[surveyIndex] === opt ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {surveyAnswers[surveyIndex] === opt ? '#fff' : '#C4DAC0'};"
                   >
                     {opt}
                   </button>
                 {/each}
               </div>
             </div>
-          {/each}
+          {/key}
+
+          <div class="flex items-center justify-between mt-3">
+            <button
+              type="button"
+              onclick={() => goToSurveyQuestion(surveyIndex - 1)}
+              disabled={surveyIndex === 0}
+              class="text-[11px] font-semibold px-3 py-1.5 rounded-full"
+              style="background: rgba(255,255,255,0.08); color: {surveyIndex === 0 ? '#4A6842' : '#C4DAC0'};"
+            >
+              ← Previous
+            </button>
+            <button
+              type="button"
+              onclick={() => goToSurveyQuestion(surveyIndex + 1)}
+              disabled={surveyIndex >= questions.length - 1}
+              class="text-[11px] font-semibold px-3 py-1.5 rounded-full"
+              style="background: rgba(255,255,255,0.08); color: {surveyIndex >= questions.length - 1 ? '#4A6842' : '#C4DAC0'};"
+            >
+              Next →
+            </button>
+          </div>
         </div>
       {:else}
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-xs" style="color: #96B496;">{viewDone ? 'Complete!' : 'Progress'}</span>
-          <span class="text-xs font-bold" style="color: #C45C38;">{Math.round(viewProgress)}%</span>
-        </div>
-        <div class="h-2 rounded-full overflow-hidden mb-5" style="background: rgba(255,255,255,0.1);">
-          <div class="h-full rounded-full transition-all duration-300" style="width: {viewProgress}%; background: {viewDone ? '#2E7D52' : '#C45C38'};"></div>
-        </div>
+        {@render progressBar()}
+      {/if}
       {/if}
 
       {#if !viewDone}
-        {#if viewingItem.type !== 'survey'}
+        {#if viewingItem.type !== 'survey' && viewingItem.type !== 'article'}
           <p class="text-sm text-center" style="color: #C4DAC0;">
             Complete this {TL_TYPE_LABEL[viewingItem.type].toLowerCase()} to earn{' '}
             <span class="font-bold" style="color: #C45C38;">{viewingItem.earnLabel} free internet</span>
@@ -523,10 +798,21 @@
       </div>
       <div class="flex items-center gap-2">
         {#if totalEarnedSecs > 0}
-          <div class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full" style="background: rgba(196,92,56,0.22); border: 1px solid rgba(196,92,56,0.5);">
+          <button
+            onclick={() => (showEarnedModal = true)}
+            aria-label="View earned balance"
+            class="relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-full active:scale-90 transition-transform"
+            style="background: rgba(196,92,56,0.22); border: 1px solid rgba(196,92,56,0.5);"
+          >
             <Zap size={11} color="#C45C38" />
             <span class="text-[11px] font-bold" style="color: #C45C38;">{earnedFormatted} earned</span>
-          </div>
+            {#if canConnect}
+              <span
+                class="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full"
+                style="background: #7EC88E; box-shadow: 0 0 0 2px #1D3C2A; animation: cart-ready-ping 1.8s ease-in-out infinite;"
+              ></span>
+            {/if}
+          </button>
         {/if}
         <button onclick={onBack} class="w-8 h-8 rounded-full flex items-center justify-center active:scale-90" style="background: rgba(255,255,255,0.1);">
           <ArrowLeft size={16} color="#C4DAC0" />
@@ -534,11 +820,13 @@
       </div>
     </div>
 
-    <!-- Earned banner -->
+    <!-- Earned banner — fully invisible (not just translated off-screen)
+         until a completion sets earnedBanner; fades + slides in showing how
+         much was just earned, then auto-dismisses on its own. -->
     <div
       style="position: absolute; top: 64px; left: 50%; transform: translateX(-50%) translateY({earnedBanner
         ? '0'
-        : '-56px'}); transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1); z-index: 50; pointer-events: none;"
+        : '-16px'}); opacity: {earnedBanner ? '1' : '0'}; transition: all 0.35s cubic-bezier(0.34,1.56,0.64,1); z-index: 50; pointer-events: none;"
     >
       <div class="flex items-center gap-2 px-4 py-2 rounded-full shadow-xl" style="background: #2E5A3E; border: 1px solid rgba(232,212,176,0.2); white-space: nowrap;">
         <Zap size={13} color="#C45C38" />
@@ -619,45 +907,18 @@
           </div>
         {/if}
 
-        <!-- Survey feature card -->
-        {#if survey}
-          <div class="px-4 py-3">
-            <button onclick={() => startContent(survey)} class="w-full rounded-3xl p-5 text-left active:scale-[0.98] transition-transform" style="background: #2E5A3E;">
-              <div class="flex items-start gap-4">
-                <div class="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
-                  <FileText size={22} color="#C45C38" />
-                </div>
-                <div class="flex-1 min-w-0">
-                  <p class="text-[10px] font-bold uppercase tracking-wider mb-1" style="color: #C45C38;">Survey · {survey.duration}</p>
-                  <p class="text-base font-bold leading-snug mb-3" style="color: #E8D4B0;">{survey.title}</p>
-
-                  <!-- Survey preview -->
-                  <div class="rounded-2xl p-3 mb-3" style="background: rgba(255,255,255,0.1);">
-                    {#each survey.surveyQuestions ?? [] as q, i (i)}
-                      <div class="flex items-center gap-2 py-1.5 last:border-b-0 border-b" style="border-color: rgba(255,255,255,0.08);">
-                        <div
-                          class="w-3.5 h-3.5 rounded-full border-2 shrink-0"
-                          style="border-color: {i === 0 ? '#C45C38' : 'rgba(255,255,255,0.3)'}; background: {i === 0 ? 'rgba(196,92,56,0.35)' : 'transparent'};"
-                        ></div>
-                        <p class="text-[10px]" style="color: #C4DAC0;">{q}</p>
-                      </div>
-                    {/each}
-                  </div>
-
-                  <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full" style="background: rgba(196,92,56,0.22); border: 1px solid rgba(196,92,56,0.5);">
-                      <Zap size={11} color="#C45C38" />
-                      <span class="text-[11px] font-bold" style="color: #C45C38;">{survey.earnLabel} free internet</span>
-                    </div>
-                    {#if completedIds.has(survey.id)}
-                      <div class="flex items-center gap-1"><CheckCircle2 size={14} color="#7EC88E" /><span class="text-xs font-semibold" style="color: #7EC88E;">Earned</span></div>
-                    {:else}
-                      <div class="flex items-center gap-1" style="color: #C4DAC0;"><span class="text-xs font-semibold">Start</span><ChevronRight size={14} /></div>
-                    {/if}
-                  </div>
-                </div>
-              </div>
-            </button>
+        <!-- Quick surveys — small photo-background cards, one per active
+             survey (real + demo); tapping opens the full survey carousel. -->
+        {#if surveys.length > 0}
+          <div class="pt-3 pb-2">
+            <div class="flex items-center justify-between px-4 mb-3">
+              <h3 class="text-sm font-bold" style="color: #1D3C2A;">Quick surveys</h3>
+            </div>
+            <div class="flex gap-3 px-4 overflow-x-auto pb-2 no-scrollbar">
+              {#each surveys as survey (survey.id)}
+                <TLContentCard item={survey} {completedIds} onStart={startContent} width={132} height={170} />
+              {/each}
+            </div>
           </div>
         {/if}
 
@@ -756,6 +1017,110 @@
       </div>
     </div>
 
+    <!-- Earned balance modal — the header pill acts like a cart badge;
+         tapping it opens this for a breakdown + the same Connect Now /
+         "keep earning" affordance as the bottom bar, just front and
+         center. -->
+    {#if showEarnedModal}
+      <div class="fixed inset-0 z-[65] flex items-center justify-center p-5">
+        <button
+          type="button"
+          class="absolute inset-0"
+          style="background: rgba(0,0,0,0.6); backdrop-filter: blur(3px); border: none; padding: 0; cursor: default;"
+          aria-label="Close"
+          onclick={() => (showEarnedModal = false)}
+        ></button>
+        <div
+          class="earned-modal relative w-full rounded-3xl overflow-hidden shadow-2xl"
+          style="max-width: 380px; background: linear-gradient(165deg, #1D3C2A, #12241A); border: 1px solid rgba(232,212,176,0.12);"
+        >
+          <div
+            class="absolute -top-20 -right-16 w-52 h-52 rounded-full pointer-events-none"
+            style="background: radial-gradient(circle, rgba(196,92,56,0.35), transparent 70%);"
+          ></div>
+
+          <div class="relative p-5">
+            <div class="flex items-center justify-between mb-5">
+              <div class="flex items-center gap-2.5">
+                <div class="w-9 h-9 rounded-2xl flex items-center justify-center" style="background: rgba(196,92,56,0.25);">
+                  <Wallet size={16} color="#C45C38" />
+                </div>
+                <p class="text-sm font-bold" style="color: #E8D4B0;">Your Earned Balance</p>
+              </div>
+              <button
+                onclick={() => (showEarnedModal = false)}
+                aria-label="Close"
+                class="w-8 h-8 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+                style="background: rgba(255,255,255,0.1);"
+              >
+                <X size={14} color="#C4DAC0" />
+              </button>
+            </div>
+
+            <div class="text-center mb-5">
+              <p class="text-[40px] leading-none font-bold" style="color: #E8D4B0; font-family: 'Playfair Display', serif;">{earnedFormatted}</p>
+              <p class="text-[11px] mt-2" style="color: #96B496;">of free internet earned</p>
+            </div>
+
+            <div class="rounded-2xl p-3.5 mb-4" style="background: rgba(255,255,255,0.06);">
+              <div class="flex items-center justify-between py-1.5">
+                <span class="text-xs" style="color: #C4DAC0;">Claimable now</span>
+                <span class="text-xs font-bold" style="color: #E8D4B0;">{formatMinutesLabel(realUnclaimedSecs)}</span>
+              </div>
+              {#if demoBonusSecs > 0}
+                <div class="flex items-center justify-between py-1.5 border-t" style="border-color: rgba(255,255,255,0.08);">
+                  <span class="text-xs" style="color: #C4DAC0;">Demo bonus</span>
+                  <span class="text-xs font-bold" style="color: #96B496;">{formatMinutesLabel(demoBonusSecs)}</span>
+                </div>
+              {/if}
+            </div>
+
+            {#if canConnect}
+              <button
+                onclick={() => {
+                  showEarnedModal = false;
+                  handleConnect();
+                }}
+                disabled={connecting}
+                class="w-full py-4 rounded-2xl font-bold text-base text-white flex items-center justify-center gap-2 active:scale-95 transition-all"
+                style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {connecting ? 0.7 : 1};"
+              >
+                <Zap size={18} />
+                {connecting ? 'Connecting…' : 'Connect Now'}
+              </button>
+            {:else}
+              {@const remainingSecs = Math.max(connectThresholdSecs - totalEarnedSecs, 0)}
+              {@const remainingLabel = remainingSecs >= 60 ? `${Math.ceil(remainingSecs / 60)}m` : `${remainingSecs}s`}
+              <div class="flex items-center gap-3 rounded-2xl p-3.5" style="background: rgba(255,255,255,0.06);">
+                <div class="relative w-12 h-12 shrink-0">
+                  <svg viewBox="0 0 36 36" class="w-full h-full" style="transform: rotate(-90deg);">
+                    <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="4" />
+                    <circle
+                      cx="18"
+                      cy="18"
+                      r="15"
+                      fill="none"
+                      stroke="#C45C38"
+                      stroke-width="4"
+                      stroke-linecap="round"
+                      stroke-dasharray={`${(connectProgressPct / 100) * 94.2} 94.2`}
+                      style="transition: stroke-dasharray 0.4s ease;"
+                    />
+                  </svg>
+                  <div class="absolute inset-0 flex items-center justify-center">
+                    <span class="text-[10px] font-bold" style="color: #E8D4B0;">{connectProgressPct}%</span>
+                  </div>
+                </div>
+                <p class="text-xs leading-snug" style="color: #96B496;">
+                  Keep earning — <span class="font-bold" style="color: #E8D4B0;">{remainingLabel} more</span> to unlock Connect Now
+                </p>
+              </div>
+            {/if}
+          </div>
+        </div>
+      </div>
+    {/if}
+
     <!-- Username prompt — shown once, before the first real claim, for a
          device with no username locked in yet. Optional (Skip proceeds
          with no username); same privacy-conscious recovery mechanism as
@@ -836,3 +1201,125 @@
     {/if}
   </div>
 {/if}
+
+<style>
+  /* Carousel transition between survey questions — {#key surveyIndex}
+     remounts this element on every question change, so the animation
+     replays each time. */
+  .survey-slide {
+    animation: survey-slide-in 0.25s ease;
+  }
+  @keyframes survey-slide-in {
+    from {
+      opacity: 0;
+      transform: translateX(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  /* "New earnings ready to claim" badge on the header's cart-style pill. */
+  @keyframes cart-ready-ping {
+    0%,
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
+    50% {
+      transform: scale(1.3);
+      opacity: 0.7;
+    }
+  }
+
+  /* Earned-balance modal entrance — pops in rather than just appearing. */
+  .earned-modal {
+    animation: earned-modal-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes earned-modal-in {
+    from {
+      opacity: 0;
+      transform: scale(0.92) translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+  }
+
+  /* Magazine-style article body — generous line-height for long-form
+     reading, with a classic drop cap on the opening paragraph. */
+  .article-body p {
+    font-size: 0.9rem;
+    line-height: 1.8;
+    color: #C4DAC0;
+    margin-bottom: 1rem;
+  }
+  .article-body p:last-child {
+    margin-bottom: 0;
+  }
+  .article-body p.article-dropcap::first-letter {
+    font-family: 'Playfair Display', serif;
+    font-size: 3rem;
+    font-weight: 700;
+    float: left;
+    line-height: 0.78;
+    padding-right: 0.5rem;
+    padding-top: 0.25rem;
+    color: #C45C38;
+  }
+  /* Bold spans are injected via {@html} so they need :global() to be
+     reachable by Svelte's scoped styles. */
+  .article-body :global(strong) {
+    color: #E8D4B0;
+    font-weight: 700;
+  }
+  .article-h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #E8D4B0;
+    margin: 1.5rem 0 0.6rem;
+  }
+  .article-h2:first-child {
+    margin-top: 0;
+  }
+  .article-h3 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #C4DAC0;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 1.1rem 0 0.5rem;
+  }
+  .article-list {
+    margin: 0 0 1rem;
+    padding-left: 1.15rem;
+    color: #C4DAC0;
+    font-size: 0.9rem;
+    line-height: 1.7;
+  }
+  .article-list li {
+    margin-bottom: 0.35rem;
+  }
+  .article-list li::marker {
+    color: #C45C38;
+  }
+  .article-citation {
+    margin-top: 1.25rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 0.75rem;
+    font-style: italic;
+    line-height: 1.5;
+    color: #96B496;
+  }
+  .article-citation-label {
+    font-style: normal;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-right: 0.3rem;
+  }
+</style>

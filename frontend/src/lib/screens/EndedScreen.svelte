@@ -47,13 +47,15 @@
     <p class="text-xs text-[#3C6A4A] mt-1">Stay connected with a new plan</p>
   </div>
 
-  <button
-    onclick={onBuyAgain}
-    class="w-full py-4 rounded-2xl font-bold text-base flex items-center justify-center gap-2 transition-all active:scale-95 mb-3"
-    style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
-  >
-    <RotateCcw size={18} />Buy Another Session
-  </button>
+  <div class="cta-pulse-wrap w-full mb-3">
+    <button
+      onclick={onBuyAgain}
+      class="w-full py-4 rounded-2xl font-bold text-base flex items-center justify-center gap-2 transition-transform active:scale-90"
+      style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
+    >
+      <RotateCcw size={18} />Buy Another Session
+    </button>
+  </div>
 
   <button
     class="w-full py-3.5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 mb-2"
@@ -64,3 +66,44 @@
 
   <p class="text-[10px] text-[#7A8868] text-center mt-3">swap.ungana.app</p>
 </ScreenBg>
+
+<style>
+  /* Draws the eye back to the main CTA: a slow breathing scale paired with
+     an expanding, fading pulse ring — reads as "tap me" without being
+     distracting or fighting the button's own tap-feedback scale (that
+     lives on the button itself, not this wrapper). */
+  .cta-pulse-wrap {
+    position: relative;
+    border-radius: 1rem;
+    animation: cta-breathe 2.4s ease-in-out infinite;
+  }
+  .cta-pulse-wrap::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 1rem;
+    box-shadow: 0 0 0 0 rgba(196, 92, 56, 0.45);
+    animation: cta-ring 2.4s ease-out infinite;
+    pointer-events: none;
+  }
+  @keyframes cta-breathe {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.035);
+    }
+  }
+  @keyframes cta-ring {
+    0% {
+      box-shadow: 0 0 0 0 rgba(196, 92, 56, 0.45);
+    }
+    70% {
+      box-shadow: 0 0 0 14px rgba(196, 92, 56, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(196, 92, 56, 0);
+    }
+  }
+</style>

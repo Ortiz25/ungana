@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import {
     MapPin, Edit3, LogOut, ArrowUpRight, TrendingUp, BarChart2, UserCheck, Wallet, User,
-    Clock, CheckCircle2, MessageCircle, Bell, Award, CreditCard, Save, Copy, Smartphone
+    Clock, CheckCircle2, MessageCircle, Bell, Award, CreditCard, Save, Copy, Smartphone,
+    ChevronLeft, ChevronRight, Filter
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import AreaChartMini from '$lib/components/AreaChartMini.svelte';
@@ -10,31 +11,35 @@
     MOCK_ROSTER, daysUntilExpiry, COMMISSION_RATE, ALL_DAILY, MONTHLY_DATA,
     LIFETIME_TOTAL, THIS_WEEK, LAST_WEEK, WEEK_GROWTH, TODAY_EARN, YESTERDAY
   } from '$lib/data.js';
-  import { getActivatorSessions, getActivatorEarnings } from '$lib/api.js';
+  import { getActivatorSessions, getActivatorEarnings, getActivatorEarningsSeries, updateActivatorProfile } from '$lib/api.js';
 
   let { activator, onLogout } = $props();
 
   // A real backend login (see ActivatorLoginScreen) carries a JWT; the
   // offline demo-fallback login doesn't. Everywhere below that shows actual
   // money/session numbers branches on this — the mock dataset (MOCK_ROSTER,
-  // ALL_DAILY, PAYOUT_HISTORY, weekly/daily goals) is the same fixed demo
-  // data regardless of which activator logs in, so showing it next to a
-  // real activator's real numbers would be actively misleading, not just
-  // incomplete. Real mode intentionally shows less (no history charts, no
-  // goals, no payout ledger) rather than fabricate those.
+  // PAYOUT_HISTORY, weekly/daily goals) is the same fixed demo data
+  // regardless of which activator logs in, so showing it next to a real
+  // activator's real numbers would be actively misleading, not just
+  // incomplete. Real mode's earnings history/charts (below) are built from
+  // getActivatorEarningsSeries() — real per-day commission totals, not
+  // fabricated — so, unlike goals/payout ledger, those ARE shown for real.
   const isReal = !!activator.token;
   let realSessions = $state([]);
   let realEarnings = $state(null);
+  let realDailySeries = $state([]); // [{ date: 'YYYY-MM-DD', commissionKes }], oldest → newest, zero-filled
   let loadingReal = $state(isReal);
 
   onMount(async () => {
     if (!isReal) return;
-    const [sessionsResult, earningsResult] = await Promise.all([
+    const [sessionsResult, earningsResult, seriesResult] = await Promise.all([
       getActivatorSessions(activator.token),
-      getActivatorEarnings(activator.token)
+      getActivatorEarnings(activator.token),
+      getActivatorEarningsSeries(activator.token, 365)
     ]);
     if (sessionsResult.ok) realSessions = sessionsResult.data?.sessions ?? [];
     if (earningsResult.ok) realEarnings = earningsResult.data?.earnings ?? null;
+    if (seriesResult.ok) realDailySeries = seriesResult.data?.series ?? [];
     loadingReal = false;
   });
 
@@ -43,7 +48,108 @@
   const realPaidSessions = $derived(Number(realEarnings?.paid_sessions ?? 0));
   const realUniqueDevices = $derived(new Set(realSessions.map((s) => s.client_mac)).size);
   const realCommissionRate = $derived(activator.commissionRate != null ? Math.round(activator.commissionRate * 100) : 20);
-  const realRecentSessions = $derived([...realSessions].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 8));
+
+  // Real earnings history/charts — derived from realDailySeries (actual
+  // per-day commission totals from the backend, zero-filled), not
+  // fabricated. Shape matches what BarChartMini/AreaChartMini already
+  // expect ({ label, shortLabel, earnings }) so the same chart components
+  // used for the demo view work unchanged here.
+  function formatDayLabel(dateStr) {
+    return new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  }
+  function formatShortDayLabel(dateStr) {
+    return new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-US', { day: 'numeric', timeZone: 'UTC' });
+  }
+  const realDaily = $derived(
+    realDailySeries.map((d) => ({ label: formatDayLabel(d.date), shortLabel: formatShortDayLabel(d.date), earnings: d.commissionKes }))
+  );
+  // Trailing 12 calendar months, oldest → newest, summed from the same
+  // real daily series.
+  const realMonthlyData = $derived.by(() => {
+    const byMonth = new Map();
+    for (const d of realDailySeries) {
+      const monthKey = d.date.slice(0, 7); // 'YYYY-MM'
+      byMonth.set(monthKey, (byMonth.get(monthKey) ?? 0) + d.commissionKes);
+    }
+    const months = [];
+    const cursor = new Date();
+    cursor.setUTCDate(1);
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(cursor);
+      d.setUTCMonth(d.getUTCMonth() - i);
+      const key = d.toISOString().slice(0, 7);
+      months.push({ label: d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }), earnings: byMonth.get(key) ?? 0 });
+    }
+    return months;
+  });
+  const realChartData = $derived.by(() => {
+    if (period === '7D') return realDaily.slice(-7);
+    if (period === '30D') return realDaily.slice(-30).filter((_, i) => i % 2 === 0);
+    if (period === '3M') return realDaily.slice(-90).filter((_, i) => i % 7 === 0);
+    return realMonthlyData;
+  });
+  const realPeriodTotal = $derived.by(() => {
+    if (period === '1Y') return realDaily.reduce((s, d) => s + d.earnings, 0);
+    const slice = period === '7D' ? realDaily.slice(-7) : period === '30D' ? realDaily.slice(-30) : realDaily.slice(-90);
+    return slice.reduce((s, d) => s + d.earnings, 0);
+  });
+  const realThisWeekTotal = $derived(realDaily.slice(-7).reduce((s, d) => s + d.earnings, 0));
+  const realThisMonthTotal = $derived(realDaily.slice(-30).reduce((s, d) => s + d.earnings, 0));
+
+  // 'active'/'expired' are derived from expires_at only once payment itself
+  // succeeded — pending/failed sessions were never granted a session at all.
+  function sessionStatus(s) {
+    if (s.payment_status !== 'success') return s.payment_status;
+    return s.expires_at && new Date(s.expires_at).getTime() > Date.now() ? 'active' : 'expired';
+  }
+  // A short, non-identifying per-row reference — used only as a fallback
+  // when a client never set a username. Phone/MAC are never shown.
+  function sessionRef(s) {
+    return `#${String(s.id).replace(/-/g, '').slice(0, 6).toUpperCase()}`;
+  }
+  // Client's self-chosen username (see clients.username) is the preferred
+  // label — it's what the client themselves picked to be identified by,
+  // unlike phone/MAC which are never surfaced here.
+  function sessionLabel(s) {
+    return s.client_username || sessionRef(s);
+  }
+
+  const SESSION_FILTERS = [
+    { id: 'all', label: 'All' },
+    { id: 'active', label: 'Active' },
+    { id: 'expired', label: 'Expired' },
+    { id: 'pending', label: 'Pending' },
+    { id: 'failed', label: 'Failed' }
+  ];
+  const SESSION_PAGE_SIZES = [5, 10, 20, 50, 100];
+
+  let sessionsFilter = $state('all');
+  let sessionsPageSize = $state(10);
+  let sessionsPage = $state(1);
+
+  const sortedSessions = $derived([...realSessions].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+  const filteredSessions = $derived(
+    sessionsFilter === 'all' ? sortedSessions : sortedSessions.filter((s) => sessionStatus(s) === sessionsFilter)
+  );
+  const sessionsTotalPages = $derived(Math.max(1, Math.ceil(filteredSessions.length / sessionsPageSize)));
+  const pagedSessions = $derived(
+    filteredSessions.slice((sessionsPage - 1) * sessionsPageSize, sessionsPage * sessionsPageSize)
+  );
+
+  // Filtering/page-size changes can leave the current page out of range —
+  // snap back rather than showing a blank page.
+  $effect(() => {
+    if (sessionsPage > sessionsTotalPages) sessionsPage = sessionsTotalPages;
+  });
+
+  function setSessionsFilter(id) {
+    sessionsFilter = id;
+    sessionsPage = 1;
+  }
+  function setSessionsPageSize(size) {
+    sessionsPageSize = size;
+    sessionsPage = 1;
+  }
 
   let nudged = $state({});
   let reminded = $state({});
@@ -56,15 +162,58 @@
   let linkCopied = $state(false);
 
   const AVATAR_COLORS = ['#C45C38', '#4E8050', '#2E5A3E', '#CC8830', '#5B8ED6', '#9B6DD6', '#B85038', '#C06080'];
-  let displayName = $state(activator.name.split(' ')[0]);
-  let territory = $state(activator.area);
-  let mpesa = $state('');
+  // fullName is the real, persisted name (saved to the backend for real
+  // activators — see saveProfile()); displayName is just the first word of
+  // it, used for the compact header/avatar. Avatar colour and notification
+  // toggles stay client-only — there's no backend concept for either yet,
+  // so persisting them would be fabricating a feature rather than wiring
+  // one up.
+  let fullName = $state(activator.name);
+  let territory = $state(activator.area ?? '');
+  let mpesa = $state(activator.mpesaNumber ?? '');
   let avatarColor = $state(AVATAR_COLORS[0]);
   let editingProfile = $state(false);
-  let profileDraft = $state({ name: activator.name.split(' ')[0], territory: activator.area, mpesa: '' });
+  // Always freshly reset by the "Edit" button right before use (see the
+  // profile tab below) — never read while editingProfile is false, so this
+  // initial placeholder is never actually shown.
+  let profileDraft = $state({ name: '', territory: '', mpesa: '' });
+  let profileSaving = $state(false);
+  let profileError = $state('');
   let notifs = $state({ expiring: true, dormant: true, goalMiss: true, newPurchase: false });
 
-  const initials = $derived(displayName.split(' ').map((w) => w[0]).join('').toUpperCase().slice(0, 2));
+  const displayName = $derived(fullName.trim().split(/\s+/)[0] || fullName);
+  const initials = $derived(
+    fullName.trim().split(/\s+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2)
+  );
+
+  async function saveProfile() {
+    const name = profileDraft.name.trim() || fullName;
+    const nextTerritory = profileDraft.territory.trim();
+    const nextMpesa = profileDraft.mpesa.trim();
+
+    if (!isReal) {
+      fullName = name;
+      territory = nextTerritory;
+      mpesa = nextMpesa;
+      editingProfile = false;
+      return;
+    }
+
+    profileError = '';
+    profileSaving = true;
+    const result = await updateActivatorProfile(activator.token, { name, territory: nextTerritory, mpesaNumber: nextMpesa });
+    profileSaving = false;
+
+    if (!result.ok || !result.data?.success) {
+      profileError = result.data?.message || 'Could not save — check your connection';
+      return;
+    }
+
+    fullName = result.data.activator.name;
+    territory = result.data.activator.territory ?? '';
+    mpesa = result.data.activator.mpesaNumber ?? '';
+    editingProfile = false;
+  }
 
   const activeUsers = MOCK_ROSTER.filter((u) => u.status === 'active').length;
   const dormantUsers = MOCK_ROSTER.filter((u) => u.status === 'dormant');
@@ -155,7 +304,7 @@
   );
 
   const profileFields = $derived([
-    { icon: User, label: 'Display name', key: 'name', placeholder: 'How you want to be known', value: editingProfile ? profileDraft.name : displayName },
+    { icon: User, label: 'Full name', key: 'name', placeholder: 'Your full name', value: editingProfile ? profileDraft.name : fullName },
     { icon: MapPin, label: 'Territory', key: 'territory', placeholder: 'e.g. Nairobi CBD, Kibera…', value: editingProfile ? profileDraft.territory : territory },
     { icon: CreditCard, label: 'M-PESA number', key: 'mpesa', placeholder: '+254 7XX XXX XXX', value: editingProfile ? profileDraft.mpesa : mpesa }
   ]);
@@ -280,22 +429,25 @@
         </div>
 
         <div class="rounded-3xl overflow-hidden" style="background: #2E5A3E;">
-          <div class="px-4 pt-4 pb-2">
+          <div class="px-4 pt-4 pb-2 flex items-center justify-between">
             <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Recent Sessions</p>
+            {#if sortedSessions.length > 5}
+              <button onclick={() => (tab = 'users')} class="text-[10px] font-bold" style="color: #C45C38;">View all →</button>
+            {/if}
           </div>
           {#if loadingReal}
             <div class="px-4 pb-4"><div class="h-6 w-6 rounded-full border-2 border-white/20 border-t-white/70 animate-spin mx-auto"></div></div>
-          {:else if realRecentSessions.length === 0}
+          {:else if sortedSessions.length === 0}
             <p class="text-xs text-[#96B496] px-4 pb-4">No sessions referred yet.</p>
           {:else}
-            {#each realRecentSessions as s, i (s.id)}
+            {#each sortedSessions.slice(0, 5) as s, i (s.id)}
               <div class="flex items-center gap-3 px-4 py-3" style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.14)' : 'none'};">
                 <div class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.30);">
                   <Smartphone size={13} color="#C45C38" />
                 </div>
                 <div class="flex-1 min-w-0">
-                  <p class="text-xs font-semibold text-[#E8D4B0] truncate">{s.client_phone || s.client_mac}</p>
-                  <p class="text-[10px] text-[#AECAAE]">{s.package_id} · {new Date(s.created_at).toLocaleDateString()} · {s.payment_status}</p>
+                  <p class="text-xs font-semibold text-[#E8D4B0] truncate">{sessionLabel(s)} · {s.package_id}</p>
+                  <p class="text-[10px] text-[#AECAAE]">{new Date(s.created_at).toLocaleDateString()} · {sessionStatus(s)}</p>
                 </div>
                 <p class="text-xs font-bold text-[#C45C38] shrink-0">+KES {Number(s.commission_kes).toLocaleString()}</p>
               </div>
@@ -471,23 +623,70 @@
     <!-- EARNINGS -->
     {#if tab === 'earnings'}
       {#if isReal}
-        <!-- No period charts here — the backend only tracks all-time
-             totals per activator, not a day-by-day breakdown, so a "This
-             Week / 30 Days" chart would have to be fabricated. -->
-        <div class="rounded-3xl px-5 py-4" style="background: #2E5A3E;">
-          <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider mb-3">All-time breakdown</p>
-          {#each [
-            { label: 'Gross referred purchases', value: realGrossKes, highlight: false },
-            { label: `Your commission (${realCommissionRate}%)`, value: realCommissionKes, highlight: true },
-            { label: 'Paid sessions', value: realPaidSessions, highlight: false, isCount: true }
-          ] as row (row.label)}
-            <div class="flex justify-between items-center py-2.5" style="border-bottom: 1px solid rgba(255,255,255,0.14);">
-              <span class="text-xs text-[#C4DAC0]">{row.label}</span>
-              <span class="text-sm font-bold" style="color: {row.highlight ? '#C45C38' : '#E8D4B0'};">{row.isCount ? row.value : `KES ${row.value.toLocaleString()}`}</span>
+        {#if loadingReal}
+          <div class="flex justify-center py-8"><div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div></div>
+        {:else}
+          <!-- Quick summary — real per-day commission totals from
+               getActivatorEarningsSeries(), not fabricated. -->
+          <div class="grid grid-cols-3 gap-2">
+            <div class="rounded-2xl px-3 py-3" style="background: #2E5A3E;">
+              <p class="text-[9px] text-[#96B496] uppercase tracking-wider">This Week</p>
+              <p class="text-sm font-bold text-[#E8D4B0] mt-0.5 truncate">KES {realThisWeekTotal.toLocaleString()}</p>
             </div>
-          {/each}
-        </div>
-        <p class="text-[10px] text-[#96B496] text-center px-4">Detailed weekly/monthly earnings history isn't tracked yet — this shows all-time totals only.</p>
+            <div class="rounded-2xl px-3 py-3" style="background: #2E5A3E;">
+              <p class="text-[9px] text-[#96B496] uppercase tracking-wider">This Month</p>
+              <p class="text-sm font-bold text-[#E8D4B0] mt-0.5 truncate">KES {realThisMonthTotal.toLocaleString()}</p>
+            </div>
+            <div class="rounded-2xl px-3 py-3" style="background: #2E5A3E;">
+              <p class="text-[9px] text-[#96B496] uppercase tracking-wider">All Time</p>
+              <p class="text-sm font-bold text-[#C45C38] mt-0.5 truncate">KES {realCommissionKes.toLocaleString()}</p>
+            </div>
+          </div>
+
+          <!-- Filter -->
+          <div class="flex rounded-2xl overflow-hidden p-1 gap-1" style="background: rgba(46,90,62,0.12);">
+            {#each PERIODS as p (p.id)}
+              <button onclick={() => (period = p.id)} class="flex-1 py-2 rounded-xl text-[11px] font-bold transition-all" style="background: {period === p.id ? '#2E5A3E' : 'transparent'}; color: {period === p.id ? '#C45C38' : '#3C6A4A'};">
+                {p.label}
+              </button>
+            {/each}
+          </div>
+
+          <div class="rounded-3xl px-5 py-5" style="background: #2E5A3E;">
+            <p class="text-[10px] text-[#AECAAE] uppercase tracking-widest font-semibold mb-1">
+              {period === '7D' ? 'This Week' : period === '30D' ? 'Last 30 Days' : period === '3M' ? 'Last 3 Months' : 'This Year'}
+            </p>
+            <p class="text-3xl font-bold text-[#E8D4B0]" style="letter-spacing: -1px;">KES {realPeriodTotal.toLocaleString()}</p>
+            <p class="text-xs text-[#C4DAC0] mt-1">at {realCommissionRate}% commission rate</p>
+            <div style="height: 140px; margin-top: 16px; margin-left: -20px; margin-right: -8px;">
+              <AreaChartMini data={realChartData} yKey="earnings" xKey={period === '1Y' ? 'label' : 'shortLabel'} height={140} color="#C45C38" showGrid />
+            </div>
+          </div>
+
+          <div class="rounded-3xl overflow-hidden" style="background: #2E5A3E;">
+            <div class="px-4 pt-4 pb-2">
+              <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Monthly comparison</p>
+            </div>
+            <div style="height: 140px; margin-right: 8px;">
+              <BarChartMini data={realMonthlyData} yKey="earnings" xKey="label" barSize={16} radius={4} height={140} color="#C45C38" opacity={0.85} />
+            </div>
+            <div class="h-3"></div>
+          </div>
+
+          <div class="rounded-3xl px-5 py-4" style="background: #2E5A3E;">
+            <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider mb-3">All-time breakdown</p>
+            {#each [
+              { label: 'Gross referred purchases', value: realGrossKes, highlight: false },
+              { label: `Your commission (${realCommissionRate}%)`, value: realCommissionKes, highlight: true },
+              { label: 'Paid sessions', value: realPaidSessions, highlight: false, isCount: true }
+            ] as row (row.label)}
+              <div class="flex justify-between items-center py-2.5" style="border-bottom: 1px solid rgba(255,255,255,0.14);">
+                <span class="text-xs text-[#C4DAC0]">{row.label}</span>
+                <span class="text-sm font-bold" style="color: {row.highlight ? '#C45C38' : '#E8D4B0'};">{row.isCount ? row.value : `KES ${row.value.toLocaleString()}`}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
       {:else}
       <div class="flex rounded-2xl overflow-hidden p-1 gap-1" style="background: rgba(46,90,62,0.12);">
         {#each PERIODS as p (p.id)}
@@ -536,8 +735,9 @@
         <!-- Real sessions, not "users" — clients aren't named in this
              system (identified by MAC/phone only), so this is a session
              ledger rather than the roster-with-nudge-buttons concept below,
-             which depends on fictional plan/dormancy/lastActive fields. -->
-        <p class="text-xs text-[#3C6A4A] font-semibold">{realSessions.length} session{realSessions.length === 1 ? '' : 's'} · {realUniqueDevices} unique device{realUniqueDevices === 1 ? '' : 's'}</p>
+             which depends on fictional plan/dormancy/lastActive fields.
+             Client phone/MAC is never shown here — see sessionRef(). -->
+        <p class="text-xs text-[#3C6A4A] font-semibold">{filteredSessions.length} session{filteredSessions.length === 1 ? '' : 's'} · {realUniqueDevices} unique device{realUniqueDevices === 1 ? '' : 's'}</p>
         {#if loadingReal}
           <div class="flex justify-center py-8"><div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div></div>
         {:else if realSessions.length === 0}
@@ -546,26 +746,84 @@
             <p class="text-xs text-[#96B496]">No sessions referred yet</p>
           </div>
         {:else}
-          {#each [...realSessions].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)) as s (s.id)}
-            {@const isActive = s.expires_at ? new Date(s.expires_at).getTime() > Date.now() : false}
-            <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E;">
-              <div class="flex items-center gap-3 px-4 py-3.5">
-                <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
-                  <Smartphone size={15} color="#C45C38" />
-                </div>
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-semibold text-[#E8D4B0] truncate">{s.client_phone || s.client_mac}</p>
-                  <p class="text-[10px] text-[#AECAAE]">{s.package_id} · {new Date(s.created_at).toLocaleDateString()}</p>
-                </div>
-                <div class="flex flex-col items-end gap-1 shrink-0">
-                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background: {isActive ? 'rgba(78,128,80,0.30)' : 'rgba(255,255,255,0.1)'}; color: {isActive ? '#4E8050' : '#96B496'};">
-                    {s.payment_status === 'success' ? (isActive ? 'Active' : 'Expired') : s.payment_status}
-                  </span>
-                  <p class="text-[10px] font-bold text-[#C45C38]">+KES {Number(s.commission_kes).toLocaleString()}</p>
+          <!-- Filter -->
+          <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+            <Filter size={12} color="#3C6A4A" class="shrink-0" />
+            {#each SESSION_FILTERS as f (f.id)}
+              <button
+                onclick={() => setSessionsFilter(f.id)}
+                class="shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold transition-all"
+                style="background: {sessionsFilter === f.id ? '#2E5A3E' : 'rgba(46,90,62,0.1)'}; color: {sessionsFilter === f.id ? '#E8D4B0' : '#3C6A4A'};"
+              >
+                {f.label}
+              </button>
+            {/each}
+          </div>
+
+          {#if filteredSessions.length === 0}
+            <div class="rounded-2xl px-4 py-8 flex flex-col items-center gap-2" style="background: rgba(46,90,62,0.08);">
+              <p class="text-xs text-[#96B496]">No sessions match this filter.</p>
+            </div>
+          {:else}
+            {#each pagedSessions as s (s.id)}
+              {@const status = sessionStatus(s)}
+              {@const statusColor = status === 'active' ? '#4E8050' : status === 'expired' ? '#96B496' : status === 'failed' ? '#B85038' : '#CC8830'}
+              {@const statusBg = status === 'active' ? 'rgba(78,128,80,0.30)' : status === 'expired' ? 'rgba(255,255,255,0.1)' : status === 'failed' ? 'rgba(192,97,74,0.2)' : 'rgba(204,136,48,0.25)'}
+              <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E;">
+                <div class="flex items-center gap-3 px-4 py-3.5">
+                  <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
+                    <Smartphone size={15} color="#C45C38" />
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm font-semibold text-[#E8D4B0] truncate">{sessionLabel(s)} · {s.package_id}</p>
+                    <p class="text-[10px] text-[#AECAAE]">{new Date(s.created_at).toLocaleDateString()}</p>
+                  </div>
+                  <div class="flex flex-col items-end gap-1 shrink-0">
+                    <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize" style="background: {statusBg}; color: {statusColor};">
+                      {status}
+                    </span>
+                    <p class="text-[10px] font-bold text-[#C45C38]">+KES {Number(s.commission_kes).toLocaleString()}</p>
+                  </div>
                 </div>
               </div>
+            {/each}
+
+            <!-- Pagination -->
+            <div class="flex items-center justify-between gap-2 pt-1">
+              <div class="flex items-center gap-1.5">
+                <span class="text-[10px] text-[#3C6A4A]">Show</span>
+                <select
+                  value={sessionsPageSize}
+                  onchange={(e) => setSessionsPageSize(Number(e.currentTarget.value))}
+                  class="text-[11px] font-bold px-2 py-1.5 rounded-lg outline-none"
+                  style="background: rgba(46,90,62,0.1); color: #1D3C2A; border: none;"
+                >
+                  {#each SESSION_PAGE_SIZES as size (size)}
+                    <option value={size}>{size}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  onclick={() => (sessionsPage = Math.max(1, sessionsPage - 1))}
+                  disabled={sessionsPage <= 1}
+                  class="w-7 h-7 rounded-full flex items-center justify-center"
+                  style="background: rgba(46,90,62,0.1); opacity: {sessionsPage <= 1 ? 0.4 : 1};"
+                >
+                  <ChevronLeft size={13} color="#1D3C2A" />
+                </button>
+                <span class="text-[11px] font-semibold text-[#1D3C2A]">Page {sessionsPage} of {sessionsTotalPages}</span>
+                <button
+                  onclick={() => (sessionsPage = Math.min(sessionsTotalPages, sessionsPage + 1))}
+                  disabled={sessionsPage >= sessionsTotalPages}
+                  class="w-7 h-7 rounded-full flex items-center justify-center"
+                  style="background: rgba(46,90,62,0.1); opacity: {sessionsPage >= sessionsTotalPages ? 0.4 : 1};"
+                >
+                  <ChevronRight size={13} color="#1D3C2A" />
+                </button>
+              </div>
             </div>
-          {/each}
+          {/if}
         {/if}
       {:else}
       <p class="text-xs text-[#3C6A4A] font-semibold">{MOCK_ROSTER.length} total · sorted by value · {expiringUsers.length} expiring soon</p>
@@ -698,19 +956,29 @@
         <div class="px-5 pt-4 pb-2 flex items-center justify-between">
           <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Your details</p>
           {#if !editingProfile}
-            <button onclick={() => { profileDraft = { name: displayName, territory, mpesa }; editingProfile = true; }} class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full" style="background: rgba(196,92,56,0.30); color: #C45C38;">
+            <button onclick={() => { profileDraft = { name: fullName, territory, mpesa }; profileError = ''; editingProfile = true; }} class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full" style="background: rgba(196,92,56,0.30); color: #C45C38;">
               <Edit3 size={10} /> Edit
             </button>
           {:else}
             <button
-              onclick={() => { displayName = profileDraft.name || displayName; territory = profileDraft.territory; mpesa = profileDraft.mpesa; editingProfile = false; }}
+              onclick={saveProfile}
+              disabled={profileSaving}
               class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full"
-              style="background: rgba(78,128,80,0.35); color: #4E8050;"
+              style="background: rgba(78,128,80,0.35); color: #4E8050; opacity: {profileSaving ? 0.7 : 1};"
             >
-              <Save size={10} /> Save
+              {#if profileSaving}
+                <div class="w-2.5 h-2.5 rounded-full border-2 border-current border-t-transparent animate-spin"></div>
+              {:else}
+                <Save size={10} />
+              {/if}
+              Save
             </button>
           {/if}
         </div>
+
+        {#if profileError}
+          <p class="text-[11px] px-5 pb-1" style="color: #E08A6A;">{profileError}</p>
+        {/if}
 
         {#each profileFields as f, i (f.label)}
           {@const Icon = f.icon}

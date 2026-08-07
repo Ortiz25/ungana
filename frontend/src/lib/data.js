@@ -61,19 +61,59 @@ export const TL_NEW = [
   { id: 'n3', type: 'article', title: 'Market Innovations', category: 'Business', duration: '3 min', earnLabel: '30m', earnSecs: 1800, img: 'https://images.unsplash.com/photo-1558907530-fe311178388a?w=400&q=80' },
   { id: 'n4', type: 'video', title: 'Community Stories', category: 'Culture', duration: '7 min', earnLabel: '2h', earnSecs: 7200, img: 'https://images.unsplash.com/photo-1515657834497-26509e295154?w=400&q=80' }
 ];
-export const TL_SURVEY = {
-  id: 's1',
-  type: 'survey',
-  title: 'Take a survey to get 1 hour online',
-  category: 'Community Survey',
-  duration: '2 min',
-  earnLabel: '1h',
-  earnSecs: 3600,
-  img: '',
-  surveyQuestions: ['How do you use the internet?', 'What content matters most?', 'Rate your experience']
-};
+export const TL_SURVEYS = [
+  {
+    id: 's1',
+    type: 'survey',
+    title: 'Take a survey to get 5 minutes online',
+    category: 'Community Survey',
+    duration: '2 min',
+    earnLabel: '5min',
+    earnSecs: 300,
+    img: 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?w=800&q=80',
+    surveyQuestions: [
+      { question: 'How do you use the internet?', answers: ['Social media', 'Work/study', 'Entertainment', 'News'] },
+      { question: 'What content matters most?', answers: ['Local news', 'Education', 'Entertainment', 'Business'] },
+      { question: 'Rate your experience', answers: ['Poor', 'Okay', 'Good', 'Excellent'] }
+    ]
+  },
+  {
+    id: 's2',
+    type: 'survey',
+    title: 'Tell us about your data usage for 45 minutes free',
+    category: 'Network Feedback',
+    duration: '1 min',
+    earnLabel: '45m',
+    earnSecs: 2700,
+    img: 'https://images.unsplash.com/photo-1551434678-e076c223a692?w=800&q=80',
+    surveyQuestions: [
+      { question: 'How often do you connect to Ungana WiFi?', answers: ['Daily', 'A few times a week', 'Weekly', 'First time'] },
+      { question: 'How would you rate your connection speed?', answers: ['Very slow', 'Slow', 'Fine', 'Fast'] }
+    ]
+  }
+];
 export const TL_ARTICLES = [
-  { id: 'a1', type: 'article', title: 'Nairobi Tech Scene 2026', category: 'Technology', duration: '3 min', earnLabel: '30m', earnSecs: 1800, img: 'https://images.unsplash.com/photo-1623299677833-9f077d1a2e92?w=400&q=80' },
+  {
+    id: 'a1',
+    type: 'article',
+    title: 'Nairobi Tech Scene 2026',
+    category: 'Technology',
+    duration: '3 min',
+    earnLabel: '30m',
+    earnSecs: 1800,
+    img: 'https://images.unsplash.com/photo-1623299677833-9f077d1a2e92?w=400&q=80',
+    bodyUrl: [
+      "Nairobi's Silicon Savannah has quietly become one of the continent's most consequential startup hubs, and 2026 is shaping up to be its busiest year yet. Here's what's driving the surge, and why it matters for the next billion users coming online.",
+      '## What changed this year',
+      "From fintech collectives in Kilimani to hardware labs tucked behind Ngong Road, a new generation of builders is shipping **mobile-first** products priced for real wallets. Three shifts stand out:",
+      '- Community WiFi is cutting data costs for entire estates',
+      '- Pay-as-you-go cloud lets startups launch without upfront infrastructure spend',
+      '- Local investors are backing longer, less speculative runways',
+      '### Why the infrastructure matters',
+      "None of this works without the layer underneath it. Community WiFi, pay-as-you-go data, and local cloud capacity are finally catching up to the **ambition** of the people building on top of them.",
+      'Source: Otieno, M. (2026, February 12). Inside the Silicon Savannah boom. Nairobi Business Weekly. nairobibusinessweekly.example.com'
+    ].join('\n\n')
+  },
   { id: 'a2', type: 'lesson', title: 'Teacher & Community Impact', category: 'Education', duration: '4 min', earnLabel: '45m', earnSecs: 2700, img: 'https://images.unsplash.com/photo-1744809482817-9a9d4fc280af?w=400&q=80' },
   { id: 'a3', type: 'video', title: 'Children of the Savanna', category: 'Documentary', duration: '5 min', earnLabel: '1h', earnSecs: 3600, img: 'https://images.unsplash.com/photo-1520254553641-2eed4cf2ef26?w=400&q=80' }
 ];

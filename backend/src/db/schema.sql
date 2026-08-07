@@ -299,6 +299,21 @@ CREATE TRIGGER content_items_set_updated_at
 
 CREATE INDEX IF NOT EXISTS idx_content_items_active ON content_items(is_active, sort_order);
 
+-- survey_questions used to be a plain string[] (each question rendered with
+-- a hardcoded Disagree/Neutral/Agree scale). It's now [{question, answers}]
+-- with admin-defined per-question answer options. Idempotently upgrade any
+-- rows still in the old shape — safe to re-run: once converted, element 0 is
+-- an object, not a string, so the WHERE no longer matches.
+UPDATE content_items
+SET survey_questions = (
+  SELECT jsonb_agg(jsonb_build_object('question', q, 'answers', '["Disagree","Neutral","Agree"]'::jsonb))
+  FROM jsonb_array_elements_text(survey_questions) AS q
+)
+WHERE type = 'survey'
+  AND jsonb_typeof(survey_questions) = 'array'
+  AND jsonb_array_length(survey_questions) > 0
+  AND jsonb_typeof(survey_questions -> 0) = 'string';
+
 -- One row per client per completed item — the server-side record of what a
 -- client has actually finished, replacing the client-only `completedIds`
 -- Set in TimelineScreen.svelte (which resets on reload and can't be

@@ -2,6 +2,7 @@ import { query } from "../db/pool.js";
 
 const DEFAULTS = {
   earn_connect_threshold_secs: 1800,
+  default_activator_commission_rate: 0.2,
 };
 
 async function getRawSetting(key) {
@@ -16,9 +17,18 @@ export async function getPublicSettings() {
   return { earnConnectThresholdSecs };
 }
 
-/** Same as getPublicSettings() — separate name for the admin panel's own read, in case they diverge later. */
+/**
+ * Admin-only settings — everything getPublicSettings() has, plus internal
+ * business config (commission rate) that clients never need to see.
+ */
 export async function adminGetSettings() {
-  return getPublicSettings();
+  const [publicSettings, rawCommission] = await Promise.all([
+    getPublicSettings(),
+    getRawSetting("default_activator_commission_rate"),
+  ]);
+  const defaultActivatorCommissionRate =
+    rawCommission !== null ? Number(rawCommission) : DEFAULTS.default_activator_commission_rate;
+  return { ...publicSettings, defaultActivatorCommissionRate };
 }
 
 /** Update the Earn Free Access "Connect Now" threshold (seconds). */
@@ -28,5 +38,21 @@ export async function setEarnConnectThresholdSecs(secs) {
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
     [String(Math.max(0, Math.round(secs)))]
   );
-  return getPublicSettings();
+  return adminGetSettings();
+}
+
+/**
+ * Update the default commission rate (0–1) new activators are created with.
+ * Existing activators are untouched — this only changes what the admin
+ * panel's "create activator" form pre-fills; each activator's own rate
+ * still overrides it individually.
+ */
+export async function setDefaultActivatorCommissionRate(rate) {
+  const clamped = Math.min(1, Math.max(0, rate));
+  await query(
+    `INSERT INTO app_settings (key, value) VALUES ('default_activator_commission_rate', $1)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [String(clamped)]
+  );
+  return adminGetSettings();
 }

@@ -175,7 +175,7 @@ export async function logPaymentEvent(sessionId, eventType, payload) {
 /** All sessions referred by an activator — newest first. */
 export async function listSessionsForActivator(activatorId, limit = 100) {
   const { rows } = await query(
-    `SELECT s.*, c.phone AS client_phone
+    `SELECT s.*, c.phone AS client_phone, c.username AS client_username
      FROM sessions s JOIN clients c ON c.id = s.client_id
      WHERE s.activator_id = $1
      ORDER BY s.created_at DESC
@@ -183,4 +183,35 @@ export async function listSessionsForActivator(activatorId, limit = 100) {
     [activatorId, limit]
   );
   return rows;
+}
+
+/**
+ * Real, zero-filled daily commission series for one activator, oldest to
+ * newest — the basis for the activator dashboard's weekly/monthly/yearly
+ * earnings views. Built from actual `sessions` rows (payment_status =
+ * 'success' only) rather than fabricated, unlike the old fixed demo
+ * dataset — days with no paid session simply show 0, so the series has no
+ * gaps for charting or period summation.
+ */
+export async function getActivatorEarningsSeries(activatorId, days = 365) {
+  const { rows } = await query(
+    `SELECT date_trunc('day', created_at)::date AS day, SUM(commission_kes) AS commission_kes
+     FROM sessions
+     WHERE activator_id = $1 AND payment_status = 'success'
+       AND created_at >= now() - ($2 || ' days')::interval
+     GROUP BY day`,
+    [activatorId, days]
+  );
+  const byDay = new Map(rows.map((r) => [r.day.toISOString().slice(0, 10), Number(r.commission_kes)]));
+
+  const series = [];
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setUTCDate(d.getUTCDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    series.push({ date: key, commissionKes: byDay.get(key) ?? 0 });
+  }
+  return series;
 }

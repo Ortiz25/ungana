@@ -155,6 +155,20 @@ export function getActivatorEarnings(token) {
   return request('/activators/me/earnings', { headers: { Authorization: `Bearer ${token}` } });
 }
 
+/** GET /api/activators/me/earnings/series — real daily commission series. Bearer token required */
+export function getActivatorEarningsSeries(token, days = 365) {
+  return request(`/activators/me/earnings/series?days=${days}`, { headers: { Authorization: `Bearer ${token}` } });
+}
+
+/** PATCH /api/activators/me — Body: { name?, territory?, mpesaNumber? }. Bearer token required */
+export function updateActivatorProfile(token, body) {
+  return request('/activators/me', {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+}
+
 /** POST /api/coordinators/login — Body: { phone, pin } */
 export function coordinatorLogin(phone, pin) {
   return request('/coordinators/login', { method: 'POST', body: JSON.stringify({ phone, pin }) });

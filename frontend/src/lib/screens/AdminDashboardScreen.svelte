@@ -3,7 +3,7 @@
   import {
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
     ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
-    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu
+    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import {
@@ -72,9 +72,12 @@
   }
 
   let earnConnectThresholdMinutes = $state('30');
+  let defaultActivatorCommissionPct = $state('20');
   async function loadSettings() {
     const r = await adminGetSettings(token);
-    if (r.ok) earnConnectThresholdMinutes = String(Math.round((r.data.settings?.earnConnectThresholdSecs ?? 1800) / 60));
+    if (!r.ok) return;
+    earnConnectThresholdMinutes = String(Math.round((r.data.settings?.earnConnectThresholdSecs ?? 1800) / 60));
+    defaultActivatorCommissionPct = String(Math.round((r.data.settings?.defaultActivatorCommissionRate ?? 0.2) * 100));
   }
 
   let analytics = $state(null);
@@ -114,7 +117,7 @@
   // ── Content form ─────────────────────────────────────────────────────────
   const DEFAULT_CONTENT_DRAFT = {
     type: 'video', section: 'whats_new', viewFrequency: 'once', title: '', category: '', durationLabel: '', earnMinutes: '30',
-    minWatchSecs: '0', imgUrl: '', bodyUrl: '', surveyQuestionsText: ''
+    minWatchSecs: '0', imgUrl: '', bodyUrl: '', surveyQuestions: [{ question: '', answers: ['', ''] }]
   };
   let showContentForm = $state(false);
   let contentDraft = $state({ ...DEFAULT_CONTENT_DRAFT });
@@ -130,11 +133,17 @@
       category: draft.category.trim() || undefined,
       durationLabel: draft.durationLabel.trim() || undefined,
       earnSecs: Math.round(Number(draft.earnMinutes) * 60),
-      minWatchSecs: Number(draft.minWatchSecs) || 0,
+      // Surveys and articles have no dwell-time UI — always save 0 rather
+      // than resubmitting a stale value from before that field was hidden.
+      minWatchSecs: draft.type === 'survey' || draft.type === 'article' ? 0 : Number(draft.minWatchSecs) || 0,
       imgUrl: draft.imgUrl.trim() || undefined,
       bodyUrl: draft.bodyUrl.trim() || undefined,
       surveyQuestions:
-        draft.type === 'survey' ? draft.surveyQuestionsText.split('\n').map((s) => s.trim()).filter(Boolean) : undefined
+        draft.type === 'survey'
+          ? draft.surveyQuestions
+              .map((q) => ({ question: q.question.trim(), answers: q.answers.map((a) => a.trim()).filter(Boolean) }))
+              .filter((q) => q.question && q.answers.length > 0)
+          : undefined
     };
   }
 
@@ -209,8 +218,21 @@
       minWatchSecs: String(item.min_watch_secs ?? 0),
       imgUrl: item.img_url ?? '',
       bodyUrl: item.body_url ?? '',
-      surveyQuestionsText: (item.survey_questions ?? []).join('\n')
+      surveyQuestions: normalizeSurveyQuestionsForEdit(item.survey_questions)
     };
+  }
+
+  // survey_questions is opaque JSONB — older rows (or a pre-migration
+  // remote DB) may still be plain strings. Upgrade to the {question,
+  // answers} shape the editor works with, and always leave at least one
+  // blank row so "add a survey" starts from something editable.
+  function normalizeSurveyQuestionsForEdit(raw) {
+    const questions = (raw ?? []).map((q) =>
+      typeof q === 'string'
+        ? { question: q, answers: ['Disagree', 'Neutral', 'Agree'] }
+        : { question: q.question ?? '', answers: [...(q.answers ?? [])] }
+    );
+    return questions.length > 0 ? questions : [{ question: '', answers: ['', ''] }];
   }
 
   function cancelEditContent() {
@@ -239,11 +261,15 @@
   }
 
   // ── Activator form ───────────────────────────────────────────────────────
-  const DEFAULT_ACTIVATOR_DRAFT = {
-    code: '', name: '', phone: '', pin: '', territory: '', mpesaNumber: '', commissionRate: '20', coordinatorId: ''
-  };
+  // commissionRate pre-fills from the admin-configured default (Settings
+  // tab) — evaluated fresh each time rather than baked into a static
+  // object, so it reflects whatever's currently loaded, not whatever was
+  // loaded when the component first mounted.
+  function freshActivatorDraft() {
+    return { code: '', name: '', phone: '', pin: '', territory: '', mpesaNumber: '', commissionRate: defaultActivatorCommissionPct, coordinatorId: '' };
+  }
   let showActivatorForm = $state(false);
-  let activatorDraft = $state({ ...DEFAULT_ACTIVATOR_DRAFT });
+  let activatorDraft = $state(freshActivatorDraft());
   let activatorFormError = $state('');
   let activatorSaving = $state(false);
 
@@ -274,7 +300,7 @@
       return;
     }
 
-    activatorDraft = { ...DEFAULT_ACTIVATOR_DRAFT };
+    activatorDraft = freshActivatorDraft();
     showActivatorForm = false;
     await loadActivators();
   }
@@ -430,10 +456,17 @@
       settingsError = 'Enter a non-negative number of minutes';
       return;
     }
+    if (!(Number(defaultActivatorCommissionPct) >= 0 && Number(defaultActivatorCommissionPct) <= 100)) {
+      settingsError = 'Commission % must be between 0 and 100';
+      return;
+    }
     settingsError = '';
     settingsSaving = true;
 
-    const result = await adminUpdateSettings(token, { earnConnectThresholdMinutes: Number(earnConnectThresholdMinutes) });
+    const result = await adminUpdateSettings(token, {
+      earnConnectThresholdMinutes: Number(earnConnectThresholdMinutes),
+      defaultActivatorCommissionPct: Number(defaultActivatorCommissionPct)
+    });
     settingsSaving = false;
 
     if (!result.ok || !result.data?.success) {
@@ -543,7 +576,94 @@
   </div>
 {/snippet}
 
-<div class="flex" style="min-height: 100dvh; background: #E8D4B0;">
+{#snippet articleBodyField(draft, oninput)}
+  <div>
+    <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Article body</p>
+    <textarea
+      value={draft.bodyUrl}
+      {oninput}
+      rows="8"
+      class="w-full bg-transparent px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none resize-none"
+      style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
+      placeholder={'Write the article — start with a short intro paragraph (the hook), then structure the rest with:\n\n## A subheading\n### A smaller subheading\n- a bullet point\n- another bullet point\n1. a numbered step\n**bold** for key terms\n\nEnd with a citation if this references an outside source:\nSource: Smith, J. (2026, February 25). Title of article. Site Name. example.com\n\nOr just paste a https:// link here instead to send readers to an external article.'}
+    ></textarea>
+    <p class="text-[10px] text-[#7A9E7A] mt-1">
+      Supports ## headings, ### subheadings, - bullets, 1. numbered lists, **bold**, and a trailing "Source: …" citation line.
+    </p>
+  </div>
+{/snippet}
+
+{#snippet surveyQuestionsEditor(draft)}
+  <div>
+    <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Questions & answer options</p>
+    <div class="flex flex-col gap-2.5">
+      {#each draft.surveyQuestions as q, qi (qi)}
+        <div class="rounded-xl p-3" style="background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);">
+          <div class="flex items-center gap-2 mb-2">
+            <input
+              type="text"
+              value={q.question}
+              oninput={(e) => (draft.surveyQuestions[qi].question = e.currentTarget.value)}
+              placeholder={`Question ${qi + 1}`}
+              class="flex-1 min-w-0 bg-transparent px-3 py-2 rounded-lg text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none"
+              style="background: rgba(255,255,255,0.08);"
+            />
+            <button
+              type="button"
+              onclick={() => (draft.surveyQuestions = draft.surveyQuestions.filter((_, i) => i !== qi))}
+              disabled={draft.surveyQuestions.length <= 1}
+              class="shrink-0 w-7 h-7 rounded-full flex items-center justify-center"
+              style="background: rgba(184,80,56,0.2); opacity: {draft.surveyQuestions.length <= 1 ? 0.4 : 1};"
+            >
+              <X size={12} color="#E08A6A" />
+            </button>
+          </div>
+          <div class="flex flex-col gap-1.5 pl-1">
+            {#each q.answers as a, ai (ai)}
+              <div class="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={a}
+                  oninput={(e) => (draft.surveyQuestions[qi].answers[ai] = e.currentTarget.value)}
+                  placeholder={`Answer option ${ai + 1}`}
+                  class="flex-1 min-w-0 bg-transparent px-3 py-1.5 rounded-lg text-xs text-[#C4DAC0] placeholder-[#4A6842] outline-none"
+                  style="background: rgba(255,255,255,0.05);"
+                />
+                <button
+                  type="button"
+                  onclick={() => (draft.surveyQuestions[qi].answers = q.answers.filter((_, i) => i !== ai))}
+                  disabled={q.answers.length <= 1}
+                  class="shrink-0 w-5 h-5 rounded-full flex items-center justify-center"
+                  style="opacity: {q.answers.length <= 1 ? 0.3 : 1};"
+                >
+                  <X size={10} color="#96B496" />
+                </button>
+              </div>
+            {/each}
+            <button
+              type="button"
+              onclick={() => (draft.surveyQuestions[qi].answers = [...q.answers, ''])}
+              class="text-[10px] font-semibold self-start px-2.5 py-1 rounded-full mt-0.5"
+              style="background: rgba(196,92,56,0.15); color: #C45C38;"
+            >
+              + Add answer option
+            </button>
+          </div>
+        </div>
+      {/each}
+      <button
+        type="button"
+        onclick={() => (draft.surveyQuestions = [...draft.surveyQuestions, { question: '', answers: ['', ''] }])}
+        class="py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5"
+        style="background: rgba(196,92,56,0.15); color: #C45C38;"
+      >
+        <Plus size={13} /> Add question
+      </button>
+    </div>
+  </div>
+{/snippet}
+
+<div class="flex" style="height: 100dvh; overflow: hidden; background: #E8D4B0;">
   <!-- Mobile sidebar backdrop -->
   {#if sidebarOpen}
     <button
@@ -556,9 +676,13 @@
   {/if}
 
   <!-- Sidebar — fixed off-canvas drawer on mobile (toggled by the hamburger
-       button in the top bar below), always-visible sticky column on md+. -->
+       button in the top bar below), always-visible fixed-height column on
+       md+. The outer shell is viewport-locked (height: 100dvh; overflow:
+       hidden) and only the main content column scrolls, so this never
+       moves or leaves a gap below the sign-out button no matter how tall
+       the active tab's content gets. -->
   <aside
-    class="fixed md:sticky top-0 left-0 h-dvh w-64 z-50 flex flex-col shrink-0 transition-transform duration-300 ease-out {sidebarOpen
+    class="fixed md:relative top-0 left-0 h-dvh w-64 z-50 flex flex-col shrink-0 transition-transform duration-300 ease-out {sidebarOpen
       ? 'translate-x-0'
       : '-translate-x-full'} md:translate-x-0"
     style="background: linear-gradient(180deg, #1D3C2A 0%, #16311F 60%, #122A1A 100%); box-shadow: {sidebarOpen ? '8px 0 24px rgba(0,0,0,0.3)' : 'none'};"
@@ -603,8 +727,9 @@
     </div>
   </aside>
 
-  <!-- Main content -->
-  <div class="flex-1 min-w-0">
+  <!-- Main content — the only part of this screen that scrolls; the
+       sidebar stays put regardless of how tall this gets. -->
+  <div class="flex-1 min-w-0 h-full overflow-y-auto">
     <!-- Mobile top bar (hidden on md+, where the sidebar is always visible) -->
     <div class="sticky top-0 z-30 px-4 py-3.5 flex items-center gap-3 md:hidden shadow-md" style="background: #1D3C2A;">
       <button onclick={() => (sidebarOpen = true)} class="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style="background: rgba(255,255,255,0.1);">
@@ -648,19 +773,27 @@
           {@render inputField('Title', contentDraft.title, (e) => (contentDraft.title = e.currentTarget.value))}
           {@render inputField('Category', contentDraft.category, (e) => (contentDraft.category = e.currentTarget.value), { placeholder: 'e.g. Education' })}
           {@render inputField('Duration label', contentDraft.durationLabel, (e) => (contentDraft.durationLabel = e.currentTarget.value), { placeholder: 'e.g. 5 min' })}
-          <div class="grid grid-cols-2 gap-3">
+          {#if contentDraft.type === 'survey' || contentDraft.type === 'article'}
             {@render inputField('Reward (minutes)', contentDraft.earnMinutes, (e) => (contentDraft.earnMinutes = e.currentTarget.value), { type: 'number' })}
-            {@render inputField('Min watch (seconds)', contentDraft.minWatchSecs, (e) => (contentDraft.minWatchSecs = e.currentTarget.value), { type: 'number' })}
-          </div>
+          {:else}
+            <div class="grid grid-cols-2 gap-3">
+              {@render inputField('Reward (minutes)', contentDraft.earnMinutes, (e) => (contentDraft.earnMinutes = e.currentTarget.value), { type: 'number' })}
+              {@render inputField('Min watch (seconds)', contentDraft.minWatchSecs, (e) => (contentDraft.minWatchSecs = e.currentTarget.value), { type: 'number' })}
+            </div>
+          {/if}
           {@render fileOrUrlField(
-            'Image',
+            contentDraft.type === 'survey' ? 'Image (background behind the survey icon)' : 'Image',
             contentDraft.imgUrl,
             (e) => (contentDraft.imgUrl = e.currentTarget.value),
             imgUploading,
             (e) => handleFileUpload(e, contentDraft, 'imgUrl', (v) => (imgUploading = v), (m) => (contentFormError = m)),
             'image/*'
           )}
-          {#if contentDraft.type !== 'survey'}
+          {#if contentDraft.type === 'survey'}
+            {@render surveyQuestionsEditor(contentDraft)}
+          {:else if contentDraft.type === 'article'}
+            {@render articleBodyField(contentDraft, (e) => (contentDraft.bodyUrl = e.currentTarget.value))}
+          {:else}
             {@render fileOrUrlField(
               contentDraft.type === 'video' ? 'Video' : 'Article',
               contentDraft.bodyUrl,
@@ -669,18 +802,6 @@
               (e) => handleFileUpload(e, contentDraft, 'bodyUrl', (v) => (bodyUploading = v), (m) => (contentFormError = m)),
               contentDraft.type === 'video' ? 'video/*' : undefined
             )}
-          {:else}
-            <div>
-              <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Survey questions (one per line)</p>
-              <textarea
-                value={contentDraft.surveyQuestionsText}
-                oninput={(e) => (contentDraft.surveyQuestionsText = e.currentTarget.value)}
-                rows="3"
-                class="w-full bg-transparent px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none resize-none"
-                style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
-                placeholder={'How do you use the internet?\nWhat content matters most?'}
-              ></textarea>
-            </div>
           {/if}
 
           {#if contentFormError}
@@ -758,19 +879,27 @@
               {@render inputField('Title', contentEditDraft.title, (e) => (contentEditDraft.title = e.currentTarget.value))}
               {@render inputField('Category', contentEditDraft.category, (e) => (contentEditDraft.category = e.currentTarget.value), { placeholder: 'e.g. Education' })}
               {@render inputField('Duration label', contentEditDraft.durationLabel, (e) => (contentEditDraft.durationLabel = e.currentTarget.value), { placeholder: 'e.g. 5 min' })}
-              <div class="grid grid-cols-2 gap-3">
+              {#if contentEditDraft.type === 'survey' || contentEditDraft.type === 'article'}
                 {@render inputField('Reward (minutes)', contentEditDraft.earnMinutes, (e) => (contentEditDraft.earnMinutes = e.currentTarget.value), { type: 'number' })}
-                {@render inputField('Min watch (seconds)', contentEditDraft.minWatchSecs, (e) => (contentEditDraft.minWatchSecs = e.currentTarget.value), { type: 'number' })}
-              </div>
+              {:else}
+                <div class="grid grid-cols-2 gap-3">
+                  {@render inputField('Reward (minutes)', contentEditDraft.earnMinutes, (e) => (contentEditDraft.earnMinutes = e.currentTarget.value), { type: 'number' })}
+                  {@render inputField('Min watch (seconds)', contentEditDraft.minWatchSecs, (e) => (contentEditDraft.minWatchSecs = e.currentTarget.value), { type: 'number' })}
+                </div>
+              {/if}
               {@render fileOrUrlField(
-                'Image',
+                contentEditDraft.type === 'survey' ? 'Image (background behind the survey icon)' : 'Image',
                 contentEditDraft.imgUrl,
                 (e) => (contentEditDraft.imgUrl = e.currentTarget.value),
                 editImgUploading,
                 (e) => handleFileUpload(e, contentEditDraft, 'imgUrl', (v) => (editImgUploading = v), (m) => (contentEditError = m)),
                 'image/*'
               )}
-              {#if contentEditDraft.type !== 'survey'}
+              {#if contentEditDraft.type === 'survey'}
+                {@render surveyQuestionsEditor(contentEditDraft)}
+              {:else if contentEditDraft.type === 'article'}
+                {@render articleBodyField(contentEditDraft, (e) => (contentEditDraft.bodyUrl = e.currentTarget.value))}
+              {:else}
                 {@render fileOrUrlField(
                   contentEditDraft.type === 'video' ? 'Video' : 'Article',
                   contentEditDraft.bodyUrl,
@@ -779,17 +908,6 @@
                   (e) => handleFileUpload(e, contentEditDraft, 'bodyUrl', (v) => (editBodyUploading = v), (m) => (contentEditError = m)),
                   contentEditDraft.type === 'video' ? 'video/*' : undefined
                 )}
-              {:else}
-                <div>
-                  <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Survey questions (one per line)</p>
-                  <textarea
-                    value={contentEditDraft.surveyQuestionsText}
-                    oninput={(e) => (contentEditDraft.surveyQuestionsText = e.currentTarget.value)}
-                    rows="3"
-                    class="w-full bg-transparent px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none resize-none"
-                    style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
-                  ></textarea>
-                </div>
               {/if}
 
               {#if contentEditError}
@@ -811,7 +929,10 @@
       </div>
     {:else if tab === 'activators'}
       <button
-        onclick={() => (showActivatorForm = !showActivatorForm)}
+        onclick={() => {
+          if (!showActivatorForm) activatorDraft = freshActivatorDraft();
+          showActivatorForm = !showActivatorForm;
+        }}
         class="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-bold text-sm"
         style="background: {showActivatorForm ? 'rgba(29,60,42,0.1)' : 'linear-gradient(135deg, #C45C38, #CC8830)'}; color: {showActivatorForm ? '#1D3C2A' : '#fff'};"
       >
@@ -1118,7 +1239,7 @@
                           {@const answers = contentDetail.surveyBreakdown?.[String(qi)] ?? []}
                           {@const totalAnswers = answers.reduce((s, a) => s + a.count, 0)}
                           <div class="mb-3 last:mb-0">
-                            <p class="text-xs text-[#E8D4B0] mb-1.5">{q}</p>
+                            <p class="text-xs text-[#E8D4B0] mb-1.5">{q.question ?? q}</p>
                             {#if totalAnswers === 0}
                               <p class="text-[10px] text-[#96B496]">No answers yet</p>
                             {:else}
@@ -1200,6 +1321,17 @@
           </div>
         </div>
         {@render inputField('Minutes required', earnConnectThresholdMinutes, (e) => (earnConnectThresholdMinutes = e.currentTarget.value), { type: 'number' })}
+
+        <div class="flex items-center gap-2 mb-1 mt-2" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 16px;">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(204,136,48,0.28);">
+            <Percent size={16} color="#CC8830" />
+          </div>
+          <div>
+            <p class="text-sm font-bold text-[#E8D4B0]">Default activator commission</p>
+            <p class="text-[10px] text-[#96B496]">Pre-fills new activators' commission rate — each activator's own rate can still be changed individually afterward</p>
+          </div>
+        </div>
+        {@render inputField('Commission %', defaultActivatorCommissionPct, (e) => (defaultActivatorCommissionPct = e.currentTarget.value), { type: 'number' })}
 
         {#if settingsError}
           <p class="text-xs text-[#E08A6A]">{settingsError}</p>
