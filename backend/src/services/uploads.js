@@ -11,6 +11,21 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const UPLOADS_DIR = join(__dirname, "../../uploads");
 if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
 
+// uploads/ is gitignored (by design — uploaded files aren't source), which
+// means a deploy step that resets untracked files (`git clean`, a fresh
+// checkout/rsync, etc.) silently deletes it without restarting the process.
+// The mkdirSync above only runs once at startup, so every upload after that
+// point fails with ENOENT on the write. Re-checking per upload — not just
+// once at import — makes writes recover on their own instead of needing a
+// restart. This does NOT recover files already lost that way; existing
+// content still pointing at a deleted upload will keep 404ing until
+// re-uploaded (see the deploy note in .env.example about excluding
+// uploads/ from whatever step is clearing it, if this keeps happening).
+function ensureUploadsDir(cb) {
+  if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+  cb(null, UPLOADS_DIR);
+}
+
 const ALLOWED_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -23,7 +38,7 @@ const ALLOWED_MIME_TYPES = new Set([
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB — generous enough for a short clip, not for a full movie
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
+  destination: (_req, _file, cb) => ensureUploadsDir(cb),
   // Random filename, not the client-supplied one — avoids path traversal
   // and collisions; the original extension is kept purely for content-type
   // sniffing convenience (browsers/players, not security-relevant here).
