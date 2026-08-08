@@ -47,13 +47,31 @@ export async function updateSite(id, fields) {
 }
 
 /**
+ * Deletes a site outright (not a soft-disable like activators/coordinators
+ * — sites carry no history worth preserving on their own). Sessions that
+ * referenced it fall back to site_id = NULL (ON DELETE SET NULL) and any
+ * content/package restrictions to just this site are dropped (ON DELETE
+ * CASCADE), which reverts those items to "visible on every site" per the
+ * join table's no-rows-means-global convention. Returns the deleted row,
+ * or null if the id didn't exist.
+ */
+export async function deleteSite(id) {
+  const { rows } = await query(`DELETE FROM sites WHERE id = $1 RETURNING *`, [id]);
+  return rows[0] || null;
+}
+
+/**
  * Real sites known to the UniFi controller, for the admin "Add Site" form
- * to pick from instead of typing an id by hand — the id it returns is
- * exactly what belongs in `sites.id` (see the schema comment on that
- * column for why it has to match the controller's own site id). Returns
- * null if the controller is unreachable or UNIFI_URL isn't configured;
- * the admin can still type an id manually in that case.
+ * to pick from instead of typing an id by hand. UniFi's own `name` field is
+ * the short slug that actually shows up in captive-portal redirect URLs
+ * (`/s/<name>/...`) — that's what belongs in `sites.id` (see the schema
+ * comment on that column) — while `desc` is the human-readable label admins
+ * set in the UniFi UI, which is what belongs in `sites.name`. Returns null
+ * if the controller is unreachable or UNIFI_URL isn't configured; the admin
+ * can still type an id manually in that case.
  */
 export async function listUnifiSiteOptions() {
-  return getUnifiSites();
+  const raw = await getUnifiSites();
+  if (!raw) return raw;
+  return raw.map((s) => ({ id: s.name, name: s.desc || s.name }));
 }

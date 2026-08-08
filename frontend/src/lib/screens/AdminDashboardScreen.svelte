@@ -11,7 +11,7 @@
     adminGetActivators, adminCreateActivator, adminUpdateActivator,
     adminGetCoordinators, adminCreateCoordinator, adminUpdateCoordinator,
     adminUploadContentFile, adminGetSettings, adminUpdateSettings, adminGetAnalytics, adminGetContentAnalytics,
-    adminGetSites, adminCreateSite, adminUpdateSite, adminGetUnifiSiteOptions,
+    adminGetSites, adminCreateSite, adminUpdateSite, adminDeleteSite, adminGetUnifiSiteOptions,
     adminGetPackages, adminUpdatePackage
   } from '$lib/api.js';
 
@@ -101,6 +101,11 @@
     if (r.ok) analytics = r.data.analytics;
     analyticsLoading = false;
   }
+  // Scales the per-item inline bars in Content Overview relative to the
+  // single most-seen item, so bar length is comparable across rows.
+  const maxContentImpressions = $derived(
+    Math.max(1, ...(analytics?.earned.contentOverview.map((c) => c.impressions) ?? [1]))
+  );
 
   // Per-content drill-down (impressions/completions/survey answer
   // breakdown) — expanded inline under the clicked row in Content Overview.
@@ -529,6 +534,32 @@
 
   async function setSiteMode(s, mode) {
     await adminUpdateSite(token, s.id, { mode });
+    await loadSites();
+  }
+
+  // Two-tap delete (id armed by the first click, cleared after 4s or on the
+  // second click) — a site delete is permanent, unlike the soft
+  // suspend/activate toggle above, so it gets a confirmation step instead
+  // of a native confirm() dialog to stay consistent with the rest of the UI.
+  let armedDeleteSiteId = $state(null);
+  let siteDeleteError = $state('');
+
+  async function removeSite(s) {
+    if (armedDeleteSiteId !== s.id) {
+      armedDeleteSiteId = s.id;
+      siteDeleteError = '';
+      setTimeout(() => {
+        if (armedDeleteSiteId === s.id) armedDeleteSiteId = null;
+      }, 4000);
+      return;
+    }
+    armedDeleteSiteId = null;
+    const result = await adminDeleteSite(token, s.id);
+    if (!result.ok || !result.data?.success) {
+      siteDeleteError = result.data?.message || `Could not delete "${s.name}" — check your connection`;
+      return;
+    }
+    siteDeleteError = '';
     await loadSites();
   }
 
@@ -1342,6 +1373,8 @@
                 <p class="text-[10px] text-[#96B496]">Tap an item for interaction details</p>
               </div>
               {#each analytics.earned.contentOverview as c, i (c.id)}
+                {@const impressionsPct = Math.round((c.impressions / maxContentImpressions) * 100)}
+                {@const completionsPct = Math.round((c.completions / maxContentImpressions) * 100)}
                 <button
                   type="button"
                   onclick={() => toggleContentAnalytics(c.id)}
@@ -1349,9 +1382,22 @@
                   style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.1)' : 'none'}; opacity: {c.isActive ? 1 : 0.55};"
                 >
                   <span class="text-xs font-bold w-4 shrink-0 text-center" style="color: #96B496;">{i + 1}</span>
-                  <p class="flex-1 min-w-0 text-xs text-[#E8D4B0] truncate">{c.title}</p>
-                  <span class="text-[10px] text-[#96B496] shrink-0 flex items-center gap-1"><Eye size={9} />{c.impressions}</span>
-                  <span class="text-[10px] font-bold shrink-0" style="color: #4E8050;">{c.completions} done</span>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center justify-between gap-2 mb-1">
+                      <p class="min-w-0 text-xs text-[#E8D4B0] truncate">{c.title}</p>
+                      <span class="text-[9px] font-bold shrink-0" style="color: #4E8050;">
+                        {c.impressions > 0 ? Math.round((c.completions / c.impressions) * 100) : 0}%
+                      </span>
+                    </div>
+                    <div class="relative h-1.5 rounded-full overflow-hidden" style="background: rgba(255,255,255,0.08);">
+                      <div class="absolute inset-y-0 left-0 rounded-full" style="width: {impressionsPct}%; background: rgba(150,180,150,0.4);"></div>
+                      <div class="absolute inset-y-0 left-0 rounded-full" style="width: {completionsPct}%; background: #4E8050;"></div>
+                    </div>
+                  </div>
+                  <div class="flex flex-col items-end gap-0.5 shrink-0">
+                    <span class="text-[10px] text-[#96B496] flex items-center gap-1"><Eye size={9} />{c.impressions}</span>
+                    <span class="text-[10px] font-bold" style="color: #4E8050;">{c.completions} done</span>
+                  </div>
                 </button>
 
                 {#if expandedContentId === c.id}
@@ -1434,8 +1480,8 @@
               <div class="px-4 pt-3.5 pb-1">
                 <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Revenue by Package</p>
               </div>
-              <div style="height: 120px; margin: 8px 8px 4px -6px;">
-                <BarChartMini data={analytics.purchased.byPackage} yKey="revenueKes" xKey="packageId" height={120} color="#C45C38" barSize={26} radius={4} showGrid />
+              <div style="height: 120px; margin: 8px 8px 4px 4px;">
+                <BarChartMini data={analytics.purchased.byPackage} yKey="revenueKes" xKey="packageId" height={120} color="#C45C38" barSize={26} radius={4} showGrid showYLabels yAxisWidth={28} />
               </div>
             </div>
           {/if}
@@ -1482,7 +1528,7 @@
                   const opt = unifiSiteOptions.find((o) => o.id === e.currentTarget.value);
                   if (opt) {
                     siteDraft.id = opt.id;
-                    siteDraft.name = opt.desc || opt.name || opt.id;
+                    siteDraft.name = opt.name;
                   }
                 }}
                 class="w-full px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] outline-none"
@@ -1490,7 +1536,7 @@
               >
                 <option value="" style="color: #1D3C2A;">Choose or enter manually below</option>
                 {#each unifiSiteOptions as o (o.id)}
-                  <option value={o.id} style="color: #1D3C2A;">{o.desc || o.name || o.id}</option>
+                  <option value={o.id} style="color: #1D3C2A;">{o.name}</option>
                 {/each}
               </select>
             </div>
@@ -1531,6 +1577,9 @@
       {/if}
 
       <p class="text-xs text-[#3C6A4A] font-semibold px-1">{sites.length} sites</p>
+      {#if siteDeleteError}
+        <p class="text-xs text-[#E08A6A] px-1">{siteDeleteError}</p>
+      {/if}
       <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
       {#each sites as s (s.id)}
         <div class="rounded-2xl overflow-hidden shadow-sm px-4 py-3.5 flex flex-col gap-2.5" style="background: #2E5A3E; opacity: {s.status === 'active' ? 1 : 0.5};">
@@ -1550,17 +1599,27 @@
               {#if s.status === 'active'}<Pause size={10} /> Active{:else}<Play size={10} /> Off{/if}
             </button>
           </div>
-          <div class="flex gap-1.5 flex-wrap">
-            {#each SITE_MODES as m (m.id)}
-              <button
-                type="button"
-                onclick={() => setSiteMode(s, m.id)}
-                class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
-                style="background: {s.mode === m.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {s.mode === m.id ? '#fff' : '#C4DAC0'};"
-              >
-                {m.label}
-              </button>
-            {/each}
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex gap-1.5 flex-wrap">
+              {#each SITE_MODES as m (m.id)}
+                <button
+                  type="button"
+                  onclick={() => setSiteMode(s, m.id)}
+                  class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                  style="background: {s.mode === m.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {s.mode === m.id ? '#fff' : '#C4DAC0'};"
+                >
+                  {m.label}
+                </button>
+              {/each}
+            </div>
+            <button
+              type="button"
+              onclick={() => removeSite(s)}
+              class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full shrink-0"
+              style="background: {armedDeleteSiteId === s.id ? '#B85038' : 'rgba(192,97,74,0.15)'}; color: {armedDeleteSiteId === s.id ? '#fff' : '#E08A6A'};"
+            >
+              <X size={10} />{armedDeleteSiteId === s.id ? 'Confirm delete' : 'Delete'}
+            </button>
           </div>
         </div>
       {/each}

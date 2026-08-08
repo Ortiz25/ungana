@@ -12,7 +12,7 @@ import { createCoordinator, adminListCoordinators, updateCoordinator } from "../
 import { uploadContentFile } from "../services/uploads.js";
 import { adminGetSettings, setEarnConnectThresholdSecs, setDefaultActivatorCommissionRate } from "../services/settings.js";
 import { getAdminAnalytics, getContentItemAnalytics } from "../services/analytics.js";
-import { adminListSites, createSite, updateSite, listUnifiSiteOptions } from "../services/sites.js";
+import { adminListSites, createSite, updateSite, deleteSite, listUnifiSiteOptions } from "../services/sites.js";
 import { adminListPackages, updatePackage } from "../services/catalog.js";
 
 export const adminRouter = Router();
@@ -287,6 +287,18 @@ adminRouter.patch("/sites/:id", async (req, res) => {
     res.json({ success: true, site });
   } catch (error) {
     console.error("❌ Admin site update error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** DELETE /api/admin/sites/:id — hard delete; sessions/content/packages fall back gracefully (see deleteSite). */
+adminRouter.delete("/sites/:id", async (req, res) => {
+  try {
+    const site = await deleteSite(req.params.id);
+    if (!site) return res.status(404).json({ success: false, message: "Site not found" });
+    res.json({ success: true, site });
+  } catch (error) {
+    console.error("❌ Admin site delete error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });

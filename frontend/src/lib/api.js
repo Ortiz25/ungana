@@ -321,6 +321,11 @@ export function adminUpdateSite(token, id, body) {
   return request(`/admin/sites/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
 }
 
+/** DELETE /api/admin/sites/:id — hard delete. */
+export function adminDeleteSite(token, id) {
+  return request(`/admin/sites/${encodeURIComponent(id)}`, { method: 'DELETE', ...authed(token) });
+}
+
 // ── Packages ─────────────────────────────────────────────────────────────
 // No admin-create — packages are a small fixed set of plan types, not
 // admin-authored (see services/catalog.js).
