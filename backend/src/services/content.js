@@ -1,4 +1,4 @@
-import { query } from "../db/pool.js";
+import { query, withTransaction } from "../db/pool.js";
 import { upsertClient, getClientByMac } from "./clients.js";
 import { getCurrentPeriodKey } from "../utils/periodKey.js";
 
@@ -91,18 +91,49 @@ export async function recordCompletion(macAddress, contentItemId, { elapsedSecs 
 }
 
 /**
- * Atomically marks every currently-unclaimed completion for this client as
- * claimed and returns their ids + summed earn_secs. The UPDATE's row-level
- * locking means two concurrent claim requests can't both grab the same
- * completions — the second call simply finds nothing left unclaimed. See
- * routes/content.js POST /claim-earned-session, the only caller.
+ * Marks unclaimed completions for this client as claimed and returns their
+ * ids + summed earn_secs — either all of them (requestedSecs omitted, the
+ * original "Connect Now" behaviour), or, when requestedSecs is given, just
+ * enough of the oldest ones to reach it, leaving the rest banked for next
+ * time. A single completion's earn_secs is never split — it's an atomic
+ * unit (one video/article/survey, snapshotted at completion time) — so the
+ * actual total returned can come in slightly *above* requestedSecs; it is
+ * never below it (unless the client's whole balance is smaller).
+ *
+ * Wrapped in a transaction with FOR UPDATE row locks so two concurrent
+ * claims can't select the same completions — the original single
+ * UPDATE...RETURNING was atomic by construction; splitting into
+ * SELECT-then-UPDATE to support partial claims needs that locking to keep
+ * the same guarantee. See routes/content.js POST /claim-earned-session,
+ * the only caller.
  */
-export async function claimUnclaimedCompletions(clientId) {
-  const { rows } = await query(
-    `UPDATE content_completions SET claimed = true WHERE client_id = $1 AND claimed = false RETURNING id, earn_secs`,
-    [clientId]
-  );
-  return { ids: rows.map((r) => r.id), totalSecs: rows.reduce((sum, r) => sum + r.earn_secs, 0) };
+export async function claimUnclaimedCompletions(clientId, requestedSecs = null) {
+  return withTransaction(async (client) => {
+    const { rows: candidates } = await client.query(
+      `SELECT id, earn_secs FROM content_completions
+       WHERE client_id = $1 AND claimed = false
+       ORDER BY completed_at ASC
+       FOR UPDATE`,
+      [clientId]
+    );
+
+    let selected = candidates;
+    if (requestedSecs != null) {
+      selected = [];
+      let sum = 0;
+      for (const row of candidates) {
+        if (sum >= requestedSecs) break;
+        selected.push(row);
+        sum += row.earn_secs;
+      }
+    }
+
+    if (selected.length === 0) return { ids: [], totalSecs: 0 };
+
+    const ids = selected.map((r) => r.id);
+    await client.query(`UPDATE content_completions SET claimed = true WHERE id = ANY($1::bigint[])`, [ids]);
+    return { ids, totalSecs: selected.reduce((sum, r) => sum + r.earn_secs, 0) };
+  });
 }
 
 /** Links already-claimed completions to the session their reward was folded into, for audit purposes. */

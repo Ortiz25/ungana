@@ -132,10 +132,10 @@ export function recordContentImpression(id) {
 }
 
 /** POST /api/content/claim-earned-session — Body: { mac, username? }. Folds every unclaimed completion into a real, router-authorised session. */
-export function claimEarnedSession(mac, username) {
+export function claimEarnedSession(mac, username, requestedMinutes) {
   return request('/content/claim-earned-session', {
     method: 'POST',
-    body: JSON.stringify({ mac, username: username || undefined }),
+    body: JSON.stringify({ mac, username: username || undefined, requestedMinutes: requestedMinutes || undefined }),
     timeoutMs: 10000
   });
 }

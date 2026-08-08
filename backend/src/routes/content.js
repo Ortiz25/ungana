@@ -11,6 +11,7 @@ import { upsertClient, setClientUsername } from "../services/clients.js";
 import { createPendingSession } from "../services/sessions.js";
 import { completeAuthorization } from "../services/authorization.js";
 import { resolveClientActivator } from "../services/activators.js";
+import { getPublicSettings } from "../services/settings.js";
 
 export const contentRouter = Router();
 
@@ -81,23 +82,46 @@ contentRouter.post("/:id/complete", async (req, res) => {
 });
 
 /**
- * POST /api/content/claim-earned-session — Body: { mac, username? }.
- * Sums every unclaimed completion's earn_secs for this device, creates a
- * `source: 'earned'` session for the total, and runs it through the same
- * real UniFi-authorise path a paid session uses (services/authorization.js)
- * — this is what actually grants internet for watch-to-earn, replacing the
- * frontend's old fabricated-package/no-backend-call shortcut. Like a paid
- * session, if the router is briefly unreachable the session is left 'paid'
- * for the background retry sweep in server.js to pick up — the client's
- * earned time is never lost, just delayed.
+ * POST /api/content/claim-earned-session — Body: { mac, username?, requestedMinutes? }.
+ * Sums unclaimed completions' earn_secs for this device — either all of
+ * them (requestedMinutes omitted, the original one-tap behaviour) or just
+ * enough of the oldest ones to cover requestedMinutes, leaving the rest
+ * banked for next time (see claimUnclaimedCompletions — a completion is
+ * never split, so the actual amount granted can come in slightly above
+ * what was requested). Creates a `source: 'earned'` session for whatever
+ * was actually claimed, and runs it through the same real UniFi-authorise
+ * path a paid session uses (services/authorization.js) — this is what
+ * actually grants internet for watch-to-earn, replacing the frontend's old
+ * fabricated-package/no-backend-call shortcut. Like a paid session, if the
+ * router is briefly unreachable the session is left 'paid' for the
+ * background retry sweep in server.js to pick up — the client's earned
+ * time is never lost, just delayed.
  * `username` is optional and only meaningful the first time — same
  * privacy-conscious recovery mechanism as the paid checkout flow (see
  * clients.username in schema.sql); a client that already has one locked in
  * doesn't need to send it again.
  */
 contentRouter.post("/claim-earned-session", async (req, res) => {
-  const { mac, username } = req.body;
+  const { mac, username, requestedMinutes } = req.body;
   if (!mac) return res.status(400).json({ success: false, message: "mac is required" });
+
+  let requestedSecs = null;
+  if (requestedMinutes !== undefined) {
+    if (!(Number(requestedMinutes) > 0)) {
+      return res.status(400).json({ success: false, message: "requestedMinutes must be a positive number" });
+    }
+    requestedSecs = Math.round(Number(requestedMinutes) * 60);
+    // Below this, connecting isn't worth the overhead — same bar the
+    // frontend uses to decide when "Connect Now" even shows up, now also
+    // enforced server-side so a partial claim can't undercut it.
+    const { earnConnectThresholdSecs } = await getPublicSettings();
+    if (requestedSecs < earnConnectThresholdSecs) {
+      return res.status(400).json({
+        success: false,
+        message: `Minimum is ${Math.ceil(earnConnectThresholdSecs / 60)} minutes`,
+      });
+    }
+  }
 
   try {
     const clientId = await upsertClient(mac);
@@ -108,7 +132,7 @@ contentRouter.post("/claim-earned-session", async (req, res) => {
     // client's balance with no session ever created to show for it.
     if (username) await setClientUsername(clientId, username);
 
-    const { ids, totalSecs } = await claimUnclaimedCompletions(clientId);
+    const { ids, totalSecs } = await claimUnclaimedCompletions(clientId, requestedSecs);
 
     if (totalSecs <= 0) {
       return res.status(400).json({ success: false, message: "No unclaimed earned time available" });

@@ -135,6 +135,10 @@
   let connectThresholdSecs = $state(1800);
   let justUnlocked = $state(false);
   let showEarnedModal = $state(false);
+  // Minutes selected in the earned-balance modal's "use now" slider —
+  // reset to the full unclaimed balance each time the modal opens, so the
+  // default is still the old zero-friction "claim everything" behaviour.
+  let claimAmountMinutes = $state(0);
   // Guards the "you just unlocked Connect Now" celebration so it only fires
   // for a completion during this session, not for restoring an
   // already-sufficient balance from the server on page load/reload.
@@ -198,15 +202,21 @@
   // same ~6s pace the old fixed demo timer used — rather than completing
   // instantly or not animating at all.
   const FALLBACK_WATCH_SECS = 6;
-  // Real playback position of the current native <video> element (not the
-  // YouTube-iframe case — no cross-origin access to its play time without
-  // the YT IFrame Player API, out of scope here). Drives the progress bar
-  // directly via ontimeupdate, so it only advances while the video is
-  // actually playing rather than while the screen is merely open.
+  // Real playback position of the current player — native <video> via
+  // ontimeupdate, or YouTube via the IFrame Player API's polled
+  // getCurrentTime() (see the $effect below). Drives the progress bar
+  // directly from actual playback either way, so it only advances while
+  // the video is actually playing, not while the screen is merely open.
   let videoCurrentTime = $state(0);
 
   function hasNativePlayer(item) {
     return item?.type === 'video' && !!item.bodyUrl && !isYouTubeUrl(item.bodyUrl);
+  }
+  // Both native <video> and YouTube now drive videoCurrentTime from a real
+  // player — startContent()/claimReward() treat them the same way: skip
+  // the wall-clock fallback timer and trust the real position instead.
+  function hasTrackedVideoPlayback(item) {
+    return item?.type === 'video' && !!item.bodyUrl;
   }
 
   function startContent(item) {
@@ -227,9 +237,10 @@
     if (item.isLive) recordContentImpression(item.id);
 
     // survey: answerSurveyQuestion(); native video: handleVideoTimeUpdate();
+    // YouTube: the $effect below drives it via the IFrame Player API;
     // article: the "I've finished reading" button sets viewDone directly —
     // no wall-clock timer, since there's no progress bar to drive.
-    if (item.type === 'survey' || item.type === 'article' || hasNativePlayer(item)) return;
+    if (item.type === 'survey' || item.type === 'article' || hasTrackedVideoPlayback(item)) return;
 
     const requiredSecs = item.minWatchSecs > 0 ? item.minWatchSecs : FALLBACK_WATCH_SECS;
     progressTimer = setInterval(() => {
@@ -288,10 +299,10 @@
     let wasAlreadyCompleted = false;
 
     if (item.isLive) {
-      // Real playback position for a native video player (honest — can't
-      // exceed what was actually watched); wall-clock elapsed otherwise
-      // (survey, YouTube embed, or no player at all).
-      const elapsedSecs = hasNativePlayer(item) ? Math.round(videoCurrentTime) : Math.round((Date.now() - startedAt) / 1000);
+      // Real playback position for a tracked video player — native or
+      // YouTube (honest — can't exceed what was actually watched); wall-clock
+      // elapsed otherwise (survey, or no player at all).
+      const elapsedSecs = hasTrackedVideoPlayback(item) ? Math.round(videoCurrentTime) : Math.round((Date.now() - startedAt) / 1000);
       const body = { mac, elapsedSecs };
       if (item.type === 'survey') body.response = surveyAnswers;
 
@@ -331,6 +342,7 @@
       clearInterval(progressTimer);
       progressTimer = null;
     }
+    destroyYtPlayer();
     viewingItem = null;
     viewProgress = 0;
     viewDone = false;
@@ -340,6 +352,7 @@
   $effect(() => {
     return () => {
       if (progressTimer) clearInterval(progressTimer);
+      destroyYtPlayer();
     };
   });
 
@@ -379,7 +392,15 @@
   // later — before the real claim actually fires; a returning device that
   // already has one (or the local-only demo fallback, which has no real
   // session to attach a username to) skips straight to performConnect().
-  function handleConnect() {
+  // null = claim the entire unclaimed balance (the original one-tap
+  // behaviour, still what the bottom bar's Connect Now button does);
+  // otherwise the amount chosen in the earned-balance modal's slider — see
+  // showEarnedModal below. Survives the username-prompt detour since that
+  // overlay's own buttons call performConnect() directly with no args.
+  let pendingClaimSecs = $state(null);
+
+  function handleConnect(requestedSecs = null) {
+    pendingClaimSecs = requestedSecs;
     if (realUnclaimedSecs > 0 && !usernameLocked) {
       usernameError = '';
       showUsernamePrompt = true;
@@ -399,7 +420,8 @@
 
     connecting = true;
     connectError = null;
-    const result = await claimEarnedSession(mac, username.trim() || undefined);
+    const requestedMinutes = pendingClaimSecs != null ? pendingClaimSecs / 60 : undefined;
+    const result = await claimEarnedSession(mac, username.trim() || undefined, requestedMinutes);
     connecting = false;
 
     if (!result.ok && result.status === 409) {
@@ -437,13 +459,116 @@
   function isYouTubeUrl(url) {
     return /(?:youtube\.com\/watch\?v=|youtu\.be\/)/.test(url || '');
   }
-  function toYouTubeEmbedUrl(url) {
-    const match = url.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([\w-]{6,})/);
-    return match ? `https://www.youtube.com/embed/${match[1]}` : url;
+  function getYouTubeVideoId(url) {
+    const match = (url || '').match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([\w-]{6,})/);
+    return match ? match[1] : null;
   }
   const playableVideoUrl = $derived(
     viewingItem?.type === 'video' && viewingItem?.bodyUrl ? viewingItem.bodyUrl : null
   );
+
+  // YouTube IFrame Player API — loaded once, reused for every YouTube item
+  // opened this session. Without this, a YouTube embed had no real
+  // playback signal at all: the viewer fell back to the same wall-clock
+  // timer used for items with no player, so the progress bar started
+  // ticking the instant the viewer opened (before anyone pressed play) and
+  // never actually tracked the video. Polling getCurrentTime() while
+  // PLAYING mirrors the native <video> case's ontimeupdate handler.
+  let ytApiPromise = null;
+  function loadYouTubeIframeApi() {
+    if (ytApiPromise) return ytApiPromise;
+    ytApiPromise = new Promise((resolve) => {
+      if (window.YT?.Player) {
+        resolve(window.YT);
+        return;
+      }
+      const prevCallback = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = () => {
+        prevCallback?.();
+        resolve(window.YT);
+      };
+      if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+        const tag = document.createElement('script');
+        tag.src = 'https://www.youtube.com/iframe_api';
+        document.head.appendChild(tag);
+      }
+    });
+    return ytApiPromise;
+  }
+
+  let ytContainerEl = $state(null);
+  let ytPlayer = null;
+  let ytPollTimer = null;
+
+  function destroyYtPlayer() {
+    if (ytPollTimer) {
+      clearInterval(ytPollTimer);
+      ytPollTimer = null;
+    }
+    if (ytPlayer) {
+      try {
+        ytPlayer.destroy();
+      } catch {
+        // already gone (e.g. iframe removed from the DOM) — nothing to clean up
+      }
+      ytPlayer = null;
+    }
+  }
+
+  $effect(() => {
+    const url = playableVideoUrl;
+    const isYT = !!url && isYouTubeUrl(url);
+    const videoId = isYT ? getYouTubeVideoId(url) : null;
+
+    if (!isYT || !videoId || !ytContainerEl) {
+      destroyYtPlayer();
+      return;
+    }
+
+    let cancelled = false;
+    loadYouTubeIframeApi().then((YT) => {
+      if (cancelled) return;
+      destroyYtPlayer();
+      ytPlayer = new YT.Player(ytContainerEl, {
+        videoId,
+        // Without explicit width/height the API defaults to a fixed
+        // ~640x390 iframe regardless of the container's actual size,
+        // clipped and misaligned inside our 210px-tall media block — the
+        // visible thumbnail/play button then don't line up with where the
+        // iframe (and its clickable overlay) actually is. width/height:
+        // '100%' plus the CSS below keep it filling the container exactly
+        // like the native <video> element does.
+        width: '100%',
+        height: '100%',
+        playerVars: { rel: 0 },
+        events: {
+          onStateChange: (e) => {
+            if (ytPollTimer) {
+              clearInterval(ytPollTimer);
+              ytPollTimer = null;
+            }
+            if (e.data !== YT.PlayerState.PLAYING) return;
+            ytPollTimer = setInterval(() => {
+              if (!ytPlayer || viewDone) {
+                clearInterval(ytPollTimer);
+                ytPollTimer = null;
+                return;
+              }
+              videoCurrentTime = ytPlayer.getCurrentTime();
+              const requiredSecs = viewingItem?.minWatchSecs > 0 ? viewingItem.minWatchSecs : FALLBACK_WATCH_SECS;
+              viewProgress = Math.min(100, (videoCurrentTime / requiredSecs) * 100);
+              if (viewProgress >= 100) viewDone = true;
+            }, 250);
+          },
+        },
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      destroyYtPlayer();
+    };
+  });
 
   // Article reading body — bodyUrl doubles as either an external link or
   // pasted body copy (see schema comment on content_items.body_url). A
@@ -547,14 +672,11 @@
     <div class="mx-4 rounded-3xl overflow-hidden relative shrink-0" style="height: 210px; background: #000;">
       {#if playableVideoUrl}
         {#if isYouTubeUrl(playableVideoUrl)}
-          <iframe
-            src={toYouTubeEmbedUrl(playableVideoUrl)}
-            title={viewingItem.title}
-            class="w-full h-full"
-            style="border: 0;"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowfullscreen
-          ></iframe>
+          <!-- Handed off to the YouTube IFrame Player API (see the $effect
+               above) — it replaces this div with its own iframe once the
+               API's loaded, so the progress bar can track real playback
+               instead of wall-clock time since the viewer opened. -->
+          <div bind:this={ytContainerEl} class="yt-player-container w-full h-full"></div>
         {:else}
           <!-- svelte-ignore a11y_media_has_caption -->
           <video
@@ -831,7 +953,10 @@
       <div class="flex items-center gap-2">
         {#if totalEarnedSecs > 0}
           <button
-            onclick={() => (showEarnedModal = true)}
+            onclick={() => {
+              claimAmountMinutes = Math.floor(realUnclaimedSecs / 60);
+              showEarnedModal = true;
+            }}
             aria-label="View earned balance"
             class="relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-full active:scale-90 transition-transform"
             style="background: rgba(196,92,56,0.22); border: 1px solid rgba(196,92,56,0.5);"
@@ -1127,10 +1252,46 @@
             </div>
 
             {#if canConnect}
+              {@const minMinutes = Math.max(1, Math.ceil(connectThresholdSecs / 60))}
+              {@const maxMinutes = Math.max(minMinutes, Math.floor(realUnclaimedSecs / 60))}
+              {#if maxMinutes > minMinutes}
+                <div class="rounded-2xl p-3.5 mb-4" style="background: rgba(255,255,255,0.06);">
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs" style="color: #C4DAC0;">Use now</span>
+                    <span class="text-sm font-bold" style="color: #E8D4B0;">
+                      {claimAmountMinutes >= maxMinutes ? 'All' : `${claimAmountMinutes} min`}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={minMinutes}
+                    max={maxMinutes}
+                    step="1"
+                    value={claimAmountMinutes}
+                    oninput={(e) => (claimAmountMinutes = Number(e.currentTarget.value))}
+                    class="w-full"
+                    style="accent-color: #C45C38;"
+                  />
+                  <div class="flex items-center justify-between mt-1">
+                    <span class="text-[10px]" style="color: #7A9E7A;">{minMinutes}m</span>
+                    <span class="text-[10px]" style="color: #7A9E7A;">All ({maxMinutes}m)</span>
+                  </div>
+                  <p class="text-[10px] mt-2 leading-snug" style="color: #7A9E7A;">
+                    {#if claimAmountMinutes >= maxMinutes}
+                      Uses your full balance now.
+                    {:else}
+                      Keeps ~{maxMinutes - claimAmountMinutes} min banked for next time — earned items can't be
+                      split, so you may get slightly more than {claimAmountMinutes} min.
+                    {/if}
+                  </p>
+                </div>
+              {/if}
+
               <button
                 onclick={() => {
+                  const chosenSecs = claimAmountMinutes < maxMinutes ? claimAmountMinutes * 60 : null;
                   showEarnedModal = false;
-                  handleConnect();
+                  handleConnect(chosenSecs);
                 }}
                 disabled={connecting}
                 class="w-full py-4 rounded-2xl font-bold text-base text-white flex items-center justify-center gap-2 active:scale-95 transition-all"
@@ -1372,5 +1533,14 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-right: 0.3rem;
+  }
+
+  /* The YouTube IFrame Player API creates its own <iframe> inside this div
+     with inline width/height attributes — force it to actually fill the
+     container regardless of what the API set them to, so the visible
+     play button lines up with where clicks land. */
+  .yt-player-container :global(iframe) {
+    width: 100% !important;
+    height: 100% !important;
   }
 </style>
