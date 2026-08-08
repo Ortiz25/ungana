@@ -46,9 +46,9 @@ export function getAppInfo() {
   return request('', { method: 'GET' });
 }
 
-/** GET /api/packages */
-export function getPackages() {
-  return request('/packages');
+/** GET /api/packages?site=X — site is optional; omitted entirely in dev, where there's no captive-portal URL to read one from. */
+export function getPackages(site) {
+  return request(site ? `/packages?site=${encodeURIComponent(site)}` : '/packages');
 }
 
 /** GET /api/activators */
@@ -111,14 +111,15 @@ export function getActivatorForMac(mac) {
   return request(`/clients/by-mac/${encodeURIComponent(mac)}/activator`);
 }
 
-/** GET /api/content — live Watch & Earn catalogue. */
-export function getContent() {
-  return request('/content');
+/** GET /api/content?site=X — live Watch & Earn catalogue. `site` is optional (see getPackages). */
+export function getContent(site) {
+  return request(site ? `/content?site=${encodeURIComponent(site)}` : '/content');
 }
 
-/** GET /api/content/completions?mac=X — items this device has already finished, for UI restore after reload. */
-export function getContentCompletions(mac) {
-  return request(`/content/completions?mac=${encodeURIComponent(mac)}`);
+/** GET /api/content/completions?mac=X&site=Y — items this device has already finished, for UI restore after reload. */
+export function getContentCompletions(mac, site) {
+  const params = new URLSearchParams({ mac, ...(site ? { site } : {}) });
+  return request(`/content/completions?${params}`);
 }
 
 /** POST /api/content/:id/complete — Body: { mac, elapsedSecs, response }. Server validates real dwell time / survey answers before crediting. */
@@ -131,11 +132,16 @@ export function recordContentImpression(id) {
   return request(`/content/${encodeURIComponent(id)}/impression`, { method: 'POST', body: JSON.stringify({}) });
 }
 
-/** POST /api/content/claim-earned-session — Body: { mac, username? }. Folds every unclaimed completion into a real, router-authorised session. */
-export function claimEarnedSession(mac, username, requestedMinutes) {
+/** POST /api/content/claim-earned-session — Body: { mac, username?, site? }. Folds every unclaimed completion into a real, router-authorised session. Rejected server-side on a pay_only site. */
+export function claimEarnedSession(mac, username, requestedMinutes, site) {
   return request('/content/claim-earned-session', {
     method: 'POST',
-    body: JSON.stringify({ mac, username: username || undefined, requestedMinutes: requestedMinutes || undefined }),
+    body: JSON.stringify({
+      mac,
+      username: username || undefined,
+      requestedMinutes: requestedMinutes || undefined,
+      site: site || undefined
+    }),
     timeoutMs: 10000
   });
 }
@@ -268,6 +274,11 @@ export function getSettings() {
   return request('/settings');
 }
 
+/** GET /api/sites/:id — public; { id, name, mode }. Used to decide whether to show the pay flow, the earn flow, or both. */
+export function getSite(id) {
+  return request(`/sites/${encodeURIComponent(id)}`);
+}
+
 /** GET /api/admin/settings */
 export function adminGetSettings(token) {
   return request('/admin/settings', authed(token));
@@ -286,4 +297,40 @@ export function adminGetAnalytics(token) {
 /** GET /api/admin/analytics/content/:id — per-item drill-down, including survey answer breakdown. */
 export function adminGetContentAnalytics(token, id) {
   return request(`/admin/analytics/content/${encodeURIComponent(id)}`, authed(token));
+}
+
+// ── Sites ────────────────────────────────────────────────────────────────
+
+/** GET /api/admin/sites — every site (including suspended). */
+export function adminGetSites(token) {
+  return request('/admin/sites', authed(token));
+}
+
+/** GET /api/admin/sites/unifi-options — real sites known to the UniFi controller, for the "Add Site" picker. [] if the controller's unreachable. */
+export function adminGetUnifiSiteOptions(token) {
+  return request('/admin/sites/unifi-options', authed(token));
+}
+
+/** POST /api/admin/sites — Body: { id, name, mode? }. `id` must match the UniFi site's own short id. */
+export function adminCreateSite(token, body) {
+  return request('/admin/sites', { method: 'POST', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** PATCH /api/admin/sites/:id — partial update: name, mode, status. */
+export function adminUpdateSite(token, id, body) {
+  return request(`/admin/sites/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
+}
+
+// ── Packages ─────────────────────────────────────────────────────────────
+// No admin-create — packages are a small fixed set of plan types, not
+// admin-authored (see services/catalog.js).
+
+/** GET /api/admin/packages — every package (including inactive), with site assignment. */
+export function adminGetPackages(token) {
+  return request('/admin/packages', authed(token));
+}
+
+/** PATCH /api/admin/packages/:id — partial update: label, priceKes, durationSecs, isActive, siteIds. */
+export function adminUpdatePackage(token, id, body) {
+  return request(`/admin/packages/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
 }

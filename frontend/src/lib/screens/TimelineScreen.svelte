@@ -24,7 +24,7 @@
     getUsernameForMac,
     checkUsernameAvailable
   } from '$lib/api.js';
-  import { getClientMac } from '$lib/device.js';
+  import { getClientMac, getSiteId } from '$lib/device.js';
 
   let { onBuyAccess, onConnect, onBack } = $props();
 
@@ -39,6 +39,7 @@
   // behaviour, and can never inflate a real session's granted duration —
   // see handleConnect().
   let mac = $state('');
+  const site = getSiteId(); // null in dev (no captive-portal URL) — every call below treats that as "don't filter by site"
   let liveItems = $state([]);
 
   function formatEarnLabel(secs) {
@@ -157,10 +158,10 @@
   onMount(async () => {
     mac = getClientMac();
 
-    const result = await getContent();
+    const result = await getContent(site);
     if (result.ok && result.data?.items?.length) liveItems = result.data.items;
 
-    const completionsResult = await getContentCompletions(mac);
+    const completionsResult = await getContentCompletions(mac, site);
     const rows = completionsResult.ok ? (completionsResult.data?.completions ?? []) : [];
     completedIds = new Set(rows.map((r) => r.content_item_id));
     realUnclaimedSecs = rows.filter((r) => !r.claimed).reduce((sum, r) => sum + (r.earn_secs ?? 0), 0);
@@ -421,7 +422,7 @@
     connecting = true;
     connectError = null;
     const requestedMinutes = pendingClaimSecs != null ? pendingClaimSecs / 60 : undefined;
-    const result = await claimEarnedSession(mac, username.trim() || undefined, requestedMinutes);
+    const result = await claimEarnedSession(mac, username.trim() || undefined, requestedMinutes, site);
     connecting = false;
 
     if (!result.ok && result.status === 409) {

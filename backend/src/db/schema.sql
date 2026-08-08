@@ -21,6 +21,36 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- ── Sites ────────────────────────────────────────────────────────────────
+-- One row per UniFi controller site — supports running multiple physical
+-- locations off one Ungana backend. `id` is the UniFi site's own short
+-- identifier (the same value that appears in the captive-portal redirect
+-- URL's `/s/<id>/...` segment, and the value UniFi's own REST API expects
+-- in `/api/s/<id>/...` calls — see services/unifi.js). `mode` lets a site
+-- be pay-only, earn-only, or both; enforced server-side on the
+-- purchase/claim routes, not just hidden in the UI.
+CREATE TABLE IF NOT EXISTS sites (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  mode        TEXT NOT NULL DEFAULT 'both' CHECK (mode IN ('pay_only', 'earn_only', 'both')),
+  status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS sites_set_updated_at ON sites;
+CREATE TRIGGER sites_set_updated_at
+  BEFORE UPDATE ON sites
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Seeded so existing single-site deployments have something to point at
+-- immediately post-migration — matches the UNIFI_SITE env var's own
+-- documented default (see .env.example). Harmless if you rename/replace it
+-- once real sites are added; nothing hard-depends on this exact row beyond
+-- 'default' being *a* valid site id to fall back to.
+INSERT INTO sites (id, name, mode) VALUES ('default', 'Default Site', 'both')
+  ON CONFLICT (id) DO NOTHING;
+
 -- ── Packages ─────────────────────────────────────────────────────────────
 -- Admin-editable plan catalogue (mirrors PACKAGES in src/lib/data.js).
 CREATE TABLE IF NOT EXISTS packages (
@@ -50,6 +80,18 @@ UPDATE packages SET price_kes = 2 WHERE id = 'test';
 -- Idempotent: is_active defaults to true on INSERT, so existing databases
 -- need this explicit correction too.
 UPDATE packages SET is_active = false WHERE id = 'earned';
+
+-- Which sites a package is sold on. No rows for a given package_id = sold
+-- on every site (today's behaviour, unchanged) — this is additive scoping,
+-- not a default-deny list, so existing single-site deployments need zero
+-- rows here to keep working exactly as before.
+CREATE TABLE IF NOT EXISTS package_sites (
+  package_id  TEXT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+  site_id     TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  PRIMARY KEY (package_id, site_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_package_sites_site ON package_sites(site_id);
 
 -- ── Activators ───────────────────────────────────────────────────────────
 -- Field agents who refer users and earn commission on their purchases.
@@ -218,6 +260,17 @@ ALTER TABLE sessions ADD CONSTRAINT sessions_payment_provider_check
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS amount_sats BIGINT;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS btc_rate_kes NUMERIC(16,2);
 
+-- Which UniFi site this session was granted on — captured once at
+-- createPendingSession() time (from the captive-portal redirect URL) since
+-- it's unrecoverable later (a webhook or the retry sweep has no request
+-- context to re-derive it from). NULL = falls back to the UNIFI_SITE env
+-- var at authorisation time, so pre-multi-site sessions and single-site
+-- deployments keep working unchanged. ON DELETE SET NULL rather than
+-- CASCADE/RESTRICT — a site being retired shouldn't break historical
+-- session records or block deleting the site row.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS site_id TEXT REFERENCES sites(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_site_id ON sessions(site_id);
+
 DROP TRIGGER IF EXISTS sessions_set_updated_at ON sessions;
 CREATE TRIGGER sessions_set_updated_at
   BEFORE UPDATE ON sessions
@@ -298,6 +351,17 @@ CREATE TRIGGER content_items_set_updated_at
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE INDEX IF NOT EXISTS idx_content_items_active ON content_items(is_active, sort_order);
+
+-- Which sites a content item is visible on. Same "no rows = everywhere"
+-- convention as package_sites — existing content stays visible on every
+-- site with zero rows added here.
+CREATE TABLE IF NOT EXISTS content_item_sites (
+  content_item_id  INTEGER NOT NULL REFERENCES content_items(id) ON DELETE CASCADE,
+  site_id          TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  PRIMARY KEY (content_item_id, site_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_content_item_sites_site ON content_item_sites(site_id);
 
 -- survey_questions used to be a plain string[] (each question rendered with
 -- a hardcoded Disagree/Neutral/Agree scale). It's now [{question, answers}]

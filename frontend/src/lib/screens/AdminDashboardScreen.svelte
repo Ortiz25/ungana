@@ -10,7 +10,9 @@
     adminGetContent, adminCreateContent, adminUpdateContent,
     adminGetActivators, adminCreateActivator, adminUpdateActivator,
     adminGetCoordinators, adminCreateCoordinator, adminUpdateCoordinator,
-    adminUploadContentFile, adminGetSettings, adminUpdateSettings, adminGetAnalytics, adminGetContentAnalytics
+    adminUploadContentFile, adminGetSettings, adminUpdateSettings, adminGetAnalytics, adminGetContentAnalytics,
+    adminGetSites, adminCreateSite, adminUpdateSite, adminGetUnifiSiteOptions,
+    adminGetPackages, adminUpdatePackage
   } from '$lib/api.js';
 
   let { token, username, onLogout } = $props();
@@ -25,6 +27,7 @@
     { id: 'content', label: 'Content', Icon: FileText },
     { id: 'activators', label: 'Activators', Icon: Users },
     { id: 'coordinators', label: 'Coordinators', Icon: ShieldCheck },
+    { id: 'sites', label: 'Sites', Icon: Radio },
     { id: 'settings', label: 'Settings', Icon: Settings2 }
   ];
 
@@ -56,6 +59,8 @@
   let contentItems = $state([]);
   let activators = $state([]);
   let coordinators = $state([]);
+  let sites = $state([]);
+  let packages = $state([]);
   let loading = $state(true);
 
   async function loadContent() {
@@ -69,6 +74,14 @@
   async function loadCoordinators() {
     const r = await adminGetCoordinators(token);
     if (r.ok) coordinators = r.data.coordinators;
+  }
+  async function loadSites() {
+    const r = await adminGetSites(token);
+    if (r.ok) sites = r.data.sites;
+  }
+  async function loadPackages() {
+    const r = await adminGetPackages(token);
+    if (r.ok) packages = r.data.packages;
   }
 
   let earnConnectThresholdMinutes = $state('30');
@@ -110,14 +123,15 @@
   }
 
   onMount(async () => {
-    await Promise.all([loadContent(), loadActivators(), loadCoordinators(), loadSettings(), loadAnalytics()]);
+    await Promise.all([loadContent(), loadActivators(), loadCoordinators(), loadSites(), loadPackages(), loadSettings(), loadAnalytics()]);
     loading = false;
   });
 
   // ── Content form ─────────────────────────────────────────────────────────
   const DEFAULT_CONTENT_DRAFT = {
     type: 'video', section: 'whats_new', viewFrequency: 'once', title: '', category: '', durationLabel: '', earnMinutes: '30',
-    minWatchSecs: '0', imgUrl: '', bodyUrl: '', surveyQuestions: [{ question: '', answers: ['', ''] }]
+    minWatchSecs: '0', imgUrl: '', bodyUrl: '', surveyQuestions: [{ question: '', answers: ['', ''] }],
+    siteIds: [] // [] = visible on every site
   };
   let showContentForm = $state(false);
   let contentDraft = $state({ ...DEFAULT_CONTENT_DRAFT });
@@ -143,7 +157,8 @@
           ? draft.surveyQuestions
               .map((q) => ({ question: q.question.trim(), answers: q.answers.map((a) => a.trim()).filter(Boolean) }))
               .filter((q) => q.question && q.answers.length > 0)
-          : undefined
+          : undefined,
+      siteIds: draft.siteIds
     };
   }
 
@@ -218,7 +233,8 @@
       minWatchSecs: String(item.min_watch_secs ?? 0),
       imgUrl: item.img_url ?? '',
       bodyUrl: item.body_url ?? '',
-      surveyQuestions: normalizeSurveyQuestionsForEdit(item.survey_questions)
+      surveyQuestions: normalizeSurveyQuestionsForEdit(item.survey_questions),
+      siteIds: item.site_ids ?? []
     };
   }
 
@@ -446,6 +462,92 @@
     await loadCoordinators();
   }
 
+  // ── Site form ────────────────────────────────────────────────────────────
+  const SITE_MODES = [
+    { id: 'both', label: 'Pay + Earn' },
+    { id: 'pay_only', label: 'Pay only' },
+    { id: 'earn_only', label: 'Earn only' }
+  ];
+  const SITE_MODE_LABEL = Object.fromEntries(SITE_MODES.map((m) => [m.id, m.label]));
+
+  function freshSiteDraft() {
+    return { id: '', name: '', mode: 'both' };
+  }
+  let showSiteForm = $state(false);
+  let siteDraft = $state(freshSiteDraft());
+  let siteFormError = $state('');
+  let siteSaving = $state(false);
+  // Real sites known to the UniFi controller, fetched lazily the first
+  // time the form opens — lets the admin pick an id instead of typing one
+  // by hand (it has to match the controller's own site id exactly, see
+  // schema.sql's comment on sites.id). [] if the controller's unreachable;
+  // the id field stays a plain text input either way.
+  let unifiSiteOptions = $state([]);
+  let unifiSiteOptionsLoading = $state(false);
+
+  async function openSiteForm() {
+    siteDraft = freshSiteDraft();
+    siteFormError = '';
+    showSiteForm = true;
+    if (unifiSiteOptions.length === 0) {
+      unifiSiteOptionsLoading = true;
+      const r = await adminGetUnifiSiteOptions(token);
+      unifiSiteOptionsLoading = false;
+      if (r.ok) unifiSiteOptions = r.data?.options ?? [];
+    }
+  }
+
+  async function submitSite() {
+    if (!siteDraft.id.trim() || !siteDraft.name.trim()) {
+      siteFormError = 'Site id and name are required';
+      return;
+    }
+    siteFormError = '';
+    siteSaving = true;
+
+    const result = await adminCreateSite(token, {
+      id: siteDraft.id.trim(),
+      name: siteDraft.name.trim(),
+      mode: siteDraft.mode
+    });
+    siteSaving = false;
+
+    if (!result.ok || !result.data?.success) {
+      siteFormError = result.data?.message || 'Could not create site — check your connection';
+      return;
+    }
+
+    siteDraft = freshSiteDraft();
+    showSiteForm = false;
+    await loadSites();
+  }
+
+  async function toggleSiteStatus(s) {
+    await adminUpdateSite(token, s.id, { status: s.status === 'active' ? 'suspended' : 'active' });
+    await loadSites();
+  }
+
+  async function setSiteMode(s, mode) {
+    await adminUpdateSite(token, s.id, { mode });
+    await loadSites();
+  }
+
+  // ── Package site assignment ──────────────────────────────────────────────
+  // No create/delete — packages are a small fixed set of plan types (see
+  // services/catalog.js) — this only toggles which sites each is sold on
+  // and whether it's active at all.
+  async function togglePackageSite(pkg, siteId) {
+    const current = pkg.site_ids ?? [];
+    const siteIds = current.includes(siteId) ? current.filter((id) => id !== siteId) : [...current, siteId];
+    await adminUpdatePackage(token, pkg.id, { siteIds });
+    await loadPackages();
+  }
+
+  async function togglePackageActive(pkg) {
+    await adminUpdatePackage(token, pkg.id, { isActive: !pkg.is_active });
+    await loadPackages();
+  }
+
   // ── Settings ─────────────────────────────────────────────────────────────
   let settingsSaving = $state(false);
   let settingsError = $state('');
@@ -574,6 +676,35 @@
       {/each}
     </div>
   </div>
+{/snippet}
+
+{#snippet sitePicker(draft)}
+  {#if sites.length > 0}
+    <div>
+      <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Visible on sites</p>
+      <div class="flex gap-1.5 flex-wrap">
+        <button
+          type="button"
+          onclick={() => (draft.siteIds = [])}
+          class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+          style="background: {draft.siteIds.length === 0 ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {draft.siteIds.length === 0 ? '#fff' : '#C4DAC0'};"
+        >
+          All sites
+        </button>
+        {#each sites as s (s.id)}
+          {@const selected = draft.siteIds.includes(s.id)}
+          <button
+            type="button"
+            onclick={() => (draft.siteIds = selected ? draft.siteIds.filter((id) => id !== s.id) : [...draft.siteIds, s.id])}
+            class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+            style="background: {selected ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {selected ? '#fff' : '#C4DAC0'};"
+          >
+            {s.name}
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
 {/snippet}
 
 {#snippet articleBodyField(draft, oninput)}
@@ -770,6 +901,7 @@
           </div>
           {@render sectionPicker(contentDraft.section, (id) => (contentDraft.section = id))}
           {@render viewFrequencyPicker(contentDraft.viewFrequency, (id) => (contentDraft.viewFrequency = id))}
+          {@render sitePicker(contentDraft)}
           {@render inputField('Title', contentDraft.title, (e) => (contentDraft.title = e.currentTarget.value))}
           {@render inputField('Category', contentDraft.category, (e) => (contentDraft.category = e.currentTarget.value), { placeholder: 'e.g. Education' })}
           {@render inputField('Duration label', contentDraft.durationLabel, (e) => (contentDraft.durationLabel = e.currentTarget.value), { placeholder: 'e.g. 5 min' })}
@@ -876,6 +1008,7 @@
               </div>
               {@render sectionPicker(contentEditDraft.section, (id) => (contentEditDraft.section = id))}
               {@render viewFrequencyPicker(contentEditDraft.viewFrequency, (id) => (contentEditDraft.viewFrequency = id))}
+              {@render sitePicker(contentEditDraft)}
               {@render inputField('Title', contentEditDraft.title, (e) => (contentEditDraft.title = e.currentTarget.value))}
               {@render inputField('Category', contentEditDraft.category, (e) => (contentEditDraft.category = e.currentTarget.value), { placeholder: 'e.g. Education' })}
               {@render inputField('Duration label', contentEditDraft.durationLabel, (e) => (contentEditDraft.durationLabel = e.currentTarget.value), { placeholder: 'e.g. 5 min' })}
@@ -1322,6 +1455,156 @@
           {/if}
         </div>
       {/if}
+    {:else if tab === 'sites'}
+      <button
+        onclick={() => {
+          if (showSiteForm) {
+            showSiteForm = false;
+          } else {
+            openSiteForm();
+          }
+        }}
+        class="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-bold text-sm"
+        style="background: {showSiteForm ? 'rgba(29,60,42,0.1)' : 'linear-gradient(135deg, #C45C38, #CC8830)'}; color: {showSiteForm ? '#1D3C2A' : '#fff'};"
+      >
+        {#if showSiteForm}<X size={15} /> Cancel{:else}<Plus size={15} /> Add site{/if}
+      </button>
+
+      {#if showSiteForm}
+        <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
+          {#if unifiSiteOptionsLoading}
+            <p class="text-xs text-[#96B496]">Loading UniFi sites…</p>
+          {:else if unifiSiteOptions.length > 0}
+            <div>
+              <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">UniFi site (optional — fills id/name)</p>
+              <select
+                onchange={(e) => {
+                  const opt = unifiSiteOptions.find((o) => o.id === e.currentTarget.value);
+                  if (opt) {
+                    siteDraft.id = opt.id;
+                    siteDraft.name = opt.desc || opt.name || opt.id;
+                  }
+                }}
+                class="w-full px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] outline-none"
+                style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
+              >
+                <option value="" style="color: #1D3C2A;">Choose or enter manually below</option>
+                {#each unifiSiteOptions as o (o.id)}
+                  <option value={o.id} style="color: #1D3C2A;">{o.desc || o.name || o.id}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
+          <div class="grid grid-cols-2 gap-3">
+            {@render inputField('Site id', siteDraft.id, (e) => (siteDraft.id = e.currentTarget.value), { placeholder: 'e.g. 99kv3joz' })}
+            {@render inputField('Name', siteDraft.name, (e) => (siteDraft.name = e.currentTarget.value), { placeholder: 'e.g. Nairobi CBD Cafe' })}
+          </div>
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Mode</p>
+            <div class="flex gap-1.5 flex-wrap">
+              {#each SITE_MODES as m (m.id)}
+                <button
+                  type="button"
+                  onclick={() => (siteDraft.mode = m.id)}
+                  class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                  style="background: {siteDraft.mode === m.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {siteDraft.mode === m.id ? '#fff' : '#C4DAC0'};"
+                >
+                  {m.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+
+          {#if siteFormError}
+            <p class="text-xs text-[#E08A6A]">{siteFormError}</p>
+          {/if}
+
+          <button
+            onclick={submitSite}
+            disabled={siteSaving}
+            class="w-full py-3 rounded-2xl font-bold text-sm text-white"
+            style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {siteSaving ? 0.7 : 1};"
+          >
+            {siteSaving ? 'Saving…' : 'Create site'}
+          </button>
+        </div>
+      {/if}
+
+      <p class="text-xs text-[#3C6A4A] font-semibold px-1">{sites.length} sites</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
+      {#each sites as s (s.id)}
+        <div class="rounded-2xl overflow-hidden shadow-sm px-4 py-3.5 flex flex-col gap-2.5" style="background: #2E5A3E; opacity: {s.status === 'active' ? 1 : 0.5};">
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
+              <Radio size={16} color="#C45C38" />
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-semibold text-[#E8D4B0] truncate">{s.name}</p>
+              <p class="text-[10px] text-[#AECAAE]">id: {s.id}</p>
+            </div>
+            <button
+              onclick={() => toggleSiteStatus(s)}
+              class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full shrink-0"
+              style="background: {s.status === 'active' ? 'rgba(78,128,80,0.30)' : 'rgba(192,97,74,0.20)'}; color: {s.status === 'active' ? '#4E8050' : '#B85038'};"
+            >
+              {#if s.status === 'active'}<Pause size={10} /> Active{:else}<Play size={10} /> Off{/if}
+            </button>
+          </div>
+          <div class="flex gap-1.5 flex-wrap">
+            {#each SITE_MODES as m (m.id)}
+              <button
+                type="button"
+                onclick={() => setSiteMode(s, m.id)}
+                class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                style="background: {s.mode === m.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {s.mode === m.id ? '#fff' : '#C4DAC0'};"
+              >
+                {m.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/each}
+      </div>
+
+      <p class="text-xs text-[#3C6A4A] font-semibold px-1 mt-4">Packages</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
+      {#each packages as pkg (pkg.id)}
+        <div class="rounded-2xl overflow-hidden shadow-sm px-4 py-3.5 flex flex-col gap-2.5" style="background: #2E5A3E; opacity: {pkg.is_active ? 1 : 0.5};">
+          <div class="flex items-center gap-3">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-semibold text-[#E8D4B0] truncate">{pkg.label}</p>
+              <p class="text-[10px] text-[#AECAAE]">KES {Number(pkg.price_kes).toLocaleString()} · {Math.round(pkg.duration_secs / 60)} min</p>
+            </div>
+            <button
+              onclick={() => togglePackageActive(pkg)}
+              class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full shrink-0"
+              style="background: {pkg.is_active ? 'rgba(78,128,80,0.30)' : 'rgba(192,97,74,0.20)'}; color: {pkg.is_active ? '#4E8050' : '#B85038'};"
+            >
+              {#if pkg.is_active}<Pause size={10} /> Active{:else}<Play size={10} /> Off{/if}
+            </button>
+          </div>
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Visible on sites</p>
+            <div class="flex gap-1.5 flex-wrap">
+              {#if (pkg.site_ids ?? []).length === 0}
+                <span class="px-3 py-1.5 rounded-full text-[11px] font-semibold" style="background: rgba(196,92,56,0.28); color: #C45C38;">All sites</span>
+              {/if}
+              {#each sites as s (s.id)}
+                {@const selected = (pkg.site_ids ?? []).includes(s.id)}
+                <button
+                  type="button"
+                  onclick={() => togglePackageSite(pkg, s.id)}
+                  class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                  style="background: {selected ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {selected ? '#fff' : '#C4DAC0'};"
+                >
+                  {s.name}
+                </button>
+              {/each}
+            </div>
+          </div>
+        </div>
+      {/each}
+      </div>
     {:else if tab === 'settings'}
       <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
         <div class="flex items-center gap-2 mb-1">

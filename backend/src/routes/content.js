@@ -12,13 +12,20 @@ import { createPendingSession } from "../services/sessions.js";
 import { completeAuthorization } from "../services/authorization.js";
 import { resolveClientActivator } from "../services/activators.js";
 import { getPublicSettings } from "../services/settings.js";
+import { getSite } from "../services/sites.js";
 
 export const contentRouter = Router();
 
-/** GET /api/content — public catalogue for the Watch & Earn screen. */
-contentRouter.get("/", async (_req, res) => {
+/**
+ * GET /api/content?site=<id> — public catalogue for the Watch & Earn
+ * screen, optionally scoped to a site (see listActiveContent — omitting
+ * `site` skips filtering entirely rather than showing only global items,
+ * which is what local dev needs since there's no captive-portal URL to
+ * read a site from there).
+ */
+contentRouter.get("/", async (req, res) => {
   try {
-    const items = await listActiveContent();
+    const items = await listActiveContent(req.query.site || null);
     res.json({ items });
   } catch (error) {
     console.error("❌ Content catalogue error:", error.message);
@@ -26,13 +33,13 @@ contentRouter.get("/", async (_req, res) => {
   }
 });
 
-/** GET /api/content/completions?mac=X — items this device has already finished, for UI restore after reload. */
+/** GET /api/content/completions?mac=X&site=Y — items this device has already finished, for UI restore after reload. */
 contentRouter.get("/completions", async (req, res) => {
-  const { mac } = req.query;
+  const { mac, site } = req.query;
   if (!mac) return res.status(400).json({ completions: [], message: "mac is required" });
 
   try {
-    const completions = await getClientCompletions(mac);
+    const completions = await getClientCompletions(mac, site || null);
     res.json({ completions });
   } catch (error) {
     console.error("❌ Content completions error:", error.message);
@@ -100,10 +107,22 @@ contentRouter.post("/:id/complete", async (req, res) => {
  * privacy-conscious recovery mechanism as the paid checkout flow (see
  * clients.username in schema.sql); a client that already has one locked in
  * doesn't need to send it again.
+ * `site`, if given, is checked against that site's `mode` — a pay_only
+ * site never grants earned access, enforced here rather than just hidden
+ * in the UI (same reasoning as every other money-adjacent gate in this
+ * app). Omitting `site` skips the check entirely, same as the catalogue
+ * endpoints above — dev environments have nothing to send.
  */
 contentRouter.post("/claim-earned-session", async (req, res) => {
-  const { mac, username, requestedMinutes } = req.body;
+  const { mac, username, requestedMinutes, site: siteId } = req.body;
   if (!mac) return res.status(400).json({ success: false, message: "mac is required" });
+
+  if (siteId) {
+    const site = await getSite(siteId);
+    if (site?.mode === "pay_only") {
+      return res.status(400).json({ success: false, message: "This site does not offer earned access" });
+    }
+  }
 
   let requestedSecs = null;
   if (requestedMinutes !== undefined) {
@@ -153,6 +172,7 @@ contentRouter.post("/claim-earned-session", async (req, res) => {
       amountKES: 0,
       paymentProvider: null,
       durationSecs: totalSecs,
+      siteId: siteId || null,
       // Already set above (if provided) — omit here so createPendingSession
       // doesn't redundantly re-run the same UPDATE.
     });

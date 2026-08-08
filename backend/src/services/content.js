@@ -2,13 +2,29 @@ import { query, withTransaction } from "../db/pool.js";
 import { upsertClient, getClientByMac } from "./clients.js";
 import { getCurrentPeriodKey } from "../utils/periodKey.js";
 
-/** Public catalogue for the Watch & Earn screen — active items only. */
-export async function listActiveContent() {
+/**
+ * Public catalogue for the Watch & Earn screen — active items only.
+ * `siteId` scopes it to one UniFi site via content_item_sites — an item
+ * with no rows there is visible on every site (the default for existing
+ * content and for anyone not yet using multi-site). Passing siteId as
+ * null/undefined skips site filtering entirely rather than showing only
+ * "global" items — that's deliberate: local dev has no captive-portal URL
+ * to read a site from, so it should see everything, not an artificially
+ * narrowed catalogue.
+ */
+export async function listActiveContent(siteId = null) {
   const { rows } = await query(
-    `SELECT id, type, section, view_frequency, title, category, duration_label, earn_secs, min_watch_secs, img_url, body_url, survey_questions
-     FROM content_items
-     WHERE is_active = true
-     ORDER BY sort_order, id`
+    `SELECT ci.id, ci.type, ci.section, ci.view_frequency, ci.title, ci.category, ci.duration_label,
+            ci.earn_secs, ci.min_watch_secs, ci.img_url, ci.body_url, ci.survey_questions
+     FROM content_items ci
+     WHERE ci.is_active = true
+       AND (
+         $1::text IS NULL
+         OR NOT EXISTS (SELECT 1 FROM content_item_sites cis WHERE cis.content_item_id = ci.id)
+         OR EXISTS (SELECT 1 FROM content_item_sites cis WHERE cis.content_item_id = ci.id AND cis.site_id = $1)
+       )
+     ORDER BY ci.sort_order, ci.id`,
+    [siteId]
   );
   return rows;
 }
@@ -31,11 +47,11 @@ export async function recordImpression(contentItemId) {
  * exists. Includes `earn_secs` so the frontend can rebuild an accurate
  * unclaimed balance (sum where claimed = false) after a reload.
  */
-export async function getClientCompletions(macAddress) {
+export async function getClientCompletions(macAddress, siteId = null) {
   const client = await getClientByMac(macAddress);
   if (!client) return [];
 
-  const items = await listActiveContent();
+  const items = await listActiveContent(siteId);
   const results = [];
 
   for (const item of items) {
@@ -149,14 +165,33 @@ export async function attachClaimedSession(completionIds, sessionId) {
 // Unlike listActiveContent(), these ignore is_active — the admin panel needs
 // to see (and re-activate) deactivated items too.
 
+// site_ids: [] means global (visible everywhere) — matches
+// content_item_sites' "no rows = everywhere" convention exactly, so the
+// admin UI can treat an empty array and "no restriction" as the same thing.
+const SITE_IDS_SUBQUERY = `
+  COALESCE(
+    (SELECT array_agg(cis.site_id ORDER BY cis.site_id) FROM content_item_sites cis WHERE cis.content_item_id = ci.id),
+    ARRAY[]::text[]
+  ) AS site_ids
+`;
+
 export async function adminListAllContent() {
-  const { rows } = await query(`SELECT * FROM content_items ORDER BY sort_order, id`);
+  const { rows } = await query(`SELECT ci.*, ${SITE_IDS_SUBQUERY} FROM content_items ci ORDER BY ci.sort_order, ci.id`);
   return rows;
 }
 
 export async function adminGetContentItem(id) {
-  const { rows } = await query(`SELECT * FROM content_items WHERE id = $1`, [id]);
+  const { rows } = await query(`SELECT ci.*, ${SITE_IDS_SUBQUERY} FROM content_items ci WHERE ci.id = $1`, [id]);
   return rows[0] || null;
+}
+
+/** Replaces this item's site assignment wholesale — simplest correct semantics for a "visible on" multi-select that saves as one unit. */
+async function setContentItemSites(client, contentItemId, siteIds) {
+  await client.query(`DELETE FROM content_item_sites WHERE content_item_id = $1`, [contentItemId]);
+  if (siteIds && siteIds.length > 0) {
+    const values = siteIds.map((_, i) => `($1, $${i + 2})`).join(", ");
+    await client.query(`INSERT INTO content_item_sites (content_item_id, site_id) VALUES ${values}`, [contentItemId, ...siteIds]);
+  }
 }
 
 export async function createContentItem({
@@ -172,28 +207,32 @@ export async function createContentItem({
   bodyUrl,
   surveyQuestions,
   sortOrder = 0,
+  siteIds, // undefined/[] = visible on every site
 }) {
-  const { rows } = await query(
-    `INSERT INTO content_items
-       (type, section, view_frequency, title, category, duration_label, earn_secs, min_watch_secs, img_url, body_url, survey_questions, sort_order)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     RETURNING *`,
-    [
-      type,
-      section,
-      viewFrequency,
-      title,
-      category ?? null,
-      durationLabel ?? null,
-      earnSecs,
-      minWatchSecs,
-      imgUrl ?? null,
-      bodyUrl ?? null,
-      surveyQuestions ? JSON.stringify(surveyQuestions) : null,
-      sortOrder,
-    ]
-  );
-  return rows[0];
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `INSERT INTO content_items
+         (type, section, view_frequency, title, category, duration_label, earn_secs, min_watch_secs, img_url, body_url, survey_questions, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *`,
+      [
+        type,
+        section,
+        viewFrequency,
+        title,
+        category ?? null,
+        durationLabel ?? null,
+        earnSecs,
+        minWatchSecs,
+        imgUrl ?? null,
+        bodyUrl ?? null,
+        surveyQuestions ? JSON.stringify(surveyQuestions) : null,
+        sortOrder,
+      ]
+    );
+    if (siteIds && siteIds.length > 0) await setContentItemSites(client, rows[0].id, siteIds);
+    return { ...rows[0], site_ids: siteIds ?? [] };
+  });
 }
 
 // Maps request-body keys to their column — whitelisted so PATCH can build a
@@ -215,7 +254,13 @@ const CONTENT_FIELD_COLUMNS = {
   isActive: "is_active",
 };
 
-/** Partial update — only fields present in `fields` are touched. Returns null if the id doesn't exist. */
+/**
+ * Partial update — only fields present in `fields` are touched. Returns
+ * null if the id doesn't exist. `siteIds`, if present (even as `[]`, which
+ * means "make it global"), replaces the item's site assignment wholesale —
+ * it's handled separately from CONTENT_FIELD_COLUMNS since it's a join
+ * table, not a column on content_items.
+ */
 export async function updateContentItem(id, fields) {
   const sets = [];
   const values = [];
@@ -227,11 +272,19 @@ export async function updateContentItem(id, fields) {
     values.push(value);
   }
 
-  if (sets.length === 0) return adminGetContentItem(id);
+  if (sets.length === 0 && fields.siteIds === undefined) return adminGetContentItem(id);
 
-  values.push(id);
-  const { rows } = await query(`UPDATE content_items SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING *`, values);
-  return rows[0] || null;
+  return withTransaction(async (client) => {
+    if (sets.length > 0) {
+      values.push(id);
+      const { rows } = await client.query(`UPDATE content_items SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING id`, values);
+      if (rows.length === 0) return null;
+    }
+    if (fields.siteIds !== undefined) await setContentItemSites(client, id, fields.siteIds);
+
+    const { rows } = await client.query(`SELECT ci.*, ${SITE_IDS_SUBQUERY} FROM content_items ci WHERE ci.id = $1`, [id]);
+    return rows[0] || null;
+  });
 }
 
 /** Soft "delete" — deactivates rather than removing the row, since content_completions references it (audit history must survive). */

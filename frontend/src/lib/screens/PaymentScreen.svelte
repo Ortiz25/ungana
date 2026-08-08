@@ -22,7 +22,7 @@
     getUsernameForMac,
     checkUsernameAvailable
   } from '$lib/api.js';
-  import { getClientMac } from '$lib/device.js';
+  import { getClientMac, getSiteId } from '$lib/device.js';
 
   // `onBtcPaid` fires once a Lightning invoice is confirmed settled — unlike
   // M-Pesa (onPay -> InitiatedScreen polls), BTC polling happens right here
@@ -75,7 +75,8 @@
       activatorCode: activator?.id ?? 'SELF',
       durationSecs: pkg.demoSecs,
       simulateFailure,
-      username: username.trim() || undefined
+      username: username.trim() || undefined,
+      site: getSiteId() || undefined
     });
 
     if (!result.ok || !result.data?.lightningInvoice) {
@@ -184,7 +185,8 @@
       activatorCode: activator?.id ?? 'SELF',
       durationSecs: pkg.demoSecs,
       simulateFailure,
-      username: username.trim() || undefined
+      username: username.trim() || undefined,
+      site: getSiteId() || undefined
     });
 
     submitting = false;

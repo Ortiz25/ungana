@@ -19,6 +19,7 @@ import { btcRouter } from "./routes/btc.js";
 import { contentRouter } from "./routes/content.js";
 import { adminRouter } from "./routes/admin.js";
 import { settingsRouter } from "./routes/settings.js";
+import { sitesRouter } from "./routes/sites.js";
 import { retryPaidAuthorizations } from "./services/authorization.js";
 import { login } from "./services/unifi.js";
 import { UPLOADS_DIR } from "./services/uploads.js";
@@ -68,6 +69,7 @@ app.use("/api/coordinators", coordinatorsRouter);
 app.use("/api/content", contentRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/settings", settingsRouter);
+app.use("/api/sites", sitesRouter);
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ── Background retry sweep ────────────────────────────────────────────────

@@ -20,6 +20,7 @@ export async function createPendingSession({
   username,
   amountSats, // BTC only — sats amount at invoice-creation time, for audit/reconciliation
   btcRateKes, // BTC only — KES/BTC rate at invoice-creation time, for audit/reconciliation
+  siteId, // which UniFi site this was initiated from — see schema.sql's comment on sessions.site_id for why it's captured here and not derived later
 }) {
   const clientId = await upsertClient(clientMac, phone);
   // Throws (Postgres 23505) if `username` is already claimed by another
@@ -35,8 +36,8 @@ export async function createPendingSession({
     `INSERT INTO sessions
        (reference, client_id, client_mac, package_id, activator_id, source,
         amount_kes, payment_provider, duration_secs, payment_status,
-        amount_sats, btc_rate_kes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11)
+        amount_sats, btc_rate_kes, site_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11, $12)
      RETURNING *`,
     [
       reference,
@@ -50,6 +51,7 @@ export async function createPendingSession({
       durationSecs,
       amountSats ?? null,
       btcRateKes ?? null,
+      siteId ?? null,
     ]
   );
 

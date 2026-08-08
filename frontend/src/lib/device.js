@@ -46,3 +46,67 @@ export function getStoredClientMac() {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem(MAC_STORAGE_KEY);
 }
+
+// ─── Multi-site ──────────────────────────────────────────────────────────
+// A real deployment's captive-portal redirect carries the UniFi site id in
+// the URL, e.g. https://captive.ungana.africa/guest/s/99kv3joz?ap=...&id=...
+// — the `/s/<id>/` path segment. Some configurations may instead pass it
+// as a `site`/`s` query param, so both are checked.
+const SITE_STORAGE_KEY = 'ungana_site_id';
+const AP_STORAGE_KEY = 'ungana_ap_mac';
+const SSID_STORAGE_KEY = 'ungana_ssid';
+
+/**
+ * Resolves the site id and persists it to localStorage (like
+ * getClientMac()) so it survives later page loads once the URL params are
+ * gone. Unlike the MAC, there's deliberately no synthetic fallback — local
+ * dev never sees a real captive-portal redirect, so this returns null
+ * there, and every site-aware API call treats null as "don't filter by
+ * site" rather than "filter to nothing" (see the backend's
+ * listActiveContent/listActivePackages for the matching convention).
+ */
+export function getSiteId() {
+  if (typeof window === 'undefined') return null;
+
+  const pathMatch = window.location.pathname.match(/\/s\/([^/?]+)/);
+  const params = new URLSearchParams(window.location.search);
+  const siteId = pathMatch?.[1] || params.get('site') || params.get('s');
+
+  if (siteId) {
+    localStorage.setItem(SITE_STORAGE_KEY, siteId);
+    return siteId;
+  }
+  return localStorage.getItem(SITE_STORAGE_KEY);
+}
+
+/** Reads the persisted site id without re-parsing the URL — null if none stored/found yet. */
+export function getStoredSiteId() {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(SITE_STORAGE_KEY);
+}
+
+// Access point MAC + SSID from the same redirect — not used to filter
+// anything yet, captured now (while the URL is already being parsed for
+// the site id) for future per-AP analytics rather than a second pass later.
+export function getApMac() {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const ap = params.get('ap');
+  if (ap) {
+    const value = ap.toLowerCase();
+    localStorage.setItem(AP_STORAGE_KEY, value);
+    return value;
+  }
+  return localStorage.getItem(AP_STORAGE_KEY);
+}
+
+export function getSsid() {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const ssid = params.get('ssid');
+  if (ssid) {
+    localStorage.setItem(SSID_STORAGE_KEY, ssid);
+    return ssid;
+  }
+  return localStorage.getItem(SSID_STORAGE_KEY);
+}

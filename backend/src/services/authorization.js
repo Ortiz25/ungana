@@ -14,6 +14,11 @@ import { markSessionAuthorized, markSessionPaid, listPaidUnauthorizedSessions, l
 export async function completeAuthorization(session) {
   const authorized = await authorizeClient(session.client_mac, {
     duration: session.duration_secs ? Math.round(session.duration_secs / 60) : undefined,
+    // null (no site recorded — pre-multi-site session, or single-site
+    // deployment) must become undefined here, not stay null, so
+    // authorizeClient's default parameter (`site = UNIFI_SITE`) actually
+    // kicks in — a default param only triggers on undefined.
+    site: session.site_id ?? undefined,
   });
 
   if (authorized) return markSessionAuthorized(session.reference);

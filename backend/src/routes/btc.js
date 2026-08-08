@@ -5,6 +5,7 @@ import { createPendingSession, getSessionByReference, markSessionFailed } from "
 import { completeAuthorization } from "../services/authorization.js";
 import { resolveClientActivator } from "../services/activators.js";
 import { getPackageById } from "../services/catalog.js";
+import { getSite } from "../services/sites.js";
 import { APP_MODE } from "../config.js";
 
 export const btcRouter = Router();
@@ -12,21 +13,38 @@ export const btcRouter = Router();
 /**
  * POST /api/initiate-btc-payment
  * Body: { clientMac, amount, packageId, activatorCode?, username?,
- *         durationSecs?, simulateFailure? }
+ *         durationSecs?, simulateFailure?, site? }
  * No phone number — Lightning payments don't need one. `durationSecs` (the
  * frontend's accelerated demo timer) is only honoured without real BTCPay
  * credentials configured; in APP_MODE=active with BTCPAY_URL set, the
  * duration always comes from the `packages` catalog, same rule as the
  * M-Pesa flow — never trust a client-supplied duration for money that's
  * actually moving. `simulateFailure` only has an effect in that same
- * unconfigured/simulated case.
+ * unconfigured/simulated case. `site`, like the M-Pesa flow, is checked
+ * against that site's mode (an earn_only site doesn't sell packages) and
+ * skipped entirely when omitted.
  */
 btcRouter.post("/initiate-btc-payment", async (req, res) => {
-  const { clientMac, amount, packageId, activatorCode, username, durationSecs: durationSecsInput, simulateFailure } =
-    req.body;
+  const {
+    clientMac,
+    amount,
+    packageId,
+    activatorCode,
+    username,
+    durationSecs: durationSecsInput,
+    simulateFailure,
+    site: siteId,
+  } = req.body;
 
   if (!clientMac || !amount || !packageId) {
     return res.status(400).json({ success: false, message: "clientMac, amount, and packageId are required" });
+  }
+
+  if (siteId) {
+    const site = await getSite(siteId);
+    if (site?.mode === "earn_only") {
+      return res.status(400).json({ success: false, message: "This site does not sell packages" });
+    }
   }
 
   try {
@@ -60,6 +78,7 @@ btcRouter.post("/initiate-btc-payment", async (req, res) => {
       username: username || undefined,
       amountSats,
       btcRateKes,
+      siteId: siteId || null,
     });
 
     console.log(`⚡ Pending BTC session stored [${reference}] for MAC ${clientMac}`);

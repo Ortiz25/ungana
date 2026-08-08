@@ -12,6 +12,7 @@ import { completeAuthorization } from "../services/authorization.js";
 import { resolveClientActivator } from "../services/activators.js";
 import { getPackageById } from "../services/catalog.js";
 import { authorizeClient } from "../services/unifi.js";
+import { getSite } from "../services/sites.js";
 import { APP_MODE, PAYMENT_PROVIDER, ENABLE_TEST_ROUTE } from "../config.js";
 
 export const paymentsRouter = Router();
@@ -37,6 +38,10 @@ export const paymentsRouter = Router();
  * `username` is optional — a self-chosen handle that lets this session be
  * recovered later via GET /session/by-username/:username from a browser
  * context that never saw the router's MAC redirect. Never the phone number.
+ * `site`, if given, is checked against that site's `mode` — an earn_only
+ * site never sells packages, enforced here rather than just hidden in the
+ * UI. Omitting `site` skips the check (dev environments have nothing to
+ * send — see getSite/listActiveContent's own comments on this convention).
  */
 paymentsRouter.post("/initiate-payment", async (req, res) => {
   const {
@@ -53,10 +58,18 @@ paymentsRouter.post("/initiate-payment", async (req, res) => {
     data,
     simulateFailure,
     username,
+    site: siteId,
   } = req.body;
 
   if (!phoneNumber || !clientMac || !amount) {
     return res.status(400).json({ success: false, message: "phoneNumber, clientMac, and amount are required" });
+  }
+
+  if (siteId) {
+    const site = await getSite(siteId);
+    if (site?.mode === "earn_only") {
+      return res.status(400).json({ success: false, message: "This site does not sell packages" });
+    }
   }
 
   try {
@@ -98,6 +111,7 @@ paymentsRouter.post("/initiate-payment", async (req, res) => {
       paymentProvider: PAYMENT_PROVIDER,
       durationSecs,
       username: username || undefined,
+      siteId: siteId || null,
     });
 
     console.log(`🔖 Pending session stored [${reference}] for MAC ${clientMac} via ${PAYMENT_PROVIDER}`);
@@ -267,13 +281,13 @@ paymentsRouter.get("/session/by-username/:username", async (req, res) => {
   }
 });
 
-/** POST /api/auth — direct authorisation, bypassing payment (admin/manual use). */
+/** POST /api/auth — direct authorisation, bypassing payment (admin/manual use). Optional `site` — falls back to UNIFI_SITE when omitted. */
 paymentsRouter.post("/auth", async (req, res) => {
-  const { clientMac, duration } = req.body;
+  const { clientMac, duration, site } = req.body;
   if (!clientMac) return res.status(400).json({ success: false, message: "Client MAC is required" });
 
   try {
-    const authorized = await authorizeClient(clientMac, { duration });
+    const authorized = await authorizeClient(clientMac, { duration, site });
     if (!authorized) return res.status(500).json({ success: false, message: "Authorization failed" });
     res.json({ success: true, message: "Client authorized", clientMac });
   } catch (error) {
@@ -295,6 +309,7 @@ paymentsRouter.get("/test-authorize", async (req, res) => {
     duration = 10,
     packageId = "test",
     amount = 5,
+    site,
   } = req.body;
 
   try {
@@ -308,6 +323,7 @@ paymentsRouter.get("/test-authorize", async (req, res) => {
       amountKES: amount,
       paymentProvider: PAYMENT_PROVIDER,
       durationSecs: duration * 60,
+      siteId: site || null,
     });
 
     const authorized = await completeAuthorization(session);

@@ -48,7 +48,7 @@ export async function login() {
   }
 }
 
-const getSites = async () => {
+export const getSites = async () => {
   try {
     const session = await login();
     if (!session) {
@@ -89,15 +89,15 @@ function authHeaders(session, extra = {}) {
   };
 }
 
-async function getVouchers(session) {
-  const response = await axios.get(`${UNIFI_URL}${NETWORK_API}/api/s/${UNIFI_SITE}/stat/voucher`, {
+async function getVouchers(session, site = UNIFI_SITE) {
+  const response = await axios.get(`${UNIFI_URL}${NETWORK_API}/api/s/${site}/stat/voucher`, {
     headers: authHeaders(session),
     httpsAgent: insecureAgent,
   });
   return response.data.data || [];
 }
 
-async function createVoucher(session, { duration, expire_number, expire_unit, data }) {
+async function createVoucher(session, { duration, expire_number, expire_unit, data, site = UNIFI_SITE }) {
   const payload = data
     ? {
         cmd: "create-voucher",
@@ -121,14 +121,14 @@ async function createVoucher(session, { duration, expire_number, expire_unit, da
         expire_unit,
       };
 
-  const response = await axios.post(`${UNIFI_URL}${NETWORK_API}/api/s/${UNIFI_SITE}/cmd/hotspot`, payload, {
+  const response = await axios.post(`${UNIFI_URL}${NETWORK_API}/api/s/${site}/cmd/hotspot`, payload, {
     headers: authHeaders(session, { "Content-Type": "application/json" }),
     httpsAgent: insecureAgent,
   });
 
   if (response.data?.meta?.rc !== "ok") return null;
 
-  const vouchers = await getVouchers(session);
+  const vouchers = await getVouchers(session, site);
   return vouchers.filter((v) => v.note === payload.note).sort((a, b) => b.create_time - a.create_time)[0];
 }
 
@@ -136,8 +136,11 @@ async function createVoucher(session, { duration, expire_number, expire_unit, da
  * Create a voucher and authorise `clientMac` for the given duration/data
  * allowance. Returns true on success, false if the console is unreachable
  * or rejects the request (caller should retry later).
+ * `site` is the UniFi site id to authorise on — defaults to the single
+ * UNIFI_SITE env var when omitted, so callers that predate multi-site (or
+ * a session with no site_id recorded) keep working unchanged.
  */
-export async function authorizeClient(clientMac, { duration, data, expire_number, expire_unit }) {
+export async function authorizeClient(clientMac, { duration, data, expire_number, expire_unit, site = UNIFI_SITE }) {
   if (!UNIFI_URL) {
     console.warn("⚠️  UNIFI_URL not configured — skipping router authorisation (session still recorded in DB)");
     return true;
@@ -146,7 +149,7 @@ export async function authorizeClient(clientMac, { duration, data, expire_number
   const session = await login();
   if (!session) return false;
 
-  const voucher = await createVoucher(session, { duration, data, expire_number, expire_unit });
+  const voucher = await createVoucher(session, { duration, data, expire_number, expire_unit, site });
   if (!voucher) return false;
 
   const payload = { cmd: "authorize-guest", mac: clientMac.toLowerCase(), voucher: voucher.code };
@@ -158,7 +161,7 @@ export async function authorizeClient(clientMac, { duration, data, expire_number
   }
 
   try {
-    const response = await axios.post(`${UNIFI_URL}${NETWORK_API}/api/s/${UNIFI_SITE}/cmd/stamgr`, payload, {
+    const response = await axios.post(`${UNIFI_URL}${NETWORK_API}/api/s/${site}/cmd/stamgr`, payload, {
       headers: authHeaders(session, { "Content-Type": "application/json" }),
       httpsAgent: insecureAgent,
     });

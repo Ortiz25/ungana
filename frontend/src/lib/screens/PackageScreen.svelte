@@ -5,8 +5,8 @@
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import ActivatorDropdown from '$lib/components/ActivatorDropdown.svelte';
   import { PACKAGES, ACTIVATORS } from '$lib/data.js';
-  import { getPackages, getActivatorForMac } from '$lib/api.js';
-  import { getClientMac } from '$lib/device.js';
+  import { getPackages, getActivatorForMac, getSite } from '$lib/api.js';
+  import { getClientMac, getSiteId } from '$lib/device.js';
 
   let { mode = 'simulation', onSelect, onActivatorLogin, onCoordinatorLogin, onAdminLogin, onEarnAccess } = $props();
 
@@ -21,9 +21,20 @@
   // chain needs to know about mode at all. In `simulation` it stays the
   // fast accelerated value for demo purposes.
   let packages = $state(PACKAGES);
+  // 'both' (the default) shows everything — same as before multi-site
+  // existed. Only actually narrows once a real site with a non-'both' mode
+  // is resolved; unset/unknown sites (including all of local dev, which
+  // has no captive-portal URL to read a site from) stay fully open.
+  let siteMode = $state('both');
 
   onMount(async () => {
-    const result = await getPackages();
+    const siteId = getSiteId();
+    if (siteId) {
+      const siteResult = await getSite(siteId);
+      if (siteResult.ok && siteResult.data?.site?.mode) siteMode = siteResult.data.site.mode;
+    }
+
+    const result = await getPackages(siteId);
     if (!result.ok || !result.data?.packages) return;
 
     const merged = result.data.packages
@@ -112,6 +123,7 @@
 
   <div class="h-px bg-[#1D3C2A] opacity-10 mb-5"></div>
 
+  {#if siteMode !== 'earn_only'}
   <div class="mb-4">
     <h2 class="text-lg font-bold text-[#1D3C2A]" style="font-family: 'Playfair Display', serif;">Choose your plan</h2>
     <p class="text-xs mt-0.5" style="color: #2E5A3E;">Select how long you want access</p>
@@ -194,13 +206,17 @@
     Continue with {chosen.label} — {chosen.price} KES
     <ChevronRight size={16} />
   </button>
+  {/if}
 
-  <!-- Earn Access divider + entry -->
+  {#if siteMode !== 'pay_only'}
+  {#if siteMode !== 'earn_only'}
+  <!-- Earn Access divider — only shown between the two options when both are actually available. -->
   <div class="flex items-center gap-3 mt-3 mb-1">
     <div class="flex-1 h-px" style="background: rgba(29,60,42,0.15);"></div>
     <span class="text-[11px] font-medium" style="color: #9AB498;">or</span>
     <div class="flex-1 h-px" style="background: rgba(29,60,42,0.15);"></div>
   </div>
+  {/if}
   <button
     onclick={onEarnAccess}
     class="w-full py-3 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 mb-2 transition-all active:scale-95"
@@ -209,6 +225,7 @@
     <Zap size={15} />
     Earn Free Access — Watch & Learn
   </button>
+  {/if}
 
   <div class="flex flex-col items-center gap-1.5 mt-2">
     <p class="text-[10px]" style="color: #9AB498;">swap.ungana.app</p>

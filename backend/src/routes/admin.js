@@ -12,6 +12,8 @@ import { createCoordinator, adminListCoordinators, updateCoordinator } from "../
 import { uploadContentFile } from "../services/uploads.js";
 import { adminGetSettings, setEarnConnectThresholdSecs, setDefaultActivatorCommissionRate } from "../services/settings.js";
 import { getAdminAnalytics, getContentItemAnalytics } from "../services/analytics.js";
+import { adminListSites, createSite, updateSite, listUnifiSiteOptions } from "../services/sites.js";
+import { adminListPackages, updatePackage } from "../services/catalog.js";
 
 export const adminRouter = Router();
 
@@ -216,6 +218,103 @@ adminRouter.patch("/coordinators/:id", async (req, res) => {
     res.json({ success: true, coordinator });
   } catch (error) {
     console.error("❌ Admin coordinator update error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ── Sites ────────────────────────────────────────────────────────────────
+
+/** GET /api/admin/sites — every site (including suspended). */
+adminRouter.get("/sites", async (_req, res) => {
+  try {
+    const sites = await adminListSites();
+    res.json({ sites });
+  } catch (error) {
+    console.error("❌ Admin sites list error:", error.message);
+    res.status(500).json({ sites: [], message: error.message });
+  }
+});
+
+/**
+ * GET /api/admin/sites/unifi-options — real sites known to the UniFi
+ * controller, for the "Add Site" form to pick an id from instead of typing
+ * one by hand. Returns [] (not an error) if the controller's unreachable
+ * or UNIFI_URL isn't configured — the form falls back to manual entry.
+ */
+adminRouter.get("/sites/unifi-options", async (_req, res) => {
+  try {
+    const options = await listUnifiSiteOptions();
+    res.json({ options: options ?? [] });
+  } catch (error) {
+    console.error("❌ UniFi sites fetch error:", error.message);
+    res.json({ options: [] });
+  }
+});
+
+const SITE_MODES = ["pay_only", "earn_only", "both"];
+
+/** POST /api/admin/sites — Body: { id, name, mode? }. `id` must match the UniFi site's own short id (see schema.sql's comment on sites.id). */
+adminRouter.post("/sites", async (req, res) => {
+  const { id, name, mode } = req.body;
+  if (!id || !name) {
+    return res.status(400).json({ success: false, message: "id and name are required" });
+  }
+  if (mode !== undefined && !SITE_MODES.includes(mode)) {
+    return res.status(400).json({ success: false, message: `mode must be one of ${SITE_MODES.join(", ")}` });
+  }
+
+  try {
+    const site = await createSite(req.body);
+    res.json({ success: true, site });
+  } catch (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({ success: false, message: "That site id is already in use." });
+    }
+    console.error("❌ Admin site create error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** PATCH /api/admin/sites/:id — partial update: name, mode, status. */
+adminRouter.patch("/sites/:id", async (req, res) => {
+  if (req.body.mode !== undefined && !SITE_MODES.includes(req.body.mode)) {
+    return res.status(400).json({ success: false, message: `mode must be one of ${SITE_MODES.join(", ")}` });
+  }
+
+  try {
+    const site = await updateSite(req.params.id, req.body);
+    if (!site) return res.status(404).json({ success: false, message: "Site not found" });
+    res.json({ success: true, site });
+  } catch (error) {
+    console.error("❌ Admin site update error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ── Packages ─────────────────────────────────────────────────────────────
+// No create route — packages are a small fixed set of plan types seeded in
+// schema.sql, not admin-authored. This only covers what multi-site scoping
+// needs: seeing/editing every package's price, active state, and sites.
+
+/** GET /api/admin/packages — every package (including inactive), with site assignment. */
+adminRouter.get("/packages", async (_req, res) => {
+  try {
+    const packages = await adminListPackages();
+    res.json({ packages });
+  } catch (error) {
+    console.error("❌ Admin packages list error:", error.message);
+    res.status(500).json({ packages: [], message: error.message });
+  }
+});
+
+/** PATCH /api/admin/packages/:id — partial update: label, priceKes, durationSecs, isActive, siteIds. */
+adminRouter.patch("/packages/:id", async (req, res) => {
+  try {
+    const pkg = await updatePackage(req.params.id, req.body);
+    if (!pkg) return res.status(404).json({ success: false, message: "Package not found" });
+    res.json({ success: true, package: pkg });
+  } catch (error) {
+    console.error("❌ Admin package update error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });
