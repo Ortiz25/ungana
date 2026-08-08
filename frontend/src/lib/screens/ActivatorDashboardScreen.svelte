@@ -659,7 +659,7 @@
             <p class="text-3xl font-bold text-[#E8D4B0]" style="letter-spacing: -1px;">KES {realPeriodTotal.toLocaleString()}</p>
             <p class="text-xs text-[#C4DAC0] mt-1">at {realCommissionRate}% commission rate</p>
             <div style="height: 140px; margin-top: 16px; margin-left: -20px; margin-right: -8px;">
-              <AreaChartMini data={realChartData} yKey="earnings" xKey={period === '1Y' ? 'label' : 'shortLabel'} height={140} color="#C45C38" showGrid />
+              <AreaChartMini data={realChartData} yKey="earnings" xKey={period === '1Y' ? 'label' : 'shortLabel'} height={140} color="#C45C38" showGrid showYLabels />
             </div>
           </div>
 
@@ -668,7 +668,7 @@
               <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Monthly comparison</p>
             </div>
             <div style="height: 140px; margin-right: 8px;">
-              <BarChartMini data={realMonthlyData} yKey="earnings" xKey="label" barSize={16} radius={4} height={140} color="#C45C38" opacity={0.85} />
+              <BarChartMini data={realMonthlyData} yKey="earnings" xKey="label" barSize={16} radius={4} height={140} color="#C45C38" opacity={0.85} showYLabels />
             </div>
             <div class="h-3"></div>
           </div>
@@ -703,7 +703,7 @@
         <p class="text-3xl font-bold text-[#E8D4B0]" style="letter-spacing: -1px;">KES {periodTotal.toLocaleString()}</p>
         <p class="text-xs text-[#C4DAC0] mt-1">at 20% commission rate</p>
         <div style="height: 140px; margin-top: 16px; margin-left: -20px; margin-right: -8px;">
-          <AreaChartMini data={chartData} yKey="earnings" xKey={period === '1Y' ? 'label' : 'shortLabel'} height={140} color="#C45C38" showGrid />
+          <AreaChartMini data={chartData} yKey="earnings" xKey={period === '1Y' ? 'label' : 'shortLabel'} height={140} color="#C45C38" showGrid showYLabels />
         </div>
       </div>
 
@@ -712,7 +712,7 @@
           <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Monthly comparison</p>
         </div>
         <div style="height: 140px; margin-right: 8px;">
-          <BarChartMini data={MONTHLY_DATA} yKey="earnings" xKey="label" barSize={16} radius={4} height={140} color="#C45C38" opacity={0.85} />
+          <BarChartMini data={MONTHLY_DATA} yKey="earnings" xKey="label" barSize={16} radius={4} height={140} color="#C45C38" opacity={0.85} showYLabels />
         </div>
         <div class="h-3"></div>
       </div>

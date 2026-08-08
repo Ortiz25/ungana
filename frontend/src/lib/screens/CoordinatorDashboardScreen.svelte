@@ -283,13 +283,13 @@
           </div>
         {/if}
         {#if teamPeriod === 'week'}
-          <BarChartMini data={weekDays} yKey="earn" xKey="day" height={70} color={bc} barSize={18} radius={4} showGrid labelColor="#96B496" />
+          <BarChartMini data={weekDays} yKey="earn" xKey="day" height={70} color={bc} barSize={18} radius={4} showGrid showYLabels yAxisWidth={26} labelColor="#96B496" />
         {/if}
         {#if teamPeriod === 'month' && monthData.length > 0}
-          <BarChartMini data={monthData} yKey="earn" xKey="w" height={70} color={bc} barSize={22} radius={4} showGrid labelColor="#96B496" />
+          <BarChartMini data={monthData} yKey="earn" xKey="w" height={70} color={bc} barSize={22} radius={4} showGrid showYLabels yAxisWidth={26} labelColor="#96B496" />
         {/if}
         {#if teamPeriod === 'year' && yearData.length > 0}
-          <BarChartMini data={yearData} yKey="earn" xKey="m" height={70} color={bc} barSize={13} radius={4} showGrid labelColor="#96B496" labelSize={8} />
+          <BarChartMini data={yearData} yKey="earn" xKey="m" height={70} color={bc} barSize={13} radius={4} showGrid showYLabels yAxisWidth={22} labelColor="#96B496" labelSize={8} />
         {/if}
       </div>
 
