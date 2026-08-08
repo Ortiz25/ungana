@@ -164,7 +164,12 @@
     const completionsResult = await getContentCompletions(mac, site);
     const rows = completionsResult.ok ? (completionsResult.data?.completions ?? []) : [];
     completedIds = new Set(rows.map((r) => r.content_item_id));
-    realUnclaimedSecs = rows.filter((r) => !r.claimed).reduce((sum, r) => sum + (r.earn_secs ?? 0), 0);
+    // Server-computed across every period, not summed from `rows` above —
+    // `rows` only covers each item's *current* period (for the locked/done
+    // check), so a banked completion parked under an older period key (e.g.
+    // a `session`-scoped item after a new session rolled the period key
+    // forward) would silently disappear from a client-side sum.
+    realUnclaimedSecs = completionsResult.ok ? (completionsResult.data?.unclaimedSecs ?? 0) : 0;
 
     const settingsResult = await getSettings();
     if (settingsResult.ok && Number.isFinite(settingsResult.data?.earnConnectThresholdSecs)) {

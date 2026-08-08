@@ -33,17 +33,23 @@ contentRouter.get("/", async (req, res) => {
   }
 });
 
-/** GET /api/content/completions?mac=X&site=Y — items this device has already finished, for UI restore after reload. */
+/**
+ * GET /api/content/completions?mac=X&site=Y — items this device has already
+ * finished in their current period (for UI restore after reload), plus
+ * `unclaimedSecs` — the client's true banked balance across ALL periods,
+ * queried separately so it doesn't disappear when a `session`-scoped item's
+ * period key rolls to a new session id (see getClientCompletions).
+ */
 contentRouter.get("/completions", async (req, res) => {
   const { mac, site } = req.query;
-  if (!mac) return res.status(400).json({ completions: [], message: "mac is required" });
+  if (!mac) return res.status(400).json({ completions: [], unclaimedSecs: 0, message: "mac is required" });
 
   try {
-    const completions = await getClientCompletions(mac, site || null);
-    res.json({ completions });
+    const { completions, unclaimedSecs } = await getClientCompletions(mac, site || null);
+    res.json({ completions, unclaimedSecs });
   } catch (error) {
     console.error("❌ Content completions error:", error.message);
-    res.status(500).json({ completions: [], message: error.message });
+    res.status(500).json({ completions: [], unclaimedSecs: 0, message: error.message });
   }
 });
 

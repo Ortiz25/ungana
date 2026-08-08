@@ -44,15 +44,23 @@ export async function recordImpression(contentItemId) {
  * reload. Per-item "locked" is computed against *this item's own current
  * period* (see getCurrentPeriodKey) — a daily item completed yesterday is
  * NOT locked today, even though a completion row for yesterday still
- * exists. Includes `earn_secs` so the frontend can rebuild an accurate
- * unclaimed balance (sum where claimed = false) after a reload.
+ * exists. For a `session`-scoped item, the period key is the client's most
+ * recent session id, so it rolls to a new value the moment ANY session is
+ * created — that's what makes the item re-completable next session, but it
+ * also means a completion earned *before* that new session exists under the
+ * old ("no-session-yet") period key now, and would silently drop out of
+ * this per-current-period list even though it's still sitting unclaimed.
+ * `unclaimedSecs` is queried separately, across every period, so the
+ * client's real banked balance survives that rollover and reload correctly
+ * — see the regression this fixed: unclaimed minutes appeared to vanish
+ * the moment a new session was created.
  */
 export async function getClientCompletions(macAddress, siteId = null) {
   const client = await getClientByMac(macAddress);
-  if (!client) return [];
+  if (!client) return { completions: [], unclaimedSecs: 0 };
 
   const items = await listActiveContent(siteId);
-  const results = [];
+  const completions = [];
 
   for (const item of items) {
     const periodKey = await getCurrentPeriodKey(item.view_frequency, client.id);
@@ -61,10 +69,15 @@ export async function getClientCompletions(macAddress, siteId = null) {
        WHERE client_id = $1 AND content_item_id = $2 AND period_key = $3`,
       [client.id, item.id, periodKey]
     );
-    if (rows[0]) results.push({ content_item_id: item.id, claimed: rows[0].claimed, earn_secs: rows[0].earn_secs });
+    if (rows[0]) completions.push({ content_item_id: item.id, claimed: rows[0].claimed, earn_secs: rows[0].earn_secs });
   }
 
-  return results;
+  const { rows: unclaimedRows } = await query(
+    `SELECT COALESCE(SUM(earn_secs), 0) AS total FROM content_completions WHERE client_id = $1 AND claimed = false`,
+    [client.id]
+  );
+
+  return { completions, unclaimedSecs: Number(unclaimedRows[0].total) };
 }
 
 /**
