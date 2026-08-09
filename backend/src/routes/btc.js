@@ -21,8 +21,10 @@ export const btcRouter = Router();
  * M-Pesa flow — never trust a client-supplied duration for money that's
  * actually moving. `simulateFailure` only has an effect in that same
  * unconfigured/simulated case. `site`, like the M-Pesa flow, is checked
- * against that site's mode (an earn_only site doesn't sell packages) and
- * skipped entirely when omitted.
+ * against that site's mode (an earn_only site doesn't sell packages) and,
+ * separately, its own `btc_enabled` flag (a site can sell packages but
+ * still have BTC turned off, e.g. no local Lightning liquidity/support) —
+ * both checks are skipped entirely when `site` is omitted.
  */
 btcRouter.post("/initiate-btc-payment", async (req, res) => {
   const {
@@ -44,6 +46,9 @@ btcRouter.post("/initiate-btc-payment", async (req, res) => {
     const site = await getSite(siteId);
     if (site?.mode === "earn_only") {
       return res.status(400).json({ success: false, message: "This site does not sell packages" });
+    }
+    if (site?.btc_enabled === false) {
+      return res.status(400).json({ success: false, message: "This site does not accept BTC payments" });
     }
   }
 

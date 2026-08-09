@@ -34,9 +34,15 @@ CREATE TABLE IF NOT EXISTS sites (
   name        TEXT NOT NULL,
   mode        TEXT NOT NULL DEFAULT 'both' CHECK (mode IN ('pay_only', 'earn_only', 'both')),
   status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+  btc_enabled BOOLEAN NOT NULL DEFAULT true,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Idempotent for databases that already had sites before per-site BTC
+-- toggling existed. Defaults to true so every existing site keeps today's
+-- behaviour (BTC always offered) unless an admin explicitly turns it off.
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS btc_enabled BOOLEAN NOT NULL DEFAULT true;
 
 DROP TRIGGER IF EXISTS sites_set_updated_at ON sites;
 CREATE TRIGGER sites_set_updated_at

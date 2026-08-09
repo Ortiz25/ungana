@@ -20,7 +20,8 @@
     initiateBtcPayment,
     verifyBtcPayment,
     getUsernameForMac,
-    checkUsernameAvailable
+    checkUsernameAvailable,
+    getSite
   } from '$lib/api.js';
   import { getClientMac, getSiteId } from '$lib/device.js';
 
@@ -31,6 +32,11 @@
   let { pkg, activator, onPay, onBtcPaid, onBack } = $props();
 
   let paymentMethod = $state('mpesa'); // 'mpesa' | 'btc'
+  // Defaults true (BTC offered) so local dev — which has no captive-portal
+  // URL to read a site from — keeps seeing everything, same convention as
+  // every other site-scoped default in this app. Only actually narrows once
+  // a real site with btcEnabled === false is resolved.
+  let btcAvailable = $state(true);
 
   // Evocative brand colours for each method — not a reproduction of either
   // company's actual logo/trademark, just a tint + generic icon so each
@@ -145,6 +151,12 @@
     if (result.ok && result.data?.username) {
       username = result.data.username;
       usernameLocked = true;
+    }
+
+    const siteId = getSiteId();
+    if (siteId) {
+      const siteResult = await getSite(siteId);
+      if (siteResult.ok && siteResult.data?.site?.btcEnabled === false) btcAvailable = false;
     }
   });
 
@@ -262,21 +274,23 @@
           </p>
         </div>
       </div>
-      <button
-        type="button"
-        onclick={() => (paymentMethod = paymentMethod === 'btc' ? 'mpesa' : 'btc')}
-        class="shrink-0 flex items-center gap-1.5 text-[11px] font-bold px-3.5 py-2 rounded-full transition-all active:scale-95"
-        style="background: {otherBrand.gradient}; color: #fff; letter-spacing: 0.01em;
-          border: 1px solid rgba(255,255,255,0.35);
-          box-shadow: 0 4px 16px {otherBrand.glow}, inset 0 1px 0 rgba(255,255,255,0.3);"
-      >
-        {#if paymentMethod === 'btc'}
-          <Smartphone size={14} strokeWidth={2.25} />
-        {:else}
-          <Bitcoin size={14} strokeWidth={2.25} />
-        {/if}
-        {paymentMethod === 'btc' ? 'Pay with M-PESA' : 'Pay with BTC'}
-      </button>
+      {#if btcAvailable}
+        <button
+          type="button"
+          onclick={() => (paymentMethod = paymentMethod === 'btc' ? 'mpesa' : 'btc')}
+          class="shrink-0 flex items-center gap-1.5 text-[11px] font-bold px-3.5 py-2 rounded-full transition-all active:scale-95"
+          style="background: {otherBrand.gradient}; color: #fff; letter-spacing: 0.01em;
+            border: 1px solid rgba(255,255,255,0.35);
+            box-shadow: 0 4px 16px {otherBrand.glow}, inset 0 1px 0 rgba(255,255,255,0.3);"
+        >
+          {#if paymentMethod === 'btc'}
+            <Smartphone size={14} strokeWidth={2.25} />
+          {:else}
+            <Bitcoin size={14} strokeWidth={2.25} />
+          {/if}
+          {paymentMethod === 'btc' ? 'Pay with M-PESA' : 'Pay with BTC'}
+        </button>
+      {/if}
     </div>
     <div class="h-px mx-5 bg-white/10 mb-4"></div>
     <div class="px-5 flex flex-col gap-3 pb-2">

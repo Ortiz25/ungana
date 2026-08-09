@@ -257,7 +257,7 @@ adminRouter.get("/sites/unifi-options", async (_req, res) => {
 
 const SITE_MODES = ["pay_only", "earn_only", "both"];
 
-/** POST /api/admin/sites — Body: { id, name, mode? }. `id` must match the UniFi site's own short id (see schema.sql's comment on sites.id). */
+/** POST /api/admin/sites — Body: { id, name, mode?, btcEnabled? }. `id` must match the UniFi site's own short id (see schema.sql's comment on sites.id). */
 adminRouter.post("/sites", async (req, res) => {
   const { id, name, mode } = req.body;
   if (!id || !name) {
@@ -279,7 +279,7 @@ adminRouter.post("/sites", async (req, res) => {
   }
 });
 
-/** PATCH /api/admin/sites/:id — partial update: name, mode, status. */
+/** PATCH /api/admin/sites/:id — partial update: name, mode, status, btcEnabled. */
 adminRouter.patch("/sites/:id", async (req, res) => {
   if (req.body.mode !== undefined && !SITE_MODES.includes(req.body.mode)) {
     return res.status(400).json({ success: false, message: `mode must be one of ${SITE_MODES.join(", ")}` });

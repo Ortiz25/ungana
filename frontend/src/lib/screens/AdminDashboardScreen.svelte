@@ -3,7 +3,7 @@
   import {
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
     ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
-    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft
+    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft, Bitcoin
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import MultiLineChartMini from '$lib/components/MultiLineChartMini.svelte';
@@ -528,7 +528,7 @@
   const SITE_MODE_LABEL = Object.fromEntries(SITE_MODES.map((m) => [m.id, m.label]));
 
   function freshSiteDraft() {
-    return { id: '', name: '', mode: 'both' };
+    return { id: '', name: '', mode: 'both', btcEnabled: true };
   }
   let showSiteForm = $state(false);
   let siteDraft = $state(freshSiteDraft());
@@ -565,7 +565,8 @@
     const result = await adminCreateSite(token, {
       id: siteDraft.id.trim(),
       name: siteDraft.name.trim(),
-      mode: siteDraft.mode
+      mode: siteDraft.mode,
+      btcEnabled: siteDraft.btcEnabled
     });
     siteSaving = false;
 
@@ -586,6 +587,11 @@
 
   async function setSiteMode(s, mode) {
     await adminUpdateSite(token, s.id, { mode });
+    await loadSites();
+  }
+
+  async function toggleSiteBtc(s) {
+    await adminUpdateSite(token, s.id, { btcEnabled: !s.btc_enabled });
     await loadSites();
   }
 
@@ -1718,6 +1724,18 @@
               {/each}
             </div>
           </div>
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">BTC payments</p>
+            <button
+              type="button"
+              onclick={() => (siteDraft.btcEnabled = !siteDraft.btcEnabled)}
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold"
+              style="background: {siteDraft.btcEnabled ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {siteDraft.btcEnabled ? '#fff' : '#C4DAC0'};"
+            >
+              <Bitcoin size={12} />
+              {siteDraft.btcEnabled ? 'Enabled' : 'Disabled'}
+            </button>
+          </div>
 
           {#if siteFormError}
             <p class="text-xs text-[#E08A6A]">{siteFormError}</p>
@@ -1777,6 +1795,18 @@
               style="background: {armedDeleteSiteId === s.id ? '#B85038' : 'rgba(192,97,74,0.15)'}; color: {armedDeleteSiteId === s.id ? '#fff' : '#E08A6A'};"
             >
               <X size={10} />{armedDeleteSiteId === s.id ? 'Confirm delete' : 'Delete'}
+            </button>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] text-[#96B496]">BTC payments</span>
+            <button
+              type="button"
+              onclick={() => toggleSiteBtc(s)}
+              class="flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold"
+              style="background: {s.btc_enabled ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {s.btc_enabled ? '#fff' : '#C4DAC0'};"
+            >
+              <Bitcoin size={11} />
+              {s.btc_enabled ? 'Enabled' : 'Disabled'}
             </button>
           </div>
         </div>
