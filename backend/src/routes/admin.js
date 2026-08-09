@@ -11,7 +11,7 @@ import { createActivator, adminListActivators, updateActivator } from "../servic
 import { createCoordinator, adminListCoordinators, updateCoordinator } from "../services/coordinators.js";
 import { uploadContentFile } from "../services/uploads.js";
 import { adminGetSettings, setEarnConnectThresholdSecs, setDefaultActivatorCommissionRate } from "../services/settings.js";
-import { getAdminAnalytics, getContentItemAnalytics } from "../services/analytics.js";
+import { getAdminAnalytics, getContentItemAnalytics, getPurchasesBySiteSeries } from "../services/analytics.js";
 import { adminListSites, createSite, updateSite, deleteSite, listUnifiSiteOptions } from "../services/sites.js";
 import { adminListPackages, updatePackage } from "../services/catalog.js";
 
@@ -388,6 +388,27 @@ adminRouter.get("/analytics", async (_req, res) => {
     res.json({ success: true, analytics });
   } catch (error) {
     console.error("❌ Admin analytics error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+const SITE_TIMELINE_GRANULARITIES = ["day", "week", "month"];
+
+/**
+ * GET /api/admin/analytics/purchases-by-site?granularity=day|week|month&site=<id>
+ * The "View more" drill-down behind the dashboard's compact 14-day chart —
+ * same per-site series shape, with a chosen bucket size and an optional
+ * single-site filter.
+ */
+adminRouter.get("/analytics/purchases-by-site", async (req, res) => {
+  const granularity = SITE_TIMELINE_GRANULARITIES.includes(req.query.granularity) ? req.query.granularity : "day";
+  const siteId = req.query.site || null;
+
+  try {
+    const timeline = await getPurchasesBySiteSeries({ granularity, siteId });
+    res.json({ success: true, timeline });
+  } catch (error) {
+    console.error("❌ Admin purchases-by-site error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });

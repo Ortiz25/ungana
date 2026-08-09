@@ -3,7 +3,7 @@
   import {
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
     ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
-    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw
+    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import MultiLineChartMini from '$lib/components/MultiLineChartMini.svelte';
@@ -12,6 +12,7 @@
     adminGetActivators, adminCreateActivator, adminUpdateActivator,
     adminGetCoordinators, adminCreateCoordinator, adminUpdateCoordinator,
     adminUploadContentFile, adminGetSettings, adminUpdateSettings, adminGetAnalytics, adminGetContentAnalytics,
+    adminGetPurchasesBySite,
     adminGetSites, adminCreateSite, adminUpdateSite, adminDeleteSite, adminGetUnifiSiteOptions,
     adminGetPackages, adminUpdatePackage
   } from '$lib/api.js';
@@ -107,6 +108,56 @@
   const maxContentImpressions = $derived(
     Math.max(1, ...(analytics?.earned.contentOverview.map((c) => c.impressions) ?? [1]))
   );
+
+  // ── Purchases by Site — detail view ("View more" behind the compact chart) ──
+  const SITE_TIMELINE_GRANULARITIES = [
+    { id: 'day', label: 'Day' },
+    { id: 'week', label: 'Week' },
+    { id: 'month', label: 'Month' }
+  ];
+  let showSiteDetail = $state(false);
+  let siteDetailGranularity = $state('day');
+  let siteDetailSiteId = $state(''); // '' = every site
+  let siteDetailData = $state(null);
+  let siteDetailLoading = $state(false);
+
+  async function loadSiteDetail() {
+    siteDetailLoading = true;
+    const r = await adminGetPurchasesBySite(token, {
+      granularity: siteDetailGranularity,
+      siteId: siteDetailSiteId || undefined
+    });
+    if (r.ok) siteDetailData = r.data.timeline;
+    siteDetailLoading = false;
+  }
+
+  function openSiteDetail() {
+    showSiteDetail = true;
+  }
+
+  // Re-fetches whenever the detail view is open and either filter changes
+  // — covers the initial load (showSiteDetail flipping true) and every
+  // subsequent granularity/site pill click in one place.
+  $effect(() => {
+    if (!showSiteDetail) return;
+    siteDetailGranularity;
+    siteDetailSiteId;
+    loadSiteDetail();
+  });
+
+  // Site totals for the selected window, sorted by revenue — the "more
+  // than just the chart" part of "View more".
+  const siteDetailTotals = $derived.by(() => {
+    if (!siteDetailData) return [];
+    return [...siteDetailData.series]
+      .map((s) => ({
+        siteId: s.siteId,
+        siteName: s.siteName,
+        revenueKes: s.data.reduce((sum, v) => sum + v, 0),
+        sessions: s.counts.reduce((sum, v) => sum + v, 0)
+      }))
+      .sort((a, b) => b.revenueKes - a.revenueKes);
+  });
 
   // Per-content drill-down (impressions/completions/survey answer
   // breakdown) — expanded inline under the clicked row in Content Overview.
@@ -1331,19 +1382,95 @@
       </div>
     {:else if tab === 'analytics'}
       <div class="flex items-center justify-between px-1 mb-1">
-        <h2 class="text-sm font-bold text-[#1D3C2A]">Analytics overview</h2>
+        {#if showSiteDetail}
+          <button
+            onclick={() => (showSiteDetail = false)}
+            class="flex items-center gap-1 text-sm font-bold text-[#1D3C2A]"
+          >
+            <ChevronLeft size={16} /> Purchases by Site
+          </button>
+        {:else}
+          <h2 class="text-sm font-bold text-[#1D3C2A]">Analytics overview</h2>
+        {/if}
         <button
-          onclick={loadAnalytics}
-          disabled={analyticsLoading}
+          onclick={showSiteDetail ? loadSiteDetail : loadAnalytics}
+          disabled={showSiteDetail ? siteDetailLoading : analyticsLoading}
           class="flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-full transition-all active:scale-95"
-          style="background: rgba(29,60,42,0.1); color: #1D3C2A; opacity: {analyticsLoading ? 0.6 : 1};"
+          style="background: rgba(29,60,42,0.1); color: #1D3C2A; opacity: {(showSiteDetail ? siteDetailLoading : analyticsLoading) ? 0.6 : 1};"
         >
-          <RefreshCw size={12} class={analyticsLoading ? 'animate-spin' : ''} />
+          <RefreshCw size={12} class={(showSiteDetail ? siteDetailLoading : analyticsLoading) ? 'animate-spin' : ''} />
           Refresh
         </button>
       </div>
 
-      {#if analyticsLoading}
+      {#if showSiteDetail}
+        <div class="flex gap-1.5 flex-wrap px-1">
+          {#each SITE_TIMELINE_GRANULARITIES as g (g.id)}
+            <button
+              type="button"
+              onclick={() => (siteDetailGranularity = g.id)}
+              class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+              style="background: {siteDetailGranularity === g.id ? '#C45C38' : 'rgba(29,60,42,0.1)'}; color: {siteDetailGranularity === g.id ? '#fff' : '#1D3C2A'};"
+            >
+              {g.label}
+            </button>
+          {/each}
+        </div>
+        <div class="flex gap-1.5 flex-wrap px-1">
+          <button
+            type="button"
+            onclick={() => (siteDetailSiteId = '')}
+            class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+            style="background: {siteDetailSiteId === '' ? '#C45C38' : 'rgba(29,60,42,0.1)'}; color: {siteDetailSiteId === '' ? '#fff' : '#1D3C2A'};"
+          >
+            All sites
+          </button>
+          {#each sites as s (s.id)}
+            <button
+              type="button"
+              onclick={() => (siteDetailSiteId = s.id)}
+              class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+              style="background: {siteDetailSiteId === s.id ? '#C45C38' : 'rgba(29,60,42,0.1)'}; color: {siteDetailSiteId === s.id ? '#fff' : '#1D3C2A'};"
+            >
+              {s.name}
+            </button>
+          {/each}
+        </div>
+
+        {#if siteDetailLoading && !siteDetailData}
+          <div class="flex items-center justify-center py-12">
+            <div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div>
+          </div>
+        {:else if siteDetailData}
+          <div class="rounded-2xl overflow-hidden shadow-md px-4 pt-3.5 pb-4" style="background: #2E5A3E; opacity: {siteDetailLoading ? 0.6 : 1};">
+            {#if siteDetailData.series.length === 0}
+              <p class="text-xs text-[#96B496] text-center py-8">No purchases in this window.</p>
+            {:else}
+              <MultiLineChartMini
+                days={siteDetailData.periods}
+                series={siteDetailData.series}
+                height={200}
+                showGrid
+                showYLabels
+              />
+            {/if}
+          </div>
+
+          {#if siteDetailTotals.length > 0}
+            <div class="rounded-2xl overflow-hidden shadow-md" style="background: #2E5A3E;">
+              <div class="px-4 pt-3.5 pb-2">
+                <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Totals for this window</p>
+              </div>
+              {#each siteDetailTotals as t, i (t.siteId ?? i)}
+                <div class="flex items-center justify-between px-4 py-2.5" style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.1)' : 'none'};">
+                  <span class="text-xs text-[#E8D4B0]">{t.siteName}</span>
+                  <span class="text-xs text-[#96B496]">{t.sessions} sessions · <span class="font-bold" style="color: #C45C38;">KES {t.revenueKes.toLocaleString()}</span></span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {/if}
+      {:else if analyticsLoading}
         <div class="flex items-center justify-center py-12">
           <div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div>
         </div>
@@ -1484,7 +1611,17 @@
 
         {#if analytics.purchased.bySiteTimeline?.series.length > 0}
           <div class="rounded-2xl overflow-hidden shadow-md px-4 pt-3.5 pb-4" style="background: #2E5A3E;">
-            <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider mb-2">Purchases by Site (last 14 days)</p>
+            <div class="flex items-center justify-between mb-2">
+              <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Purchases by Site (last 14 days)</p>
+              <button
+                type="button"
+                onclick={openSiteDetail}
+                class="text-[11px] font-bold shrink-0"
+                style="color: #C45C38;"
+              >
+                View more →
+              </button>
+            </div>
             <MultiLineChartMini
               days={analytics.purchased.bySiteTimeline.days}
               series={analytics.purchased.bySiteTimeline.series}

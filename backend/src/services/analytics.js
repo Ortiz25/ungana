@@ -7,6 +7,23 @@ import { adminGetContentItem } from "./content.js";
  * so the route stays a thin pass-through. All counts are computed live off
  * `content_items`/`content_completions`/`sessions`; nothing is cached.
  */
+
+/**
+ * Formats a Postgres `date`-typed column's JS Date back to 'YYYY-MM-DD'.
+ * node-postgres parses `date` values as local midnight of that calendar
+ * date — NOT UTC midnight — so `.toISOString()` (which always converts to
+ * UTC first) silently rolls the date back a day whenever the machine's
+ * local timezone is ahead of UTC (e.g. Africa/Nairobi, UTC+3: local
+ * midnight Aug 9 is 21:00 UTC on Aug 8). Reading the LOCAL getters instead
+ * recovers exactly the calendar date Postgres sent, regardless of offset.
+ */
+function formatDbDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 const SITE_TIMELINE_DAYS = 14;
 
 /**
@@ -49,7 +66,7 @@ async function getPurchasesBySiteTimeline() {
     ),
   ]);
 
-  const days = unassignedResult.rows.map((r) => r.day.toISOString().slice(0, 10));
+  const days = unassignedResult.rows.map((r) => formatDbDate(r.day));
 
   const bySite = new Map();
   for (const row of perSiteResult.rows) {
@@ -64,6 +81,106 @@ async function getPurchasesBySiteTimeline() {
   }
 
   return { days, series };
+}
+
+// Bucket unit -> how many buckets back to show and the matching interval
+// literal. Whitelisted (not built from caller input directly) since the
+// unit gets interpolated into date_trunc()/interval literals, which can't
+// be parameterized with a placeholder in Postgres.
+const GRANULARITY_CONFIG = {
+  day: { unit: "day", count: 30 },
+  week: { unit: "week", count: 12 },
+  month: { unit: "month", count: 12 },
+};
+
+/**
+ * The "View more" detail behind the dashboard's compact 14-day chart —
+ * same per-site zero-filled shape, but with a caller-chosen bucket size
+ * (day/week/month) and an optional single-site filter, for the admin
+ * Analytics tab's drill-down view. `granularity` must be a key of
+ * GRANULARITY_CONFIG (validated by the route before this is called);
+ * `siteId` narrows to one site's series when given, otherwise every site
+ * (plus "no site", if it has any revenue in-window) is returned.
+ */
+export async function getPurchasesBySiteSeries({ granularity = "day", siteId = null } = {}) {
+  const config = GRANULARITY_CONFIG[granularity] ?? GRANULARITY_CONFIG.day;
+  const { unit, count } = config;
+  // Cast to plain `date` right in the bucket list — date_trunc(..., now())
+  // truncates in the session's local timezone (Africa/Nairobi, UTC+3) but
+  // stays a timestamptz, so serializing it straight to JS/ISO shifts it
+  // back a day once node-postgres converts to UTC. `date` has no time/zone
+  // component, so it round-trips exactly — same reasoning as the working
+  // 14-day chart's CURRENT_DATE. The join below casts se.authorized_at's
+  // truncation the same way so the comparison still lines up.
+  const bucketsCte = `
+    WITH buckets AS (
+      SELECT generate_series(
+        date_trunc('${unit}', now()) - INTERVAL '${count - 1} ${unit}',
+        date_trunc('${unit}', now()),
+        INTERVAL '1 ${unit}'
+      )::date AS bucket
+    )
+  `;
+
+  // Bucket list queried on its own, independent of siteId/sessions, so the
+  // period labels are always the full requested window even when the
+  // site/data joins below come back empty (e.g. a site with zero purchases,
+  // or — belt and braces — a siteId that doesn't exist).
+  const [bucketsResult, perSiteResult, unassignedResult] = await Promise.all([
+    query(`${bucketsCte} SELECT bucket FROM buckets ORDER BY bucket`),
+    query(
+      `${bucketsCte}
+       SELECT s.id AS site_id, s.name AS site_name, b.bucket,
+              COALESCE(SUM(se.amount_kes) FILTER (WHERE se.id IS NOT NULL), 0) AS revenue,
+              COUNT(se.id) FILTER (WHERE se.id IS NOT NULL) AS count
+       FROM sites s
+       CROSS JOIN buckets b
+       LEFT JOIN sessions se
+         ON se.site_id = s.id AND se.source = 'purchase' AND se.payment_status = 'success'
+         AND date_trunc('${unit}', se.authorized_at)::date = b.bucket
+       WHERE ($1::text IS NULL OR s.id = $1)
+       GROUP BY s.id, s.name, b.bucket
+       ORDER BY s.id, b.bucket`,
+      [siteId]
+    ),
+    query(
+      `${bucketsCte}
+       SELECT b.bucket,
+              COALESCE(SUM(se.amount_kes) FILTER (WHERE se.id IS NOT NULL), 0) AS revenue,
+              COUNT(se.id) FILTER (WHERE se.id IS NOT NULL) AS count
+       FROM buckets b
+       LEFT JOIN sessions se
+         ON se.site_id IS NULL AND se.source = 'purchase' AND se.payment_status = 'success'
+         AND date_trunc('${unit}', se.authorized_at)::date = b.bucket
+       WHERE $1::text IS NULL
+       GROUP BY b.bucket
+       ORDER BY b.bucket`,
+      [siteId]
+    ),
+  ]);
+
+  const periods = bucketsResult.rows.map((r) => formatDbDate(r.bucket));
+
+  const bySite = new Map();
+  for (const row of perSiteResult.rows) {
+    if (!bySite.has(row.site_id)) {
+      bySite.set(row.site_id, { siteId: row.site_id, siteName: row.site_name, data: [], counts: [] });
+    }
+    const s = bySite.get(row.site_id);
+    s.data.push(Number(row.revenue));
+    s.counts.push(Number(row.count));
+  }
+  const series = [...bySite.values()];
+
+  if (!siteId) {
+    const unassignedData = unassignedResult.rows.map((r) => Number(r.revenue));
+    const unassignedCounts = unassignedResult.rows.map((r) => Number(r.count));
+    if (unassignedData.some((v) => v > 0)) {
+      series.push({ siteId: null, siteName: "No site (unassigned)", data: unassignedData, counts: unassignedCounts });
+    }
+  }
+
+  return { granularity, periods, series };
 }
 
 export async function getAdminAnalytics() {

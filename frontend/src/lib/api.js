@@ -299,6 +299,12 @@ export function adminGetContentAnalytics(token, id) {
   return request(`/admin/analytics/content/${encodeURIComponent(id)}`, authed(token));
 }
 
+/** GET /api/admin/analytics/purchases-by-site?granularity=day|week|month&site=<id> — the "View more" drill-down behind the compact chart. */
+export function adminGetPurchasesBySite(token, { granularity, siteId } = {}) {
+  const params = new URLSearchParams({ granularity: granularity || 'day', ...(siteId ? { site: siteId } : {}) });
+  return request(`/admin/analytics/purchases-by-site?${params}`, authed(token));
+}
+
 // ── Sites ────────────────────────────────────────────────────────────────
 
 /** GET /api/admin/sites — every site (including suspended). */
