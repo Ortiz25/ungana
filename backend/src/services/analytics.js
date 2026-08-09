@@ -7,6 +7,65 @@ import { adminGetContentItem } from "./content.js";
  * so the route stays a thin pass-through. All counts are computed live off
  * `content_items`/`content_completions`/`sessions`; nothing is cached.
  */
+const SITE_TIMELINE_DAYS = 14;
+
+/**
+ * Daily purchase revenue for the last SITE_TIMELINE_DAYS days, one series
+ * per site (zero-filled, via CROSS JOIN so a quiet day still gets a point
+ * instead of a gap), plus one extra series for sessions with no site_id —
+ * pre-multi-site history and local-dev sessions, which never carry a real
+ * site. Left as a real series (not dropped) so the admin can see that
+ * volume rather than have it silently vanish from the total; the frontend
+ * can choose to hide it if it's all zero.
+ */
+async function getPurchasesBySiteTimeline() {
+  const [perSiteResult, unassignedResult] = await Promise.all([
+    query(
+      `WITH days AS (
+         SELECT generate_series(CURRENT_DATE - INTERVAL '${SITE_TIMELINE_DAYS - 1} days', CURRENT_DATE, INTERVAL '1 day')::date AS day
+       )
+       SELECT s.id AS site_id, s.name AS site_name, d.day,
+              COALESCE(SUM(se.amount_kes) FILTER (WHERE se.id IS NOT NULL), 0) AS revenue
+       FROM sites s
+       CROSS JOIN days d
+       LEFT JOIN sessions se
+         ON se.site_id = s.id AND se.source = 'purchase' AND se.payment_status = 'success'
+         AND date_trunc('day', se.authorized_at) = d.day
+       GROUP BY s.id, s.name, d.day
+       ORDER BY s.id, d.day`
+    ),
+    query(
+      `WITH days AS (
+         SELECT generate_series(CURRENT_DATE - INTERVAL '${SITE_TIMELINE_DAYS - 1} days', CURRENT_DATE, INTERVAL '1 day')::date AS day
+       )
+       SELECT d.day,
+              COALESCE(SUM(se.amount_kes) FILTER (WHERE se.id IS NOT NULL), 0) AS revenue
+       FROM days d
+       LEFT JOIN sessions se
+         ON se.site_id IS NULL AND se.source = 'purchase' AND se.payment_status = 'success'
+         AND date_trunc('day', se.authorized_at) = d.day
+       GROUP BY d.day
+       ORDER BY d.day`
+    ),
+  ]);
+
+  const days = unassignedResult.rows.map((r) => r.day.toISOString().slice(0, 10));
+
+  const bySite = new Map();
+  for (const row of perSiteResult.rows) {
+    if (!bySite.has(row.site_id)) bySite.set(row.site_id, { siteId: row.site_id, siteName: row.site_name, data: [] });
+    bySite.get(row.site_id).data.push(Number(row.revenue));
+  }
+  const series = [...bySite.values()];
+
+  const unassignedData = unassignedResult.rows.map((r) => Number(r.revenue));
+  if (unassignedData.some((v) => v > 0)) {
+    series.push({ siteId: null, siteName: "No site (unassigned)", data: unassignedData });
+  }
+
+  return { days, series };
+}
+
 export async function getAdminAnalytics() {
   const [
     impressionsResult,
@@ -14,11 +73,13 @@ export async function getAdminAnalytics() {
     engagedClientsResult,
     earnedSecsResult,
     earnedSessionsResult,
+    earnedActiveNowResult,
     contentOverviewResult,
     purchasedResult,
     activeNowResult,
     byPackageResult,
     byProviderResult,
+    bySiteTimeline,
   ] = await Promise.all([
     query(`SELECT COALESCE(SUM(impressions), 0) AS total FROM content_items`),
     query(`SELECT COUNT(*) AS total FROM content_completions`),
@@ -29,6 +90,7 @@ export async function getAdminAnalytics() {
        FROM content_completions`
     ),
     query(`SELECT COUNT(*) AS total FROM sessions WHERE source = 'earned' AND payment_status = 'success'`),
+    query(`SELECT COUNT(*) AS total FROM sessions WHERE source = 'earned' AND payment_status = 'success' AND expires_at > now()`),
     // Every content item, not just top performers — the admin panel's
     // "overview for all contents" table, one row per item with a link into
     // getContentItemAnalytics() for the survey-answer-level drill-down.
@@ -43,7 +105,11 @@ export async function getAdminAnalytics() {
       `SELECT COUNT(*) AS sessions, COALESCE(SUM(amount_kes), 0) AS revenue, COALESCE(SUM(commission_kes), 0) AS commission
        FROM sessions WHERE source = 'purchase' AND payment_status = 'success'`
     ),
-    query(`SELECT COUNT(*) AS total FROM sessions WHERE payment_status = 'success' AND expires_at > now()`),
+    // Scoped to source = 'purchase' — previously this counted every active
+    // session regardless of source, silently folding Watch & Earn grants
+    // into a stat card labelled "Purchases". Earned gets its own count now
+    // (earnedActiveNowResult above) instead of being invisibly merged in.
+    query(`SELECT COUNT(*) AS total FROM sessions WHERE source = 'purchase' AND payment_status = 'success' AND expires_at > now()`),
     query(
       `SELECT package_id, COUNT(*) AS count, COALESCE(SUM(amount_kes), 0) AS revenue
        FROM sessions WHERE source = 'purchase' AND payment_status = 'success'
@@ -55,6 +121,7 @@ export async function getAdminAnalytics() {
        WHERE source = 'purchase' AND payment_status = 'success' AND payment_provider IS NOT NULL
        GROUP BY payment_provider ORDER BY revenue DESC`
     ),
+    getPurchasesBySiteTimeline(),
   ]);
 
   return {
@@ -65,6 +132,7 @@ export async function getAdminAnalytics() {
       totalEarnedSecs: Number(earnedSecsResult.rows[0].total),
       totalClaimedSecs: Number(earnedSecsResult.rows[0].claimed),
       sessionsGrantedViaEarning: Number(earnedSessionsResult.rows[0].total),
+      activeSessionsNow: Number(earnedActiveNowResult.rows[0].total),
       contentOverview: contentOverviewResult.rows.map((r) => ({
         id: r.id,
         title: r.title,
@@ -89,6 +157,7 @@ export async function getAdminAnalytics() {
         count: Number(r.count),
         revenueKes: Number(r.revenue),
       })),
+      bySiteTimeline,
     },
   };
 }

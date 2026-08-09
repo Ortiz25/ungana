@@ -55,8 +55,18 @@ const PACKAGE_SITE_IDS_SUBQUERY = `
   ) AS site_ids
 `;
 
+/**
+ * Excludes 'earned' — it's not a real package, just a durable packages.id
+ * row that sessions.package_id can point to for watch-to-earn grants (see
+ * schema.sql's comment on it). It's permanently is_active = false so the
+ * public catalogue never lists it either; showing it here would just let an
+ * admin toggle it "active" or assign it to sites with no effect other than
+ * confusion, since nothing ever checks its price/duration/site assignment.
+ */
 export async function adminListPackages() {
-  const { rows } = await query(`SELECT p.*, ${PACKAGE_SITE_IDS_SUBQUERY} FROM packages p ORDER BY p.price_kes ASC`);
+  const { rows } = await query(
+    `SELECT p.*, ${PACKAGE_SITE_IDS_SUBQUERY} FROM packages p WHERE p.id != 'earned' ORDER BY p.price_kes ASC`
+  );
   return rows;
 }
 

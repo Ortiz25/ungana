@@ -6,6 +6,7 @@
     BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
+  import MultiLineChartMini from '$lib/components/MultiLineChartMini.svelte';
   import {
     adminGetContent, adminCreateContent, adminUpdateContent,
     adminGetActivators, adminCreateActivator, adminUpdateActivator,
@@ -571,6 +572,12 @@
     const current = pkg.site_ids ?? [];
     const siteIds = current.includes(siteId) ? current.filter((id) => id !== siteId) : [...current, siteId];
     await adminUpdatePackage(token, pkg.id, { siteIds });
+    await loadPackages();
+  }
+
+  /** Clears a package's site restriction back to [] ("visible everywhere") — the "All sites" pill's click handler. */
+  async function clearPackageSites(pkg) {
+    await adminUpdatePackage(token, pkg.id, { siteIds: [] });
     await loadPackages();
   }
 
@@ -1349,11 +1356,12 @@
           </div>
           <h3 class="text-sm font-bold text-[#1D3C2A]">Watch & Earn</h3>
         </div>
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+        <div class="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
           {@render statCard(Eye, 'Impressions', analytics.earned.totalImpressions.toLocaleString(), '#C45C38')}
           {@render statCard(CheckCircle2, 'Completions', analytics.earned.totalCompletions.toLocaleString(), '#4E8050')}
           {@render statCard(Users, 'Clients Engaged', analytics.earned.uniqueClientsEngaged.toLocaleString(), '#5B8ED6')}
           {@render statCard(Award, 'Granted Sessions', analytics.earned.sessionsGrantedViaEarning.toLocaleString(), '#CC8830')}
+          {@render statCard(Radio, 'Active Now', analytics.earned.activeSessionsNow.toLocaleString(), '#5B8ED6')}
         </div>
 
         <div class="grid md:grid-cols-2 gap-3 items-start">
@@ -1473,6 +1481,19 @@
           {@render statCard(Wallet, 'Revenue', `KES ${analytics.purchased.totalRevenueKes.toLocaleString()}`, '#C45C38')}
           {@render statCard(Award, 'Commission Paid', `KES ${analytics.purchased.totalCommissionKes.toLocaleString()}`, '#CC8830')}
         </div>
+
+        {#if analytics.purchased.bySiteTimeline?.series.length > 0}
+          <div class="rounded-2xl overflow-hidden shadow-md px-4 pt-3.5 pb-4" style="background: #2E5A3E;">
+            <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider mb-2">Purchases by Site (last 14 days)</p>
+            <MultiLineChartMini
+              days={analytics.purchased.bySiteTimeline.days}
+              series={analytics.purchased.bySiteTimeline.series}
+              height={160}
+              showGrid
+              showYLabels
+            />
+          </div>
+        {/if}
 
         <div class="grid md:grid-cols-2 gap-3 items-start">
           {#if analytics.purchased.byPackage.length > 0}
@@ -1645,9 +1666,14 @@
           <div>
             <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Visible on sites</p>
             <div class="flex gap-1.5 flex-wrap">
-              {#if (pkg.site_ids ?? []).length === 0}
-                <span class="px-3 py-1.5 rounded-full text-[11px] font-semibold" style="background: rgba(196,92,56,0.28); color: #C45C38;">All sites</span>
-              {/if}
+              <button
+                type="button"
+                onclick={() => clearPackageSites(pkg)}
+                class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                style="background: {(pkg.site_ids ?? []).length === 0 ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {(pkg.site_ids ?? []).length === 0 ? '#fff' : '#C4DAC0'};"
+              >
+                All sites
+              </button>
               {#each sites as s (s.id)}
                 {@const selected = (pkg.site_ids ?? []).includes(s.id)}
                 <button
