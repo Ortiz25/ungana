@@ -9,7 +9,7 @@ import {
 } from "../services/content.js";
 import { createActivator, adminListActivators, updateActivator } from "../services/activators.js";
 import { createCoordinator, adminListCoordinators, updateCoordinator } from "../services/coordinators.js";
-import { uploadContentFile } from "../services/uploads.js";
+import { uploadContentFile, optimizeUploadedVideo } from "../services/uploads.js";
 import { adminGetSettings, setEarnConnectThresholdSecs, setDefaultActivatorCommissionRate } from "../services/settings.js";
 import { getAdminAnalytics, getContentItemAnalytics, getPurchasesBySiteSeries } from "../services/analytics.js";
 import { adminListSites, createSite, updateSite, deleteSite, listUnifiSiteOptions } from "../services/sites.js";
@@ -122,12 +122,16 @@ adminRouter.delete("/content/:id", async (req, res) => {
  * path relative to the backend's own origin, same convention as API_BASE in
  * the frontend's api.js, which resolves it to a full URL for dev vs. prod.
  * Images and short video clips only (see services/uploads.js for limits).
+ * Video files are re-encoded (capped resolution/bitrate, +faststart) before
+ * responding — see optimizeUploadedVideo — so this can take noticeably
+ * longer than a plain file save for a multi-minute clip.
  */
 adminRouter.post("/content/upload", (req, res) => {
-  uploadContentFile(req, res, (err) => {
+  uploadContentFile(req, res, async (err) => {
     if (err) return res.status(400).json({ success: false, message: err.message });
     if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
-    res.json({ success: true, url: `/uploads/${req.file.filename}` });
+    const filename = await optimizeUploadedVideo(req.file);
+    res.json({ success: true, url: `/uploads/${filename}` });
   });
 });
 

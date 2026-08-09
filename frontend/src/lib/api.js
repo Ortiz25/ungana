@@ -238,7 +238,10 @@ export function adminDeleteContent(token, id) {
 export async function adminUploadContentFile(token, file) {
   const formData = new FormData();
   formData.append('file', file);
-  const result = await request('/admin/content/upload', { method: 'POST', body: formData, timeoutMs: 60000, ...authed(token) });
+  // 4 minutes — video uploads are now transcoded server-side before the
+  // response comes back (see optimizeUploadedVideo), which can take
+  // noticeably longer than a plain file save for a multi-minute clip.
+  const result = await request('/admin/content/upload', { method: 'POST', body: formData, timeoutMs: 240000, ...authed(token) });
   if (result.ok && result.data?.url) {
     return { ...result, data: { ...result.data, url: `${BACKEND_ORIGIN}${result.data.url}` } };
   }

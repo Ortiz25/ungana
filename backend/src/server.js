@@ -70,7 +70,10 @@ app.use("/api/content", contentRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/sites", sitesRouter);
-app.use("/uploads", express.static(UPLOADS_DIR));
+// maxAge is safe at a long value here — every upload gets a fresh random
+// UUID filename (see uploads.js), so a URL is never reused for different
+// content; caching one aggressively can never serve stale bytes for it.
+app.use("/uploads", express.static(UPLOADS_DIR, { maxAge: "30d", immutable: true }));
 
 // ── Background retry sweep ────────────────────────────────────────────────
 // Re-attempts router authorisation for payments that succeeded but whose

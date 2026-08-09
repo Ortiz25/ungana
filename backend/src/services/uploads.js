@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, unlink, statSync } from "fs";
 import { randomUUID } from "crypto";
 import { extname, dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { execFile } from "child_process";
 import multer from "multer";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -53,3 +54,91 @@ export const uploadContentFile = multer({
     cb(null, true);
   },
 }).single("file");
+
+/**
+ * Re-encodes an uploaded video down to something a client on slow
+ * captive-portal WiFi can actually load quickly: capped at 1280x720
+ * (never upscaled — the `min(1280,iw)` / `min(720,ih)` guards that),
+ * moderate H.264 quality (CRF 26, a fast preset since this runs inline on
+ * the upload request, not as a background job), AAC audio at 128k, and
+ * `+faststart` so the player can begin playback after the first chunk
+ * instead of needing the whole file downloaded first (the moov atom ends
+ * up at the front of the file rather than wherever the source export tool
+ * happened to leave it). Always outputs .mp4 regardless of the source
+ * container (including a video/webm upload) for one consistent, universally
+ * playable format.
+ *
+ * Requires the `ffmpeg` binary on PATH. This is a real deploy requirement,
+ * not optional — see README/deploy notes. If it's missing (ENOENT) or the
+ * encode otherwise fails, the caller falls back to serving the original
+ * upload untouched rather than failing the whole upload over what's meant
+ * to be a size/speed optimization, not a hard requirement for content to work.
+ */
+function transcodeVideo(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "ffmpeg",
+      [
+        "-y",
+        "-i", inputPath,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "26",
+        // Caps the ceiling regardless of what CRF's per-scene adaptive
+        // choice would otherwise pick — without this, a high-complexity
+        // (busy/high-motion) source can end up with CRF choosing a bitrate
+        // as high as or higher than a source that was already reasonably
+        // encoded, defeating the point. bufsize = 2x maxrate is the usual
+        // rule of thumb for how bursty the rate control is allowed to be.
+        "-maxrate", "1200k",
+        "-bufsize", "2400k",
+        "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        outputPath,
+      ],
+      { timeout: 4 * 60 * 1000 }, // generous, but bounded — never hang the request forever on a bad input
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
+}
+
+/**
+ * Runs transcodeVideo for a just-uploaded video file and, on success,
+ * deletes the original raw upload — the transcoded .mp4 becomes the only
+ * copy, so nothing is left behind for cleanup to worry about. Returns the
+ * filename to actually serve (the transcoded one, or the original if
+ * transcoding wasn't attempted/failed/didn't actually help). Never throws
+ * — a transcode failure is logged and the original upload is kept as-is.
+ *
+ * Also never REGRESSES size: a source that was already well-compressed
+ * (e.g. exported by another tool at a similar or lower bitrate than our
+ * own target) can end up larger after re-encoding at a fast preset than it
+ * started — in that case the original is kept instead of "optimizing" it
+ * into something bigger.
+ */
+export async function optimizeUploadedVideo(file) {
+  if (!file.mimetype.startsWith("video/")) return file.filename;
+
+  const inputPath = join(UPLOADS_DIR, file.filename);
+  const outputFilename = `${randomUUID()}.mp4`;
+  const outputPath = join(UPLOADS_DIR, outputFilename);
+
+  try {
+    await transcodeVideo(inputPath, outputPath);
+
+    if (statSync(outputPath).size >= statSync(inputPath).size) {
+      unlink(outputPath, () => {});
+      return file.filename;
+    }
+
+    unlink(inputPath, () => {}); // best-effort — an orphaned raw upload is harmless clutter, not worth failing over
+    return outputFilename;
+  } catch (err) {
+    console.error("⚠️ Video transcode failed, serving original upload as-is:", err.message);
+    unlink(outputPath, () => {}); // clean up any partial output ffmpeg left behind
+    return file.filename;
+  }
+}
