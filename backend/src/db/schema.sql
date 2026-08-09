@@ -384,9 +384,21 @@ WHERE type = 'survey'
 -- trusted for reward crediting). `earn_secs` is snapshotted at completion
 -- time so a later catalogue edit can't retroactively change what an
 -- already-earned reward is worth — same reasoning as sessions.commission_kes
--- being frozen at authorisation. `claimed` / `claimed_session_id` track
--- whether this completion's reward has already been folded into a granted
--- session, so a client can't claim the same completion twice.
+-- being frozen at authorisation, and is NEVER decremented — it's the
+-- permanent historical record of what this completion was worth, which
+-- admin analytics' lifetime "earned" totals depend on staying accurate.
+-- `claimed_secs` is the running total of how much of earn_secs has
+-- actually been folded into a granted session so far — a completion can be
+-- claimed across more than one visit (e.g. requesting 14 min out of a
+-- 20-min balance made of two 10-min completions claims one fully and only
+-- 4 of the other's 10, leaving 6 genuinely unclaimed on that same row for
+-- next time — no row-splitting needed). `claimed` is true only once
+-- claimed_secs reaches earn_secs (fully spent); until then it stays false,
+-- so `WHERE claimed = false` still correctly finds every row with any
+-- remaining balance, partial or untouched. `claimed_session_id` records
+-- the most recent session that touched this row — if a row is ever spent
+-- across two different claim visits, only the later one is kept; it's
+-- audit/debugging only, never read to decide claim eligibility.
 CREATE TABLE IF NOT EXISTS content_completions (
   id                 BIGSERIAL PRIMARY KEY,
   client_id          INTEGER NOT NULL REFERENCES clients(id),
@@ -394,6 +406,7 @@ CREATE TABLE IF NOT EXISTS content_completions (
   earn_secs          INTEGER NOT NULL,
   response           JSONB,                        -- survey answers; null for video/article/lesson
   claimed            BOOLEAN NOT NULL DEFAULT false,
+  claimed_secs       INTEGER NOT NULL DEFAULT 0,
   claimed_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   -- Which "period" this completion belongs to, per the item's
   -- view_frequency at the time: 'once' (constant, so it behaves like the
@@ -415,6 +428,17 @@ ALTER TABLE content_completions DROP CONSTRAINT IF EXISTS content_completions_cl
 ALTER TABLE content_completions DROP CONSTRAINT IF EXISTS content_completions_client_item_period_key;
 ALTER TABLE content_completions ADD CONSTRAINT content_completions_client_item_period_key
   UNIQUE (client_id, content_item_id, period_key);
+
+-- Idempotent for databases that already had content_completions before
+-- split-claims existed — every pre-existing claimed=true row's earn_secs
+-- was, by definition, claimed in full, so backfill claimed_secs to match
+-- (the WHERE guards make this a no-op once already backfilled).
+ALTER TABLE content_completions ADD COLUMN IF NOT EXISTS claimed_secs INTEGER NOT NULL DEFAULT 0;
+UPDATE content_completions SET claimed_secs = earn_secs WHERE claimed = true AND claimed_secs < earn_secs;
+
+ALTER TABLE content_completions DROP CONSTRAINT IF EXISTS content_completions_claimed_secs_range;
+ALTER TABLE content_completions ADD CONSTRAINT content_completions_claimed_secs_range
+  CHECK (claimed_secs >= 0 AND claimed_secs <= earn_secs);
 
 CREATE INDEX IF NOT EXISTS idx_content_completions_client ON content_completions(client_id);
 CREATE INDEX IF NOT EXISTS idx_content_completions_unclaimed ON content_completions(client_id) WHERE claimed = false;

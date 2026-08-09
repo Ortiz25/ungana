@@ -132,6 +132,12 @@ export function recordContentImpression(id) {
   return request(`/content/${encodeURIComponent(id)}/impression`, { method: 'POST', body: JSON.stringify({}) });
 }
 
+/** GET /api/content/claim-preview?mac=X&requestedMinutes=Y — read-only: what claim-earned-session would actually grant, without claiming it. */
+export function previewClaimAmount(mac, requestedMinutes) {
+  const params = new URLSearchParams({ mac, ...(requestedMinutes ? { requestedMinutes } : {}) });
+  return request(`/content/claim-preview?${params}`);
+}
+
 /** POST /api/content/claim-earned-session — Body: { mac, username?, site? }. Folds every unclaimed completion into a real, router-authorised session. Rejected server-side on a pay_only site. */
 export function claimEarnedSession(mac, username, requestedMinutes, site) {
   return request('/content/claim-earned-session', {

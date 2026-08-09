@@ -19,6 +19,7 @@
     getContentCompletions,
     completeContentItem,
     claimEarnedSession,
+    previewClaimAmount,
     getSettings,
     recordContentImpression,
     getUsernameForMac,
@@ -140,6 +141,37 @@
   // reset to the full unclaimed balance each time the modal opens, so the
   // default is still the old zero-friction "claim everything" behaviour.
   let claimAmountMinutes = $state(0);
+  // Live, server-computed answer to "what would I actually get for this
+  // slider position" — matches claimAmountMinutes exactly (the backend
+  // splits a completion across visits when needed, see planClaim), but is
+  // still fetched rather than assumed so the confirmation reflects the
+  // client's real current balance, not a stale one. Debounce-fetched as
+  // the slider moves.
+  let claimPreviewSecs = $state(null);
+  let claimPreviewLoading = $state(false);
+  let claimPreviewTimer;
+  const claimMinMinutes = $derived(Math.max(1, Math.ceil(connectThresholdSecs / 60)));
+  const claimMaxMinutes = $derived(Math.max(claimMinMinutes, Math.floor(realUnclaimedSecs / 60)));
+
+  // Debounce-fetches the live preview whenever the modal's open and the
+  // slider isn't sitting at "All" (that case needs no preview — it's just
+  // realUnclaimedSecs, already shown above the slider).
+  $effect(() => {
+    if (!showEarnedModal || claimAmountMinutes >= claimMaxMinutes) {
+      claimPreviewSecs = null;
+      claimPreviewLoading = false;
+      return;
+    }
+    const requestedMinutes = claimAmountMinutes;
+    clearTimeout(claimPreviewTimer);
+    claimPreviewLoading = true;
+    claimPreviewTimer = setTimeout(async () => {
+      const result = await previewClaimAmount(mac, requestedMinutes);
+      if (requestedMinutes !== claimAmountMinutes) return; // stale — slider moved again while this was in flight
+      claimPreviewSecs = result.ok ? result.data?.totalSecs ?? null : null;
+      claimPreviewLoading = false;
+    }, 300);
+  });
   // Guards the "you just unlocked Connect Now" celebration so it only fires
   // for a completion during this session, not for restoring an
   // already-sufficient balance from the server on page load/reload.
@@ -1258,20 +1290,18 @@
             </div>
 
             {#if canConnect}
-              {@const minMinutes = Math.max(1, Math.ceil(connectThresholdSecs / 60))}
-              {@const maxMinutes = Math.max(minMinutes, Math.floor(realUnclaimedSecs / 60))}
-              {#if maxMinutes > minMinutes}
+              {#if claimMaxMinutes > claimMinMinutes}
                 <div class="rounded-2xl p-3.5 mb-4" style="background: rgba(255,255,255,0.06);">
                   <div class="flex items-center justify-between mb-2">
                     <span class="text-xs" style="color: #C4DAC0;">Use now</span>
                     <span class="text-sm font-bold" style="color: #E8D4B0;">
-                      {claimAmountMinutes >= maxMinutes ? 'All' : `${claimAmountMinutes} min`}
+                      {claimAmountMinutes >= claimMaxMinutes ? 'All' : `${claimAmountMinutes} min`}
                     </span>
                   </div>
                   <input
                     type="range"
-                    min={minMinutes}
-                    max={maxMinutes}
+                    min={claimMinMinutes}
+                    max={claimMaxMinutes}
                     step="1"
                     value={claimAmountMinutes}
                     oninput={(e) => (claimAmountMinutes = Number(e.currentTarget.value))}
@@ -1279,15 +1309,16 @@
                     style="accent-color: #C45C38;"
                   />
                   <div class="flex items-center justify-between mt-1">
-                    <span class="text-[10px]" style="color: #7A9E7A;">{minMinutes}m</span>
-                    <span class="text-[10px]" style="color: #7A9E7A;">All ({maxMinutes}m)</span>
+                    <span class="text-[10px]" style="color: #7A9E7A;">{claimMinMinutes}m</span>
+                    <span class="text-[10px]" style="color: #7A9E7A;">All ({claimMaxMinutes}m)</span>
                   </div>
                   <p class="text-[10px] mt-2 leading-snug" style="color: #7A9E7A;">
-                    {#if claimAmountMinutes >= maxMinutes}
+                    {#if claimAmountMinutes >= claimMaxMinutes}
                       Uses your full balance now.
+                    {:else if claimPreviewLoading || claimPreviewSecs == null}
+                      Checking exactly what you'll get…
                     {:else}
-                      Keeps ~{maxMinutes - claimAmountMinutes} min banked for next time — earned items can't be
-                      split, so you may get slightly more than {claimAmountMinutes} min.
+                      Uses exactly {formatMinutesLabel(claimPreviewSecs)} now, keeping ~{formatMinutesLabel(realUnclaimedSecs - claimPreviewSecs)} banked for next time.
                     {/if}
                   </p>
                 </div>
@@ -1295,7 +1326,7 @@
 
               <button
                 onclick={() => {
-                  const chosenSecs = claimAmountMinutes < maxMinutes ? claimAmountMinutes * 60 : null;
+                  const chosenSecs = claimAmountMinutes < claimMaxMinutes ? claimAmountMinutes * 60 : null;
                   showEarnedModal = false;
                   handleConnect(chosenSecs);
                 }}

@@ -201,9 +201,13 @@ export async function getAdminAnalytics() {
     query(`SELECT COALESCE(SUM(impressions), 0) AS total FROM content_items`),
     query(`SELECT COUNT(*) AS total FROM content_completions`),
     query(`SELECT COUNT(DISTINCT client_id) AS total FROM content_completions`),
+    // claimed_secs (not "SUM WHERE claimed") — a completion can now be
+    // partially claimed (see schema.sql's comment on content_completions),
+    // so this correctly counts that partial progress instead of waiting
+    // for a row to be fully spent before any of it shows as "claimed".
     query(
       `SELECT COALESCE(SUM(earn_secs), 0) AS total,
-              COALESCE(SUM(earn_secs) FILTER (WHERE claimed), 0) AS claimed
+              COALESCE(SUM(claimed_secs), 0) AS claimed
        FROM content_completions`
     ),
     query(`SELECT COUNT(*) AS total FROM sessions WHERE source = 'earned' AND payment_status = 'success'`),

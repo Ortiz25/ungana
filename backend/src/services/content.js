@@ -73,7 +73,7 @@ export async function getClientCompletions(macAddress, siteId = null) {
   }
 
   const { rows: unclaimedRows } = await query(
-    `SELECT COALESCE(SUM(earn_secs), 0) AS total FROM content_completions WHERE client_id = $1 AND claimed = false`,
+    `SELECT COALESCE(SUM(earn_secs - claimed_secs), 0) AS total FROM content_completions WHERE client_id = $1 AND claimed = false`,
     [client.id]
   );
 
@@ -120,49 +120,95 @@ export async function recordCompletion(macAddress, contentItemId, { elapsedSecs 
 }
 
 /**
- * Marks unclaimed completions for this client as claimed and returns their
- * ids + summed earn_secs — either all of them (requestedSecs omitted, the
- * original "Connect Now" behaviour), or, when requestedSecs is given, just
- * enough of the oldest ones to reach it, leaving the rest banked for next
- * time. A single completion's earn_secs is never split — it's an atomic
- * unit (one video/article/survey, snapshotted at completion time) — so the
- * actual total returned can come in slightly *above* requestedSecs; it is
- * never below it (unless the client's whole balance is smaller).
- *
- * Wrapped in a transaction with FOR UPDATE row locks so two concurrent
- * claims can't select the same completions — the original single
- * UPDATE...RETURNING was atomic by construction; splitting into
- * SELECT-then-UPDATE to support partial claims needs that locking to keep
- * the same guarantee. See routes/content.js POST /claim-earned-session,
- * the only caller.
+ * Oldest-first claim plan shared by claimUnclaimedCompletions and
+ * previewClaimAmount — walks `rows` (already sorted by completed_at ASC,
+ * each with `earn_secs`/`claimed_secs` so far) taking from each row's
+ * remaining balance (earn_secs - claimed_secs) until requestedSecs is
+ * reached. requestedSecs == null takes every remaining second of every row
+ * (the original one-tap "Connect Now" behaviour). A row only needs to be
+ * split at the very last one it touches — every prior row is drained in
+ * full — so a request for 14 minutes out of two untouched 10-minute rows
+ * fully drains the first (10) and takes exactly 4 of the second, leaving 6
+ * genuinely unclaimed on that same row. The total granted is always
+ * exactly requestedSecs, unless the client's whole balance is smaller.
+ */
+function planClaim(rows, requestedSecs) {
+  const updates = [];
+  let totalSecs = 0;
+
+  for (const row of rows) {
+    if (requestedSecs != null && totalSecs >= requestedSecs) break;
+
+    const available = row.earn_secs - row.claimed_secs;
+    if (available <= 0) continue; // defensive — WHERE claimed = false should already exclude these
+
+    const take = requestedSecs == null ? available : Math.min(available, requestedSecs - totalSecs);
+    const newClaimedSecs = row.claimed_secs + take;
+
+    totalSecs += take;
+    updates.push({ id: row.id, take, newClaimedSecs, fullyClaimed: newClaimedSecs >= row.earn_secs });
+  }
+
+  return { totalSecs, updates };
+}
+
+/**
+ * Claims up to requestedSecs of this client's unclaimed balance (see
+ * planClaim for the selection/splitting rule) and returns the ids touched
+ * + the total actually granted. Wrapped in a transaction with FOR UPDATE
+ * row locks so two concurrent claims can't both partially-consume the same
+ * row past its actual remaining balance. Each touched row gets its
+ * claimed_secs bumped by exactly what was taken from it (never more than
+ * its own earn_secs, enforced by the content_completions_claimed_secs_range
+ * check constraint too) and `claimed` flips true only once fully spent —
+ * see schema.sql's comment on content_completions for the full model. See
+ * routes/content.js POST /claim-earned-session, the only caller.
  */
 export async function claimUnclaimedCompletions(clientId, requestedSecs = null) {
   return withTransaction(async (client) => {
     const { rows: candidates } = await client.query(
-      `SELECT id, earn_secs FROM content_completions
+      `SELECT id, earn_secs, claimed_secs FROM content_completions
        WHERE client_id = $1 AND claimed = false
        ORDER BY completed_at ASC
        FOR UPDATE`,
       [clientId]
     );
 
-    let selected = candidates;
-    if (requestedSecs != null) {
-      selected = [];
-      let sum = 0;
-      for (const row of candidates) {
-        if (sum >= requestedSecs) break;
-        selected.push(row);
-        sum += row.earn_secs;
-      }
+    const { totalSecs, updates } = planClaim(candidates, requestedSecs);
+    if (updates.length === 0) return { ids: [], totalSecs: 0 };
+
+    for (const u of updates) {
+      await client.query(`UPDATE content_completions SET claimed_secs = $1, claimed = $2 WHERE id = $3`, [
+        u.newClaimedSecs,
+        u.fullyClaimed,
+        u.id,
+      ]);
     }
 
-    if (selected.length === 0) return { ids: [], totalSecs: 0 };
-
-    const ids = selected.map((r) => r.id);
-    await client.query(`UPDATE content_completions SET claimed = true WHERE id = ANY($1::bigint[])`, [ids]);
-    return { ids, totalSecs: selected.reduce((sum, r) => sum + r.earn_secs, 0) };
+    return { ids: updates.map((u) => u.id), totalSecs };
   });
+}
+
+/**
+ * Read-only dry-run of claimUnclaimedCompletions — same planClaim rule, no
+ * FOR UPDATE lock and no mutation. Powers the earned-balance modal's live
+ * "you'll actually get X" preview as the claim-amount slider moves.
+ * Purely advisory: the real claim re-runs the same selection inside its
+ * own transaction, so a result that changes between preview and claim
+ * (e.g. another completion landing in between) just means the preview was
+ * stale for a moment, not wrong.
+ */
+export async function previewClaimAmount(macAddress, requestedSecs = null) {
+  const client = await getClientByMac(macAddress);
+  if (!client) return { totalSecs: 0 };
+
+  const { rows: candidates } = await query(
+    `SELECT id, earn_secs, claimed_secs FROM content_completions WHERE client_id = $1 AND claimed = false ORDER BY completed_at ASC`,
+    [client.id]
+  );
+
+  const { totalSecs } = planClaim(candidates, requestedSecs);
+  return { totalSecs };
 }
 
 /** Links already-claimed completions to the session their reward was folded into, for audit purposes. */

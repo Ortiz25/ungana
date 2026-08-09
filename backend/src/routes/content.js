@@ -4,6 +4,7 @@ import {
   getClientCompletions,
   recordCompletion,
   claimUnclaimedCompletions,
+  previewClaimAmount,
   attachClaimedSession,
   recordImpression,
 } from "../services/content.js";
@@ -91,6 +92,36 @@ contentRouter.post("/:id/complete", async (req, res) => {
   } catch (error) {
     console.error("❌ Content completion error:", error.message);
     res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+/**
+ * GET /api/content/claim-preview?mac=X&requestedMinutes=Y — read-only:
+ * what claim-earned-session would actually grant for this requestedMinutes,
+ * without claiming anything. Powers the earned-balance modal's live
+ * "you'll actually get X" preview as the slider moves — see
+ * previewClaimAmount for why a requested amount can round up.
+ * requestedMinutes omitted previews the full-balance ("claim everything")
+ * amount, matching claim-earned-session's own default.
+ */
+contentRouter.get("/claim-preview", async (req, res) => {
+  const { mac, requestedMinutes } = req.query;
+  if (!mac) return res.status(400).json({ totalSecs: 0, message: "mac is required" });
+
+  let requestedSecs = null;
+  if (requestedMinutes !== undefined) {
+    if (!(Number(requestedMinutes) > 0)) {
+      return res.status(400).json({ totalSecs: 0, message: "requestedMinutes must be a positive number" });
+    }
+    requestedSecs = Math.round(Number(requestedMinutes) * 60);
+  }
+
+  try {
+    const { totalSecs } = await previewClaimAmount(mac, requestedSecs);
+    res.json({ totalSecs });
+  } catch (error) {
+    console.error("❌ Claim preview error:", error.message);
+    res.status(500).json({ totalSecs: 0, message: error.message });
   }
 });
 
