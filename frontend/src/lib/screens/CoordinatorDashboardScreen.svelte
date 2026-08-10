@@ -33,6 +33,16 @@
       getCoordinatorActivators(coordinator.token),
       getCoordinatorEarnings(coordinator.token)
     ]);
+
+    // Reconciles a dashboard restored from a persisted session (see
+    // dashboardSession.js) on reload — a 401 means the token's since
+    // expired/been revoked, so bounce to login (which also clears the
+    // stale persisted session) instead of leaving a dead dashboard up.
+    if ([activatorsResult, earningsResult].some((r) => r.status === 401)) {
+      onLogout();
+      return;
+    }
+
     if (activatorsResult.ok) realActivators = activatorsResult.data?.activators ?? [];
     if (earningsResult.ok) realEarnings = earningsResult.data?.earnings ?? null;
     loadingReal = false;

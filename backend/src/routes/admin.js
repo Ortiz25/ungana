@@ -10,7 +10,7 @@ import {
 import { createActivator, adminListActivators, updateActivator } from "../services/activators.js";
 import { createCoordinator, adminListCoordinators, updateCoordinator } from "../services/coordinators.js";
 import { uploadContentFile, optimizeUploadedVideo } from "../services/uploads.js";
-import { adminGetSettings, setEarnConnectThresholdSecs, setDefaultActivatorCommissionRate } from "../services/settings.js";
+import { adminGetSettings, setEarnConnectThresholdSecs, setDefaultActivatorCommissionRate, setNotificationRetentionDays } from "../services/settings.js";
 import { getAdminAnalytics, getContentItemAnalytics, getPurchasesBySiteSeries } from "../services/analytics.js";
 import { adminListSites, createSite, updateSite, deleteSite, listUnifiSiteOptions } from "../services/sites.js";
 import { adminListPackages, updatePackage } from "../services/catalog.js";
@@ -349,13 +349,17 @@ adminRouter.get("/settings", async (_req, res) => {
 });
 
 /**
- * PATCH /api/admin/settings — Body: { earnConnectThresholdMinutes?, defaultActivatorCommissionPct? }.
- * Either or both may be provided in the same request.
+ * PATCH /api/admin/settings — Body: { earnConnectThresholdMinutes?, defaultActivatorCommissionPct?, notificationRetentionDays? }.
+ * Any combination may be provided in the same request.
  */
 adminRouter.patch("/settings", async (req, res) => {
-  const { earnConnectThresholdMinutes, defaultActivatorCommissionPct } = req.body;
+  const { earnConnectThresholdMinutes, defaultActivatorCommissionPct, notificationRetentionDays } = req.body;
 
-  if (earnConnectThresholdMinutes === undefined && defaultActivatorCommissionPct === undefined) {
+  if (
+    earnConnectThresholdMinutes === undefined &&
+    defaultActivatorCommissionPct === undefined &&
+    notificationRetentionDays === undefined
+  ) {
     return res.status(400).json({ success: false, message: "Nothing to update" });
   }
   if (earnConnectThresholdMinutes !== undefined && !(Number(earnConnectThresholdMinutes) >= 0)) {
@@ -367,6 +371,9 @@ adminRouter.patch("/settings", async (req, res) => {
   ) {
     return res.status(400).json({ success: false, message: "defaultActivatorCommissionPct must be between 0 and 100" });
   }
+  if (notificationRetentionDays !== undefined && !(Number(notificationRetentionDays) >= 0)) {
+    return res.status(400).json({ success: false, message: "notificationRetentionDays must be a non-negative number" });
+  }
 
   try {
     let settings;
@@ -375,6 +382,9 @@ adminRouter.patch("/settings", async (req, res) => {
     }
     if (defaultActivatorCommissionPct !== undefined) {
       settings = await setDefaultActivatorCommissionRate(Number(defaultActivatorCommissionPct) / 100);
+    }
+    if (notificationRetentionDays !== undefined) {
+      settings = await setNotificationRetentionDays(Number(notificationRetentionDays));
     }
     res.json({ success: true, settings });
   } catch (error) {

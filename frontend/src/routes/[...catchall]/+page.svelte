@@ -21,6 +21,7 @@
   import { PACKAGES, getWarningThreshold } from '$lib/data.js';
   import { getSessionStatus, getAppInfo } from '$lib/api.js';
   import { getClientMac, getStoredClientMac } from '$lib/device.js';
+  import { saveDashboardSession, loadDashboardSession, clearDashboardSession } from '$lib/dashboardSession.js';
 
   let screen = $state('packages');
   let checkingSession = $state(true);
@@ -109,9 +110,43 @@
   // also the Android case: captive-portal logins open in an isolated
   // WebView with its own storage, separate from the user's regular
   // Chrome — the real MAC only ever reached that WebView's localStorage.
+  // A logged-in staff dashboard (activator/coordinator/admin) is a
+  // completely separate concern from the client MAC/session flow below —
+  // restoring it on reload doesn't need (and shouldn't run) any of that
+  // MAC-lookup logic. Deliberately NOT reconciled against the backend
+  // here — each dashboard's own initial data load already does that (see
+  // their onMount 401-checks), and bounces back to login via onLogout if
+  // the token turns out to be stale. Restoring optimistically first (with
+  // that fallback in place) means a valid session reloads instantly
+  // instead of flashing a loading state while re-verifying something
+  // that's almost always still fine.
+  function restoreDashboardSession() {
+    const saved = loadDashboardSession();
+    if (!saved) return false;
+
+    if (saved.role === 'activator') {
+      loggedInActivator = saved.data;
+      screen = 'activator-dashboard';
+    } else if (saved.role === 'coordinator') {
+      loggedInCoordinator = saved.data;
+      screen = 'coordinator-dashboard';
+    } else if (saved.role === 'admin') {
+      loggedInAdmin = saved.data;
+      screen = 'admin-dashboard';
+    } else {
+      return false;
+    }
+    return true;
+  }
+
   onMount(async () => {
     const infoResult = await getAppInfo();
     if (infoResult.ok && infoResult.data?.mode) appMode = infoResult.data.mode;
+
+    if (restoreDashboardSession()) {
+      checkingSession = false;
+      return;
+    }
 
     const params = new URLSearchParams(window.location.search);
     const hasRouterMac = ['id', 'mac', 'client_mac'].some((name) => params.get(name));
@@ -180,6 +215,7 @@
     <CoordinatorLoginScreen
       onLogin={(coord) => {
         loggedInCoordinator = coord;
+        saveDashboardSession('coordinator', coord);
         screen = 'coordinator-dashboard';
       }}
       onBack={goPackages}
@@ -190,6 +226,7 @@
       coordinator={loggedInCoordinator}
       onLogout={() => {
         loggedInCoordinator = null;
+        clearDashboardSession();
         screen = 'packages';
       }}
     />
@@ -198,6 +235,7 @@
     <ActivatorLoginScreen
       onLogin={(activator) => {
         loggedInActivator = activator;
+        saveDashboardSession('activator', activator);
         screen = 'activator-dashboard';
       }}
       onBack={goPackages}
@@ -208,6 +246,7 @@
       activator={loggedInActivator}
       onLogout={() => {
         loggedInActivator = null;
+        clearDashboardSession();
         screen = 'packages';
       }}
     />
@@ -216,6 +255,7 @@
     <AdminLoginScreen
       onLogin={(admin) => {
         loggedInAdmin = admin;
+        saveDashboardSession('admin', admin);
         screen = 'admin-dashboard';
       }}
       onBack={goPackages}
@@ -227,6 +267,7 @@
       username={loggedInAdmin.username}
       onLogout={() => {
         loggedInAdmin = null;
+        clearDashboardSession();
         screen = 'packages';
       }}
     />

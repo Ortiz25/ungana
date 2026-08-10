@@ -1,9 +1,11 @@
 // Periodic checks for the 3 notification types that aren't tied to a
 // single event (new_purchase fires inline instead — see
-// services/authorization.js). Wired into server.js's existing
-// setInterval-based sweep pattern (see the retry sweep next to it).
+// services/authorization.js), plus read-notification cleanup. Wired into
+// server.js's existing setInterval-based sweep pattern (see the retry
+// sweep next to it).
 import { query } from "../db/pool.js";
-import { notify } from "./notifications.js";
+import { notify, deleteOldReadNotifications } from "./notifications.js";
+import { getNotificationRetentionDays } from "./settings.js";
 
 /** Sessions with an activator, currently active, expiring within the next 24h. */
 async function sweepExpiring() {
@@ -74,8 +76,15 @@ async function sweepGoalMiss() {
   }
 }
 
+async function cleanupOldNotifications() {
+  const retentionDays = await getNotificationRetentionDays();
+  const deleted = await deleteOldReadNotifications(retentionDays);
+  if (deleted > 0) console.log(`🗑️ Notification cleanup: removed ${deleted} read notification(s) older than ${retentionDays} day(s)`);
+}
+
 export async function runNotificationSweep() {
   await sweepExpiring();
   await sweepDormant();
   await sweepGoalMiss();
+  await cleanupOldNotifications();
 }

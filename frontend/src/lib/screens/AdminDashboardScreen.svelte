@@ -3,7 +3,7 @@
   import {
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
     ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
-    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft, Bitcoin
+    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft, Bitcoin, Trash2
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import MultiLineChartMini from '$lib/components/MultiLineChartMini.svelte';
@@ -68,6 +68,7 @@
   async function loadContent() {
     const r = await adminGetContent(token);
     if (r.ok) contentItems = r.data.items;
+    return r;
   }
   async function loadActivators() {
     const r = await adminGetActivators(token);
@@ -88,11 +89,13 @@
 
   let earnConnectThresholdMinutes = $state('30');
   let defaultActivatorCommissionPct = $state('20');
+  let notificationRetentionDays = $state('30');
   async function loadSettings() {
     const r = await adminGetSettings(token);
     if (!r.ok) return;
     earnConnectThresholdMinutes = String(Math.round((r.data.settings?.earnConnectThresholdSecs ?? 1800) / 60));
     defaultActivatorCommissionPct = String(Math.round((r.data.settings?.defaultActivatorCommissionRate ?? 0.2) * 100));
+    notificationRetentionDays = String(r.data.settings?.notificationRetentionDays ?? 30);
   }
 
   let analytics = $state(null);
@@ -180,7 +183,26 @@
   }
 
   onMount(async () => {
-    await Promise.all([loadContent(), loadActivators(), loadCoordinators(), loadSites(), loadPackages(), loadSettings(), loadAnalytics()]);
+    const [contentResult] = await Promise.all([
+      loadContent(),
+      loadActivators(),
+      loadCoordinators(),
+      loadSites(),
+      loadPackages(),
+      loadSettings(),
+      loadAnalytics()
+    ]);
+
+    // Reconciles a dashboard restored from a persisted session (see
+    // dashboardSession.js) on reload — every admin route shares the same
+    // auth middleware, so checking this one call's status is enough to
+    // catch an expired/revoked token. Bounces to login (which also clears
+    // the stale persisted session) instead of leaving a dead dashboard up.
+    if (contentResult?.status === 401) {
+      onLogout();
+      return;
+    }
+
     loading = false;
   });
 
@@ -657,12 +679,17 @@
       settingsError = 'Commission % must be between 0 and 100';
       return;
     }
+    if (!(Number(notificationRetentionDays) >= 0)) {
+      settingsError = 'Enter a non-negative number of days (0 = keep forever)';
+      return;
+    }
     settingsError = '';
     settingsSaving = true;
 
     const result = await adminUpdateSettings(token, {
       earnConnectThresholdMinutes: Number(earnConnectThresholdMinutes),
-      defaultActivatorCommissionPct: Number(defaultActivatorCommissionPct)
+      defaultActivatorCommissionPct: Number(defaultActivatorCommissionPct),
+      notificationRetentionDays: Number(notificationRetentionDays)
     });
     settingsSaving = false;
 
@@ -1880,6 +1907,17 @@
           </div>
         </div>
         {@render inputField('Commission %', defaultActivatorCommissionPct, (e) => (defaultActivatorCommissionPct = e.currentTarget.value), { type: 'number' })}
+
+        <div class="flex items-center gap-2 mb-1 mt-2" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 16px;">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(78,128,80,0.28);">
+            <Trash2 size={16} color="#4E8050" />
+          </div>
+          <div>
+            <p class="text-sm font-bold text-[#E8D4B0]">Notification cleanup</p>
+            <p class="text-[10px] text-[#96B496]">Read notifications older than this are auto-deleted (checked every 5 min) — unread ones are never touched. 0 = keep forever.</p>
+          </div>
+        </div>
+        {@render inputField('Days (e.g. 7 for a week, 30 for a month)', notificationRetentionDays, (e) => (notificationRetentionDays = e.currentTarget.value), { type: 'number' })}
 
         {#if settingsError}
           <p class="text-xs text-[#E08A6A]">{settingsError}</p>

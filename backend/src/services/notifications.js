@@ -85,3 +85,22 @@ export async function markAllRead(activatorId) {
     [activatorId]
   );
 }
+
+/**
+ * Deletes notifications that are BOTH read AND older than `retentionDays`
+ * (age measured from created_at, not from when they were read — a
+ * notification "is a month old", not "was read a month ago") —
+ * admin-configurable, see services/settings.js's notification_retention_days
+ * / the admin dashboard's Settings tab. Unread notifications are never
+ * touched here regardless of age. `retentionDays <= 0` means "keep
+ * forever" (no-op), so the sweep can call this unconditionally without its
+ * own branch.
+ */
+export async function deleteOldReadNotifications(retentionDays) {
+  if (!(retentionDays > 0)) return 0;
+  const { rowCount } = await query(
+    `DELETE FROM notifications WHERE read_at IS NOT NULL AND created_at < now() - ($1 || ' days')::interval`,
+    [retentionDays]
+  );
+  return rowCount;
+}

@@ -3,7 +3,7 @@
   import {
     MapPin, Edit3, LogOut, ArrowUpRight, TrendingUp, BarChart2, UserCheck, Wallet, User,
     Clock, CheckCircle2, MessageCircle, Bell, Award, CreditCard, Copy, Smartphone,
-    ChevronLeft, ChevronRight, Filter, RefreshCw
+    ChevronLeft, ChevronRight, Filter, RefreshCw, X
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import AreaChartMini from '$lib/components/AreaChartMini.svelte';
@@ -43,6 +43,18 @@
       getActivatorEarningsSeries(activator.token, 365),
       getActivatorNotifications(activator.token)
     ]);
+
+    // A reload can restore this dashboard straight from a persisted
+    // session (see dashboardSession.js) without re-verifying the token
+    // first — this is that reconciliation. A 401 means the token expired
+    // or was revoked since the session was saved; bounce to login (which
+    // also clears the stale persisted session) rather than leaving a
+    // dashboard on screen where every request silently fails.
+    if ([sessionsResult, earningsResult, seriesResult, notificationsResult].some((r) => r.status === 401)) {
+      onLogout();
+      return;
+    }
+
     if (sessionsResult.ok) realSessions = sessionsResult.data?.sessions ?? [];
     if (earningsResult.ok) realEarnings = earningsResult.data?.earnings ?? null;
     if (seriesResult.ok) realDailySeries = seriesResult.data?.series ?? [];
@@ -262,7 +274,13 @@
   const INVITE_LINK = `ungana.app/join?ref=${activator.id.toLowerCase().replace('-', '')}`;
 
   async function handleSaveGoal() {
-    const v = parseInt(goalInput.replace(/\D/g, ''), 10);
+    // goalInput starts as a string (String(dailyTarget)) but Svelte's
+    // bind:value coerces type="number" inputs to an actual Number the
+    // moment the user edits it — .replace() then throws on a Number,
+    // silently killing this function before goalSaving is even set (no
+    // spinner, no error, the button just does nothing). String(...) first
+    // makes this safe regardless of which type goalInput currently holds.
+    const v = parseInt(String(goalInput).replace(/\D/g, ''), 10);
     if (!(v > 0)) {
       editingGoal = null;
       return;
@@ -356,9 +374,13 @@
     { icon: CreditCard, label: 'M-PESA number', placeholder: '+254 7XX XXX XXX', value: mpesa }
   ]);
 
+  // Edits inline right here via editingGoal/goalInput/handleSaveGoal — the
+  // same state the Home tab's goal cards use, so editing from either place
+  // works identically and stays in sync (no separate "profile-only" edit
+  // path to keep consistent with the real one).
   const goalDefaults = $derived([
-    { label: 'Daily target', value: `KES ${dailyTarget.toLocaleString()}`, action: () => { tab = 'overview'; editingGoal = 'daily'; } },
-    { label: 'Weekly target', value: `KES ${weeklyTarget.toLocaleString()}`, action: () => { tab = 'overview'; editingGoal = 'weekly'; } }
+    { key: 'daily', label: 'Daily target', target: dailyTarget },
+    { key: 'weekly', label: 'Weekly target', target: weeklyTarget }
   ]);
 
   const notifRows = [
@@ -505,8 +527,8 @@
     {#each TABS as t (t.id)}
       {@const Icon = t.Icon}
       <button onclick={() => (tab = t.id)} class="flex-1 py-2 rounded-xl flex flex-col items-center gap-0.5 transition-all" style="background: {tab === t.id ? '#2E5A3E' : 'transparent'};">
-        <Icon size={14} color={tab === t.id ? avatarColor : '#C4DAC0'} />
-        <span class="text-[9px] font-bold" style="color: {tab === t.id ? '#E8D4B0' : '#C4DAC0'};">{t.label}</span>
+        <Icon size={14} color={tab === t.id ? avatarColor : '#3C6A4A'} />
+        <span class="text-[9px] font-bold" style="color: {tab === t.id ? '#E8D4B0' : '#3C6A4A'};">{t.label}</span>
       </button>
     {/each}
   </div>
@@ -1083,14 +1105,35 @@
         <div class="px-5 pt-4 pb-2">
           <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Goal defaults</p>
         </div>
-        {#each goalDefaults as g, i (g.label)}
-          <button onclick={g.action} class="w-full flex items-center justify-between px-5 py-3.5" style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.14)' : 'none'};">
-            <span class="text-sm text-[#E8D4B0] font-medium">{g.label}</span>
-            <div class="flex items-center gap-2">
-              <span class="text-sm font-bold" style="color: {avatarColor};">{g.value}</span>
-              <Edit3 size={12} color="#AECAAE" />
-            </div>
-          </button>
+        {#each goalDefaults as g, i (g.key)}
+          <div style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.14)' : 'none'};">
+            <button
+              onclick={() => { goalInput = String(g.target); editingGoal = editingGoal === g.key ? null : g.key; }}
+              class="w-full flex items-center justify-between px-5 py-3.5"
+            >
+              <span class="text-sm text-[#E8D4B0] font-medium">{g.label}</span>
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-bold" style="color: {avatarColor};">KES {g.target.toLocaleString()}</span>
+                {#if editingGoal === g.key}<X size={12} color="#AECAAE" />{:else}<Edit3 size={12} color="#AECAAE" />{/if}
+              </div>
+            </button>
+            {#if editingGoal === g.key}
+              <div class="flex gap-2 items-center px-5 pb-3.5">
+                <div class="flex-1 flex items-center gap-2 px-3 py-2 rounded-2xl" style="background: rgba(0,0,0,0.2);">
+                  <span class="text-xs text-[#C4DAC0]">KES</span>
+                  <input type="number" bind:value={goalInput} class="flex-1 bg-transparent text-sm font-bold text-[#E8D4B0] outline-none min-w-0" />
+                </div>
+                <button
+                  onclick={handleSaveGoal}
+                  disabled={goalSaving}
+                  class="px-4 py-2 rounded-2xl text-xs font-bold"
+                  style="background: #C45C38; color: #fff; opacity: {goalSaving ? 0.7 : 1};"
+                >
+                  {goalSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            {/if}
+          </div>
         {/each}
         <div class="h-2"></div>
       </div>
