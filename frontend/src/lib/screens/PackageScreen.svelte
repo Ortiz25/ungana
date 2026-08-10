@@ -21,23 +21,38 @@
   // chain needs to know about mode at all. In `simulation` it stays the
   // fast accelerated value for demo purposes.
   let packages = $state(PACKAGES);
-  // 'both' (the default) shows everything — same as before multi-site
-  // existed. Only actually narrows once a real site with a non-'both' mode
-  // is resolved; unset/unknown sites (including all of local dev, which
-  // has no captive-portal URL to read a site from) stay fully open.
-  let siteMode = $state('both');
+  // null = not resolved yet — both the "Choose your plan" and "Earn Free
+  // Access" sections below stay hidden (see their {#if siteMode && ...}
+  // gates) until this settles. Previously defaulted straight to 'both',
+  // which meant BOTH sections rendered immediately and only narrowed down
+  // once the getSite() round-trip finished — on a pay_only or earn_only
+  // site, the section that shouldn't exist flashed on screen for however
+  // long that fetch took, then vanished. Resolves to 'both' synchronously
+  // (no flash at all) when there's no site to check — local dev has no
+  // captive-portal URL to read one from, same "sees everything" convention
+  // as every other site-scoped default in this app — and resolves to
+  // 'both' on a fetch error too (fail open on the DISPLAY only; the
+  // backend enforces site mode server-side regardless of what this screen
+  // shows, so a stale/optimistic 'both' here can never actually let a
+  // restricted site's purchase or claim through).
+  let siteMode = $state(null);
 
   onMount(async () => {
     const siteId = getSiteId();
+    if (!siteId) siteMode = 'both';
+
+    const [siteResult, packagesResult] = await Promise.all([
+      siteId ? getSite(siteId) : Promise.resolve(null),
+      getPackages(siteId)
+    ]);
+
     if (siteId) {
-      const siteResult = await getSite(siteId);
-      if (siteResult.ok && siteResult.data?.site?.mode) siteMode = siteResult.data.site.mode;
+      siteMode = siteResult?.ok && siteResult.data?.site?.mode ? siteResult.data.site.mode : 'both';
     }
 
-    const result = await getPackages(siteId);
-    if (!result.ok || !result.data?.packages) return;
+    if (!packagesResult.ok || !packagesResult.data?.packages) return;
 
-    const merged = result.data.packages
+    const merged = packagesResult.data.packages
       .map((row) => {
         const local = PACKAGES.find((p) => p.id === row.id);
         if (!local) return null; // unknown id — no icon/UI metadata to render it with
@@ -123,7 +138,15 @@
 
   <div class="h-px bg-[#1D3C2A] opacity-10 mb-5"></div>
 
-  {#if siteMode !== 'earn_only'}
+  {#if siteMode === null}
+    <div class="flex flex-col gap-3 mb-5">
+      {#each [0, 1, 2] as i (i)}
+        <div class="h-[76px] rounded-3xl animate-pulse" style="background: rgba(46,90,62,0.08);"></div>
+      {/each}
+    </div>
+  {/if}
+
+  {#if siteMode && siteMode !== 'earn_only'}
   <div class="mb-4">
     <h2 class="text-lg font-bold text-[#1D3C2A]" style="font-family: 'Playfair Display', serif;">Choose your plan</h2>
     <p class="text-xs mt-0.5" style="color: #2E5A3E;">Select how long you want access</p>
@@ -208,7 +231,7 @@
   </button>
   {/if}
 
-  {#if siteMode !== 'pay_only'}
+  {#if siteMode && siteMode !== 'pay_only'}
   {#if siteMode !== 'earn_only'}
   <!-- Earn Access divider — only shown between the two options when both are actually available. -->
   <div class="flex items-center gap-3 mt-3 mb-1">
