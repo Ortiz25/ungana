@@ -102,18 +102,37 @@ CREATE INDEX IF NOT EXISTS idx_package_sites_site ON package_sites(site_id);
 -- ── Activators ───────────────────────────────────────────────────────────
 -- Field agents who refer users and earn commission on their purchases.
 CREATE TABLE IF NOT EXISTS activators (
-  id              SERIAL PRIMARY KEY,
-  code            TEXT UNIQUE NOT NULL,            -- 'ACT-001' — referral code / portal login id
-  name            TEXT NOT NULL,
-  phone           TEXT UNIQUE NOT NULL,             -- +2547XXXXXXXX, portal login identity
-  pin_hash        TEXT NOT NULL,                    -- bcrypt hash of the 4-digit portal PIN
-  territory       TEXT,                             -- e.g. 'Nairobi CBD'
-  mpesa_number    TEXT,                             -- payout destination, if different from `phone`
-  commission_rate NUMERIC(4,3) NOT NULL DEFAULT 0.200 CHECK (commission_rate BETWEEN 0 AND 1),
-  status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                SERIAL PRIMARY KEY,
+  code              TEXT UNIQUE NOT NULL,            -- 'ACT-001' — referral code / portal login id
+  name              TEXT NOT NULL,
+  phone             TEXT UNIQUE NOT NULL,             -- +2547XXXXXXXX, portal login identity
+  pin_hash          TEXT NOT NULL,                    -- bcrypt hash of the 4-digit portal PIN
+  territory         TEXT,                             -- e.g. 'Nairobi CBD'
+  mpesa_number      TEXT,                             -- payout destination, if different from `phone`
+  commission_rate   NUMERIC(4,3) NOT NULL DEFAULT 0.200 CHECK (commission_rate BETWEEN 0 AND 1),
+  status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+  -- Self-service targets the activator dashboard's "Goal defaults" reads/
+  -- writes (PATCH /api/activators/me) — personal productivity numbers, not
+  -- money-adjacent like mpesa_number/commission_rate, so unlike those an
+  -- activator is allowed to set these themselves. Defaults match the old
+  -- hardcoded client-only values so existing activators see the same
+  -- numbers on first load post-migration.
+  daily_target_kes  NUMERIC(10,2) NOT NULL DEFAULT 350,
+  weekly_target_kes NUMERIC(10,2) NOT NULL DEFAULT 2000,
+  -- Mirrors the activator dashboard's Notifications tab exactly (same 4
+  -- keys as the frontend's `notifs` state object) — self-service via the
+  -- same PATCH /api/activators/me endpoint as goal targets, since a
+  -- notification preference carries no fraud risk either.
+  notification_prefs JSONB NOT NULL DEFAULT '{"expiring":true,"dormant":true,"goalMiss":true,"newPurchase":false}'::jsonb,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Idempotent for databases that already had activators before self-service
+-- goal targets / notification prefs existed.
+ALTER TABLE activators ADD COLUMN IF NOT EXISTS daily_target_kes NUMERIC(10,2) NOT NULL DEFAULT 350;
+ALTER TABLE activators ADD COLUMN IF NOT EXISTS weekly_target_kes NUMERIC(10,2) NOT NULL DEFAULT 2000;
+ALTER TABLE activators ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{"expiring":true,"dormant":true,"goalMiss":true,"newPurchase":false}'::jsonb;
 
 DROP TRIGGER IF EXISTS activators_set_updated_at ON activators;
 CREATE TRIGGER activators_set_updated_at
@@ -121,6 +140,30 @@ CREATE TRIGGER activators_set_updated_at
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE INDEX IF NOT EXISTS idx_activators_status ON activators(status);
+
+-- ── Notifications ────────────────────────────────────────────────────────
+-- In-app notifications for activators — expiring/dormant/goal-miss (fired
+-- by the periodic sweep in services/notificationSweep.js) and new-purchase
+-- (fired inline the moment a session authorises, see
+-- services/authorization.js). `dedupe_key` + the unique index below stop
+-- the sweep from re-notifying the same underlying event on every tick
+-- (e.g. "session X expiring" fires once, not every 30s until it actually
+-- expires) — see services/notifications.js's notify().
+CREATE TABLE IF NOT EXISTS notifications (
+  id           BIGSERIAL PRIMARY KEY,
+  activator_id INTEGER NOT NULL REFERENCES activators(id) ON DELETE CASCADE,
+  type         TEXT NOT NULL CHECK (type IN ('expiring', 'dormant', 'goal_miss', 'new_purchase')),
+  title        TEXT NOT NULL,
+  body         TEXT,
+  dedupe_key   TEXT,
+  read_at      TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe
+  ON notifications(activator_id, type, dedupe_key) WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_notifications_activator ON notifications(activator_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(activator_id) WHERE read_at IS NULL;
 
 -- ── Coordinators ─────────────────────────────────────────────────────────
 -- Oversee a group of activators within a territory (dashboards, escalation

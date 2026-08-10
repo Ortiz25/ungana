@@ -85,6 +85,8 @@ const ACTIVATOR_FIELD_COLUMNS = {
   commissionRate: "commission_rate",
   status: "status",
   coordinatorId: "coordinator_id",
+  dailyTargetKes: "daily_target_kes",
+  weeklyTargetKes: "weekly_target_kes",
 };
 
 /**
@@ -108,6 +110,13 @@ export async function updateActivator(id, fields) {
     values.push(pinHash);
   }
 
+  // JSONB, not a plain scalar column — merged (not replaced) so toggling
+  // one notification type doesn't require the caller to resend all four.
+  if (fields.notificationPrefs) {
+    sets.push(`notification_prefs = notification_prefs || $${sets.length + 1}::jsonb`);
+    values.push(JSON.stringify(fields.notificationPrefs));
+  }
+
   if (sets.length === 0) {
     const { rows } = await query(`SELECT * FROM activators WHERE id = $1`, [id]);
     return rows[0] || null;
@@ -116,7 +125,8 @@ export async function updateActivator(id, fields) {
   values.push(id);
   const { rows } = await query(
     `UPDATE activators SET ${sets.join(", ")} WHERE id = $${values.length}
-     RETURNING id, code, name, phone, territory, mpesa_number, commission_rate, status, coordinator_id`,
+     RETURNING id, code, name, phone, territory, mpesa_number, commission_rate, status, coordinator_id,
+               daily_target_kes, weekly_target_kes, notification_prefs`,
     values
   );
   return rows[0] || null;

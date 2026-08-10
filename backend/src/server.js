@@ -21,6 +21,7 @@ import { adminRouter } from "./routes/admin.js";
 import { settingsRouter } from "./routes/settings.js";
 import { sitesRouter } from "./routes/sites.js";
 import { retryPaidAuthorizations } from "./services/authorization.js";
+import { runNotificationSweep } from "./services/notificationSweep.js";
 import { login } from "./services/unifi.js";
 import { UPLOADS_DIR } from "./services/uploads.js";
 
@@ -84,6 +85,17 @@ const RETRY_SWEEP_MS = 30_000;
 setInterval(() => {
   retryPaidAuthorizations().catch((err) => console.error("❌ Retry sweep crashed:", err.message));
 }, RETRY_SWEEP_MS);
+
+// ── Activator notification sweep ────────────────────────────────────────
+// Checks for expiring sessions / dormant clients / goal-miss, per
+// activator's notification_prefs (see services/notificationSweep.js).
+// Much lighter-weight than the retry sweep in what it needs to catch in
+// real time, so a slower interval — none of these are time-critical to
+// the second the way router authorisation is.
+const NOTIFICATION_SWEEP_MS = 5 * 60_000;
+setInterval(() => {
+  runNotificationSweep().catch((err) => console.error("❌ Notification sweep crashed:", err.message));
+}, NOTIFICATION_SWEEP_MS);
 
 login()
 

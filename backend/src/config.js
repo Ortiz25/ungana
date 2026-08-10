@@ -67,3 +67,16 @@ export const BTCPAY_URL = process.env.BTCPAY_URL; // e.g. https://btcpay.yourdom
 export const BTCPAY_API_KEY = process.env.BTCPAY_API_KEY;
 export const BTCPAY_STORE_ID = process.env.BTCPAY_STORE_ID;
 export const BTCPAY_WEBHOOK_SECRET = process.env.BTCPAY_WEBHOOK_SECRET;
+
+// ── SMS (activator notifications) ───────────────────────────────────────
+// Same dormant-until-configured convention as BTCPAY_URL above — until
+// SMS_PROVIDER is set, services/sms.js logs to the console instead of
+// sending anything real. No provider is wired up yet (Africa's Talking is
+// the obvious fit for Kenya-based activators, but nothing here commits to
+// it) — this just reserves the config shape so a real provider can be
+// dropped into services/sms.js's `sendSms()` without touching any of its
+// callers.
+export const SMS_PROVIDER = process.env.SMS_PROVIDER; // e.g. 'africastalking' — unset = simulated
+export const SMS_API_KEY = process.env.SMS_API_KEY;
+export const SMS_USERNAME = process.env.SMS_USERNAME;
+export const SMS_SENDER_ID = process.env.SMS_SENDER_ID;

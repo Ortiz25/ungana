@@ -32,11 +32,20 @@
   let { pkg, activator, onPay, onBtcPaid, onBack } = $props();
 
   let paymentMethod = $state('mpesa'); // 'mpesa' | 'btc'
-  // Defaults true (BTC offered) so local dev — which has no captive-portal
-  // URL to read a site from — keeps seeing everything, same convention as
-  // every other site-scoped default in this app. Only actually narrows once
-  // a real site with btcEnabled === false is resolved.
-  let btcAvailable = $state(true);
+  // null = not resolved yet (button stays hidden — see the {#if btcAvailable}
+  // below, where null is as falsy as false). Deliberately NOT defaulted to
+  // true: that was the previous behaviour, and it meant the button flashed
+  // on screen for every client on a BTC-disabled site for as long as the
+  // getSite() round-trip took, then vanished — briefly showing a payment
+  // method that was never actually going to work. Resolves to true
+  // synchronously (no flash at all) when there's no site to check — local
+  // dev has no captive-portal URL to read one from, same "sees everything"
+  // convention as every other site-scoped default in this app — and
+  // resolves to true on a fetch error too (fail open on the DISPLAY only;
+  // the backend enforces btc_enabled server-side regardless of what this
+  // screen shows, so a stale/optimistic true here can never actually let a
+  // disabled site's payment through).
+  let btcAvailable = $state(null);
 
   // Evocative brand colours for each method — not a reproduction of either
   // company's actual logo/trademark, just a tint + generic icon so each
@@ -147,16 +156,23 @@
   let usernameCheckTimer;
 
   onMount(async () => {
-    const result = await getUsernameForMac(getClientMac());
-    if (result.ok && result.data?.username) {
-      username = result.data.username;
+    const siteId = getSiteId();
+    // No site round-trip needed when there's nothing to check — resolves
+    // synchronously so a dev/no-site client never even sees a flash.
+    if (!siteId) btcAvailable = true;
+
+    const [usernameResult, siteResult] = await Promise.all([
+      getUsernameForMac(getClientMac()),
+      siteId ? getSite(siteId) : Promise.resolve(null)
+    ]);
+
+    if (usernameResult.ok && usernameResult.data?.username) {
+      username = usernameResult.data.username;
       usernameLocked = true;
     }
 
-    const siteId = getSiteId();
     if (siteId) {
-      const siteResult = await getSite(siteId);
-      if (siteResult.ok && siteResult.data?.site?.btcEnabled === false) btcAvailable = false;
+      btcAvailable = siteResult.ok ? siteResult.data?.site?.btcEnabled !== false : true;
     }
   });
 

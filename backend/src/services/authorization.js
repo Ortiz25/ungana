@@ -3,6 +3,7 @@
 // actually-active session.
 import { authorizeClient } from "./unifi.js";
 import { markSessionAuthorized, markSessionPaid, listPaidUnauthorizedSessions, logPaymentEvent } from "./sessions.js";
+import { notify } from "./notifications.js";
 
 /**
  * Attempt router authorisation for a session whose payment is confirmed.
@@ -21,7 +22,21 @@ export async function completeAuthorization(session) {
     site: session.site_id ?? undefined,
   });
 
-  if (authorized) return markSessionAuthorized(session.reference);
+  if (authorized) {
+    const authorizedSession = await markSessionAuthorized(session.reference);
+    // Every path that can authorise a session (payments.js, btc.js,
+    // content.js's earned-session claim, and this function's own retry
+    // sweep) funnels through here, so this is the one place a
+    // "new_purchase" ping needs to fire — fire-and-forget, a notification
+    // failure must never affect the session that already succeeded.
+    if (authorizedSession?.source === "purchase" && authorizedSession.activator_id) {
+      notify(authorizedSession.activator_id, "new_purchase", {
+        title: "New purchase!",
+        body: "A client you referred just bought a package.",
+      }).catch((err) => console.error("⚠️ new_purchase notification failed:", err.message));
+    }
+    return authorizedSession;
+  }
 
   await markSessionPaid(session.reference);
   await logPaymentEvent(session.id, "auth_failed", { reference: session.reference, reason: "router_unreachable" });

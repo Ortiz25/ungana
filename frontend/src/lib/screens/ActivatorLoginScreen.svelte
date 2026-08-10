@@ -36,7 +36,10 @@
         mpesaNumber: a.mpesaNumber,
         sessions: 0,
         token: result.data.token,
-        commissionRate: a.commissionRate
+        commissionRate: a.commissionRate,
+        dailyTargetKes: a.dailyTargetKes,
+        weeklyTargetKes: a.weeklyTargetKes,
+        notificationPrefs: a.notificationPrefs
       });
       return;
     }

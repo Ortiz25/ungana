@@ -2,8 +2,8 @@
   import { onMount } from 'svelte';
   import {
     MapPin, Edit3, LogOut, ArrowUpRight, TrendingUp, BarChart2, UserCheck, Wallet, User,
-    Clock, CheckCircle2, MessageCircle, Bell, Award, CreditCard, Save, Copy, Smartphone,
-    ChevronLeft, ChevronRight, Filter
+    Clock, CheckCircle2, MessageCircle, Bell, Award, CreditCard, Copy, Smartphone,
+    ChevronLeft, ChevronRight, Filter, RefreshCw
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import AreaChartMini from '$lib/components/AreaChartMini.svelte';
@@ -11,7 +11,10 @@
     MOCK_ROSTER, daysUntilExpiry, COMMISSION_RATE, ALL_DAILY, MONTHLY_DATA,
     LIFETIME_TOTAL, THIS_WEEK, LAST_WEEK, WEEK_GROWTH, TODAY_EARN, YESTERDAY
   } from '$lib/data.js';
-  import { getActivatorSessions, getActivatorEarnings, getActivatorEarningsSeries, updateActivatorProfile } from '$lib/api.js';
+  import {
+    getActivatorSessions, getActivatorEarnings, getActivatorEarningsSeries, updateActivatorGoals,
+    getActivatorNotifications, markActivatorNotificationsRead, updateActivatorNotificationPrefs
+  } from '$lib/api.js';
 
   let { activator, onLogout } = $props();
 
@@ -29,18 +32,29 @@
   let realEarnings = $state(null);
   let realDailySeries = $state([]); // [{ date: 'YYYY-MM-DD', commissionKes }], oldest → newest, zero-filled
   let loadingReal = $state(isReal);
+  let notifications = $state([]);
+  let unreadCount = $state(0);
 
-  onMount(async () => {
-    if (!isReal) return;
-    const [sessionsResult, earningsResult, seriesResult] = await Promise.all([
+  async function loadRealData() {
+    loadingReal = true;
+    const [sessionsResult, earningsResult, seriesResult, notificationsResult] = await Promise.all([
       getActivatorSessions(activator.token),
       getActivatorEarnings(activator.token),
-      getActivatorEarningsSeries(activator.token, 365)
+      getActivatorEarningsSeries(activator.token, 365),
+      getActivatorNotifications(activator.token)
     ]);
     if (sessionsResult.ok) realSessions = sessionsResult.data?.sessions ?? [];
     if (earningsResult.ok) realEarnings = earningsResult.data?.earnings ?? null;
     if (seriesResult.ok) realDailySeries = seriesResult.data?.series ?? [];
+    if (notificationsResult.ok) {
+      notifications = notificationsResult.data?.notifications ?? [];
+      unreadCount = notificationsResult.data?.unreadCount ?? 0;
+    }
     loadingReal = false;
+  }
+
+  onMount(() => {
+    if (isReal) loadRealData();
   });
 
   const realGrossKes = $derived(Number(realEarnings?.gross_kes ?? 0));
@@ -155,65 +169,77 @@
   let reminded = $state({});
   let tab = $state('overview');
   let period = $state('7D');
-  let weeklyTarget = $state(2000);
-  let dailyTarget = $state(350);
+  // Real activators get their own persisted targets (see goalDefaults'
+  // save path below); the demo/offline fallback has no backend row to load
+  // these from, so it keeps the old fixed defaults.
+  let weeklyTarget = $state(isReal ? (activator.weeklyTargetKes ?? 2000) : 2000);
+  let dailyTarget = $state(isReal ? (activator.dailyTargetKes ?? 350) : 350);
   let editingGoal = $state(null);
   let goalInput = $state('');
+  let goalSaving = $state(false);
   let linkCopied = $state(false);
 
   const AVATAR_COLORS = ['#C45C38', '#4E8050', '#2E5A3E', '#CC8830', '#5B8ED6', '#9B6DD6', '#B85038', '#C06080'];
-  // fullName is the real, persisted name (saved to the backend for real
-  // activators — see saveProfile()); displayName is just the first word of
-  // it, used for the compact header/avatar. Avatar colour and notification
-  // toggles stay client-only — there's no backend concept for either yet,
-  // so persisting them would be fabricating a feature rather than wiring
-  // one up.
+  // fullName/territory/mpesa are read-only display here — an activator can
+  // no longer edit their own identity/payout details (that's what
+  // mpesaNumber actually is) from this screen; only admin can, via the
+  // admin dashboard's activator edit form. Avatar colour stays client-only
+  // — there's no backend concept for it, so persisting it would be
+  // fabricating a feature rather than wiring one up. Notification prefs
+  // ARE real now (see toggleNotifPref below) — defaults match the demo
+  // fallback's old hardcoded values exactly, so first-load appearance is
+  // unchanged either way.
   let fullName = $state(activator.name);
   let territory = $state(activator.area ?? '');
   let mpesa = $state(activator.mpesaNumber ?? '');
   let avatarColor = $state(AVATAR_COLORS[0]);
-  let editingProfile = $state(false);
-  // Always freshly reset by the "Edit" button right before use (see the
-  // profile tab below) — never read while editingProfile is false, so this
-  // initial placeholder is never actually shown.
-  let profileDraft = $state({ name: '', territory: '', mpesa: '' });
-  let profileSaving = $state(false);
-  let profileError = $state('');
-  let notifs = $state({ expiring: true, dormant: true, goalMiss: true, newPurchase: false });
+  let notifs = $state(
+    isReal && activator.notificationPrefs
+      ? activator.notificationPrefs
+      : { expiring: true, dormant: true, goalMiss: true, newPurchase: false }
+  );
+  let notifSaving = $state(null); // which pref key is currently mid-save, or null
+  let showNotifications = $state(false);
+
+  async function openNotifications() {
+    showNotifications = !showNotifications;
+    if (showNotifications && unreadCount > 0) {
+      const result = await markActivatorNotificationsRead(activator.token);
+      if (result.ok) unreadCount = 0;
+    }
+  }
+
+  function formatNotifTime(iso) {
+    const diffMs = Date.now() - new Date(iso).getTime();
+    const mins = Math.round(diffMs / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.round(hours / 24)}d ago`;
+  }
+
+  async function toggleNotifPref(key) {
+    const next = !notifs[key];
+    notifs = { ...notifs, [key]: next };
+
+    if (!isReal) return;
+
+    notifSaving = key;
+    const result = await updateActivatorNotificationPrefs(activator.token, { [key]: next });
+    notifSaving = null;
+
+    if (result.ok && result.data?.success) {
+      notifs = result.data.activator.notificationPrefs;
+    } else {
+      notifs = { ...notifs, [key]: !next }; // revert on failure
+    }
+  }
 
   const displayName = $derived(fullName.trim().split(/\s+/)[0] || fullName);
   const initials = $derived(
     fullName.trim().split(/\s+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2)
   );
-
-  async function saveProfile() {
-    const name = profileDraft.name.trim() || fullName;
-    const nextTerritory = profileDraft.territory.trim();
-    const nextMpesa = profileDraft.mpesa.trim();
-
-    if (!isReal) {
-      fullName = name;
-      territory = nextTerritory;
-      mpesa = nextMpesa;
-      editingProfile = false;
-      return;
-    }
-
-    profileError = '';
-    profileSaving = true;
-    const result = await updateActivatorProfile(activator.token, { name, territory: nextTerritory, mpesaNumber: nextMpesa });
-    profileSaving = false;
-
-    if (!result.ok || !result.data?.success) {
-      profileError = result.data?.message || 'Could not save — check your connection';
-      return;
-    }
-
-    fullName = result.data.activator.name;
-    territory = result.data.activator.territory ?? '';
-    mpesa = result.data.activator.mpesaNumber ?? '';
-    editingProfile = false;
-  }
 
   const activeUsers = MOCK_ROSTER.filter((u) => u.status === 'active').length;
   const dormantUsers = MOCK_ROSTER.filter((u) => u.status === 'dormant');
@@ -235,11 +261,32 @@
 
   const INVITE_LINK = `ungana.app/join?ref=${activator.id.toLowerCase().replace('-', '')}`;
 
-  function handleSaveGoal() {
+  async function handleSaveGoal() {
     const v = parseInt(goalInput.replace(/\D/g, ''), 10);
-    if (v > 0) {
-      if (editingGoal === 'weekly') weeklyTarget = v;
-      if (editingGoal === 'daily') dailyTarget = v;
+    if (!(v > 0)) {
+      editingGoal = null;
+      return;
+    }
+
+    const which = editingGoal;
+
+    if (!isReal) {
+      if (which === 'weekly') weeklyTarget = v;
+      if (which === 'daily') dailyTarget = v;
+      editingGoal = null;
+      return;
+    }
+
+    goalSaving = true;
+    const result = await updateActivatorGoals(activator.token, {
+      dailyTargetKes: which === 'daily' ? v : dailyTarget,
+      weeklyTargetKes: which === 'weekly' ? v : weeklyTarget
+    });
+    goalSaving = false;
+
+    if (result.ok && result.data?.success) {
+      dailyTarget = Number(result.data.activator.dailyTargetKes);
+      weeklyTarget = Number(result.data.activator.weeklyTargetKes);
     }
     editingGoal = null;
   }
@@ -304,9 +351,9 @@
   );
 
   const profileFields = $derived([
-    { icon: User, label: 'Full name', key: 'name', placeholder: 'Your full name', value: editingProfile ? profileDraft.name : fullName },
-    { icon: MapPin, label: 'Territory', key: 'territory', placeholder: 'e.g. Nairobi CBD, Kibera…', value: editingProfile ? profileDraft.territory : territory },
-    { icon: CreditCard, label: 'M-PESA number', key: 'mpesa', placeholder: '+254 7XX XXX XXX', value: editingProfile ? profileDraft.mpesa : mpesa }
+    { icon: User, label: 'Full name', placeholder: 'Your full name', value: fullName },
+    { icon: MapPin, label: 'Territory', placeholder: 'e.g. Nairobi CBD, Kibera…', value: territory },
+    { icon: CreditCard, label: 'M-PESA number', placeholder: '+254 7XX XXX XXX', value: mpesa }
   ]);
 
   const goalDefaults = $derived([
@@ -360,6 +407,59 @@
         </div>
       </div>
       <div class="flex items-center gap-2">
+        {#if isReal}
+          <div class="relative">
+            <button
+              onclick={openNotifications}
+              aria-label="Notifications"
+              class="w-8 h-8 rounded-full flex items-center justify-center relative"
+              style="background: rgba(255,255,255,0.18);"
+            >
+              <Bell size={14} color="#C4DAC0" />
+              {#if unreadCount > 0}
+                <span
+                  class="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full flex items-center justify-center text-[9px] font-bold text-white"
+                  style="background: #C45C38;"
+                >
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              {/if}
+            </button>
+
+            {#if showNotifications}
+              <div
+                class="absolute right-0 top-10 w-72 rounded-2xl overflow-hidden shadow-xl z-50"
+                style="background: #2E5A3E; border: 1px solid rgba(255,255,255,0.14); max-height: 320px; display: flex; flex-direction: column;"
+              >
+                <div class="px-4 py-3 shrink-0" style="border-bottom: 1px solid rgba(255,255,255,0.1);">
+                  <p class="text-xs font-bold text-[#E8D4B0]">Notifications</p>
+                </div>
+                <div style="overflow-y: auto;">
+                  {#if notifications.length === 0}
+                    <p class="text-[11px] text-[#96B496] text-center py-6 px-4">Nothing yet — we'll let you know when something needs attention.</p>
+                  {:else}
+                    {#each notifications as n, i (n.id)}
+                      <div class="px-4 py-3 text-left" style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none'};">
+                        <p class="text-[12px] font-semibold text-[#E8D4B0]">{n.title}</p>
+                        {#if n.body}<p class="text-[11px] text-[#AECAAE] mt-0.5">{n.body}</p>{/if}
+                        <p class="text-[10px] text-[#7A9E7A] mt-1">{formatNotifTime(n.created_at)}</p>
+                      </div>
+                    {/each}
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          </div>
+          <button
+            onclick={loadRealData}
+            disabled={loadingReal}
+            aria-label="Refresh"
+            class="w-8 h-8 rounded-full flex items-center justify-center"
+            style="background: rgba(255,255,255,0.18); opacity: {loadingReal ? 0.6 : 1};"
+          >
+            <RefreshCw size={14} color="#C4DAC0" class={loadingReal ? 'animate-spin' : ''} />
+          </button>
+        {/if}
         <button onclick={() => (tab = 'profile')} class="w-8 h-8 rounded-full flex items-center justify-center" style="background: rgba(255,255,255,0.18);">
           <Edit3 size={14} color="#C4DAC0" />
         </button>
@@ -480,7 +580,7 @@
               <span class="text-xs text-[#C4DAC0]">KES</span>
               <input type="number" bind:value={goalInput} class="flex-1 bg-transparent text-sm font-bold text-[#E8D4B0] outline-none min-w-0" />
             </div>
-            <button onclick={handleSaveGoal} class="px-4 py-2 rounded-2xl text-xs font-bold" style="background: #C45C38; color: #fff;">Save</button>
+            <button onclick={handleSaveGoal} disabled={goalSaving} class="px-4 py-2 rounded-2xl text-xs font-bold" style="background: #C45C38; color: #fff; opacity: {goalSaving ? 0.7 : 1};">{goalSaving ? 'Saving…' : 'Save'}</button>
           </div>
         {:else}
           <div class="flex items-end justify-between mb-2">
@@ -521,7 +621,7 @@
               <span class="text-xs text-[#C4DAC0]">KES</span>
               <input type="number" bind:value={goalInput} class="flex-1 bg-transparent text-sm font-bold text-[#E8D4B0] outline-none min-w-0" />
             </div>
-            <button onclick={handleSaveGoal} class="px-4 py-2 rounded-2xl text-xs font-bold" style="background: #C45C38; color: #fff;">Save</button>
+            <button onclick={handleSaveGoal} disabled={goalSaving} class="px-4 py-2 rounded-2xl text-xs font-bold" style="background: #C45C38; color: #fff; opacity: {goalSaving ? 0.7 : 1};">{goalSaving ? 'Saving…' : 'Save'}</button>
           </div>
         {:else}
           <div class="h-2.5 rounded-full overflow-hidden mb-2" style="background: rgba(255,255,255,0.18);">
@@ -955,30 +1055,8 @@
       <div class="rounded-3xl overflow-hidden" style="background: #2E5A3E;">
         <div class="px-5 pt-4 pb-2 flex items-center justify-between">
           <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Your details</p>
-          {#if !editingProfile}
-            <button onclick={() => { profileDraft = { name: fullName, territory, mpesa }; profileError = ''; editingProfile = true; }} class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full" style="background: rgba(196,92,56,0.30); color: #C45C38;">
-              <Edit3 size={10} /> Edit
-            </button>
-          {:else}
-            <button
-              onclick={saveProfile}
-              disabled={profileSaving}
-              class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full"
-              style="background: rgba(78,128,80,0.35); color: #4E8050; opacity: {profileSaving ? 0.7 : 1};"
-            >
-              {#if profileSaving}
-                <div class="w-2.5 h-2.5 rounded-full border-2 border-current border-t-transparent animate-spin"></div>
-              {:else}
-                <Save size={10} />
-              {/if}
-              Save
-            </button>
-          {/if}
+          <span class="text-[10px] text-[#7A9E7A]">Contact admin to change</span>
         </div>
-
-        {#if profileError}
-          <p class="text-[11px] px-5 pb-1" style="color: #E08A6A;">{profileError}</p>
-        {/if}
 
         {#each profileFields as f, i (f.label)}
           {@const Icon = f.icon}
@@ -986,17 +1064,7 @@
             <div class="mt-0.5 shrink-0"><Icon size={14} color={avatarColor} /></div>
             <div class="flex-1 min-w-0">
               <p class="text-[10px] text-[#AECAAE] uppercase tracking-wider font-semibold mb-0.5">{f.label}</p>
-              {#if editingProfile}
-                <input
-                  type={f.key === 'mpesa' ? 'tel' : 'text'}
-                  value={f.value}
-                  placeholder={f.placeholder}
-                  oninput={(e) => (profileDraft[f.key] = e.currentTarget.value)}
-                  class="w-full bg-transparent text-sm font-semibold text-[#E8D4B0] outline-none placeholder:text-[#4A6842]"
-                />
-              {:else}
-                <p class="text-sm font-semibold" style="color: {f.value ? '#E8D4B0' : '#4A6842'};">{f.value || f.placeholder}</p>
-              {/if}
+              <p class="text-sm font-semibold" style="color: {f.value ? '#E8D4B0' : '#4A6842'};">{f.value || f.placeholder}</p>
             </div>
           </div>
         {/each}
@@ -1037,7 +1105,13 @@
               <p class="text-sm text-[#E8D4B0] font-medium">{row.label}</p>
               <p class="text-[10px] text-[#AECAAE]">{row.sub}</p>
             </div>
-            <button onclick={() => (notifs[row.key] = !notifs[row.key])} class="w-11 h-6 rounded-full relative transition-all shrink-0" style="background: {notifs[row.key] ? avatarColor : 'rgba(255,255,255,0.12)'};" aria-label={row.label}>
+            <button
+              onclick={() => toggleNotifPref(row.key)}
+              disabled={notifSaving === row.key}
+              class="w-11 h-6 rounded-full relative transition-all shrink-0"
+              style="background: {notifs[row.key] ? avatarColor : 'rgba(255,255,255,0.12)'}; opacity: {notifSaving === row.key ? 0.6 : 1};"
+              aria-label={row.label}
+            >
               <div class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all" style="left: {notifs[row.key] ? 'calc(100% - 22px)' : '2px'};"></div>
             </button>
           </div>

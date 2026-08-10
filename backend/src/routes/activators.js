@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { verifyActivatorLogin, getActivatorEarnings, updateActivator } from "../services/activators.js";
 import { listSessionsForActivator, getActivatorEarningsSeries } from "../services/sessions.js";
+import { listNotifications, getUnreadCount, markAllRead } from "../services/notifications.js";
 import { signActivatorToken, requireActivator } from "../middleware/auth.js";
+
+const NOTIFICATION_TYPES = ["expiring", "dormant", "goalMiss", "newPurchase"];
 
 export const activatorsRouter = Router();
 
@@ -24,6 +27,9 @@ activatorsRouter.post("/login", async (req, res) => {
       territory: activator.territory,
       mpesaNumber: activator.mpesa_number,
       commissionRate: Number(activator.commission_rate),
+      dailyTargetKes: Number(activator.daily_target_kes),
+      weeklyTargetKes: Number(activator.weekly_target_kes),
+      notificationPrefs: activator.notification_prefs,
     },
   });
 });
@@ -53,19 +59,38 @@ activatorsRouter.get("/me/earnings/series", requireActivator, async (req, res) =
 });
 
 /**
- * PATCH /api/activators/me — self-service profile update.
- * Body: { name?, territory?, mpesaNumber? }. Deliberately narrower than the
- * admin's activator-edit endpoint — commission rate, status, and
- * coordinator assignment are admin-only and can't be touched from here.
+ * PATCH /api/activators/me — self-service goal-target + notification-
+ * preference update. Body: { dailyTargetKes?, weeklyTargetKes?,
+ * notificationPrefs?: { expiring?, dormant?, goalMiss?, newPurchase? } }.
+ * Identity/payout fields (name, territory, mpesaNumber) are deliberately
+ * NOT editable here anymore — an activator changing their own mpesa payout
+ * destination unsupervised is a real fraud vector, so those are admin-only
+ * now (see PATCH /api/admin/activators/:id). Goal targets and notification
+ * preferences carry no such risk, so self-service stays fine for those.
  */
 activatorsRouter.patch("/me", requireActivator, async (req, res) => {
-  const { name, territory, mpesaNumber } = req.body;
+  const { dailyTargetKes, weeklyTargetKes, notificationPrefs } = req.body;
   const fields = {};
-  if (name !== undefined) fields.name = String(name).trim();
-  if (territory !== undefined) fields.territory = String(territory).trim() || null;
-  if (mpesaNumber !== undefined) fields.mpesaNumber = String(mpesaNumber).trim() || null;
+  if (dailyTargetKes !== undefined) fields.dailyTargetKes = Number(dailyTargetKes);
+  if (weeklyTargetKes !== undefined) fields.weeklyTargetKes = Number(weeklyTargetKes);
 
-  if (fields.name === "") return res.status(400).json({ success: false, message: "Name cannot be empty" });
+  if (
+    (fields.dailyTargetKes !== undefined && !(fields.dailyTargetKes > 0)) ||
+    (fields.weeklyTargetKes !== undefined && !(fields.weeklyTargetKes > 0))
+  ) {
+    return res.status(400).json({ success: false, message: "Targets must be positive numbers" });
+  }
+
+  if (notificationPrefs !== undefined) {
+    if (typeof notificationPrefs !== "object" || notificationPrefs === null || Array.isArray(notificationPrefs)) {
+      return res.status(400).json({ success: false, message: "notificationPrefs must be an object" });
+    }
+    const unknownKey = Object.keys(notificationPrefs).find((k) => !NOTIFICATION_TYPES.includes(k));
+    if (unknownKey) {
+      return res.status(400).json({ success: false, message: `Unknown notification type: ${unknownKey}` });
+    }
+    fields.notificationPrefs = notificationPrefs;
+  }
 
   const activator = await updateActivator(req.activator.activatorId, fields);
   res.json({
@@ -77,6 +102,24 @@ activatorsRouter.patch("/me", requireActivator, async (req, res) => {
       territory: activator.territory,
       mpesaNumber: activator.mpesa_number,
       commissionRate: Number(activator.commission_rate),
+      dailyTargetKes: Number(activator.daily_target_kes),
+      weeklyTargetKes: Number(activator.weekly_target_kes),
+      notificationPrefs: activator.notification_prefs,
     },
   });
+});
+
+/** GET /api/activators/me/notifications — recent notifications + unread count, newest first. */
+activatorsRouter.get("/me/notifications", requireActivator, async (req, res) => {
+  const [notifications, unreadCount] = await Promise.all([
+    listNotifications(req.activator.activatorId),
+    getUnreadCount(req.activator.activatorId),
+  ]);
+  res.json({ success: true, notifications, unreadCount });
+});
+
+/** POST /api/activators/me/notifications/read — marks every unread notification as read. */
+activatorsRouter.post("/me/notifications/read", requireActivator, async (req, res) => {
+  await markAllRead(req.activator.activatorId);
+  res.json({ success: true });
 });

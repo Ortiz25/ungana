@@ -172,12 +172,34 @@ export function getActivatorEarningsSeries(token, days = 365) {
   return request(`/activators/me/earnings/series?days=${days}`, { headers: { Authorization: `Bearer ${token}` } });
 }
 
-/** PATCH /api/activators/me — Body: { name?, territory?, mpesaNumber? }. Bearer token required */
-export function updateActivatorProfile(token, body) {
+/** PATCH /api/activators/me — Body: { dailyTargetKes?, weeklyTargetKes? }. Self-service goal targets only — identity/payout fields are admin-only. Bearer token required */
+export function updateActivatorGoals(token, body) {
   return request('/activators/me', {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
+  });
+}
+
+/** PATCH /api/activators/me — Body: { notificationPrefs: { expiring?, dormant?, goalMiss?, newPurchase? } }. Merged, not replaced — only the keys sent are touched. Bearer token required */
+export function updateActivatorNotificationPrefs(token, notificationPrefs) {
+  return request('/activators/me', {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ notificationPrefs }),
+  });
+}
+
+/** GET /api/activators/me/notifications — recent notifications + unread count. Bearer token required */
+export function getActivatorNotifications(token) {
+  return request('/activators/me/notifications', { headers: { Authorization: `Bearer ${token}` } });
+}
+
+/** POST /api/activators/me/notifications/read — marks every unread notification as read. Bearer token required */
+export function markActivatorNotificationsRead(token) {
+  return request('/activators/me/notifications/read', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
   });
 }
 
