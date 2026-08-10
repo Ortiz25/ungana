@@ -60,15 +60,23 @@ export async function notify(activatorId, type, { title, body = null, dedupeKey 
   }
 }
 
-/** Most recent notifications for an activator, newest first. */
-export async function listNotifications(activatorId, { limit = 30 } = {}) {
+/** Most recent notifications for an activator, newest first. `offset` powers the "View all" paginated list; the bell dropdown just uses the default. */
+export async function listNotifications(activatorId, { limit = 30, offset = 0 } = {}) {
   const { rows } = await query(
     `SELECT id, type, title, body, read_at, created_at
      FROM notifications WHERE activator_id = $1
-     ORDER BY created_at DESC LIMIT $2`,
-    [activatorId, limit]
+     ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+    [activatorId, limit, offset]
   );
   return rows;
+}
+
+export async function countNotifications(activatorId) {
+  const { rows } = await query(
+    `SELECT COUNT(*) AS total FROM notifications WHERE activator_id = $1`,
+    [activatorId]
+  );
+  return Number(rows[0].total);
 }
 
 export async function getUnreadCount(activatorId) {

@@ -1542,7 +1542,8 @@
               </div>
               {#each analytics.earned.contentOverview as c, i (c.id)}
                 {@const impressionsPct = Math.round((c.impressions / maxContentImpressions) * 100)}
-                {@const completionsPct = Math.round((c.completions / maxContentImpressions) * 100)}
+                {@const completionRate = c.impressions > 0 ? c.completions / c.impressions : 0}
+                {@const completionsPct = impressionsPct * completionRate}
                 <button
                   type="button"
                   onclick={() => toggleContentAnalytics(c.id)}
@@ -1554,7 +1555,7 @@
                     <div class="flex items-center justify-between gap-2 mb-1">
                       <p class="min-w-0 text-xs text-[#E8D4B0] truncate">{c.title}</p>
                       <span class="text-[9px] font-bold shrink-0" style="color: #4E8050;">
-                        {c.impressions > 0 ? Math.round((c.completions / c.impressions) * 100) : 0}%
+                        {Math.round(completionRate * 100)}%
                       </span>
                     </div>
                     <div class="relative h-1.5 rounded-full overflow-hidden" style="background: rgba(255,255,255,0.08);">

@@ -7,19 +7,28 @@ import { query } from "../db/pool.js";
 import { notify, deleteOldReadNotifications } from "./notifications.js";
 import { getNotificationRetentionDays } from "./settings.js";
 
+// A MAC address means nothing to an activator reading a notification — the
+// client's self-chosen username (see clients.username) is far more
+// recognisable when it exists. It's optional, so this falls back to a
+// generic phrase rather than ever showing the raw MAC.
+function clientLabel(username) {
+  return username || "A referred client";
+}
+
 /** Sessions with an activator, currently active, expiring within the next 24h. */
 async function sweepExpiring() {
   const { rows } = await query(
-    `SELECT id, activator_id, client_mac, expires_at
-     FROM sessions
-     WHERE activator_id IS NOT NULL AND payment_status = 'success'
-       AND expires_at BETWEEN now() AND now() + INTERVAL '24 hours'`
+    `SELECT s.id, s.activator_id, s.client_mac, s.expires_at, c.username
+     FROM sessions s
+     LEFT JOIN clients c ON LOWER(s.client_mac) = c.mac_address
+     WHERE s.activator_id IS NOT NULL AND s.payment_status = 'success'
+       AND s.expires_at BETWEEN now() AND now() + INTERVAL '24 hours'`
   );
 
   for (const s of rows) {
     await notify(s.activator_id, "expiring", {
       title: "A referred client's session is expiring soon",
-      body: `${s.client_mac} expires within 24 hours`,
+      body: `${clientLabel(s.username)} expires within 24 hours`,
       dedupeKey: `session:${s.id}`,
     });
   }
@@ -28,7 +37,7 @@ async function sweepExpiring() {
 /** Clients locked to an activator who haven't been seen in 7+ days. */
 async function sweepDormant() {
   const { rows } = await query(
-    `SELECT id, activator_id, mac_address, last_seen
+    `SELECT id, activator_id, mac_address, last_seen, username
      FROM clients
      WHERE activator_id IS NOT NULL AND last_seen < now() - INTERVAL '7 days'`
   );
@@ -40,7 +49,7 @@ async function sweepDormant() {
     // needed for a first cut of this feature.
     await notify(c.activator_id, "dormant", {
       title: "A referred client has gone quiet",
-      body: `${c.mac_address} hasn't been seen in 7+ days`,
+      body: `${clientLabel(c.username)} hasn't been seen in 7+ days`,
       dedupeKey: `client:${c.id}`,
     });
   }

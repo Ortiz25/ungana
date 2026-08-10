@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { verifyActivatorLogin, getActivatorEarnings, updateActivator } from "../services/activators.js";
 import { listSessionsForActivator, getActivatorEarningsSeries } from "../services/sessions.js";
-import { listNotifications, getUnreadCount, markAllRead } from "../services/notifications.js";
+import { listNotifications, countNotifications, getUnreadCount, markAllRead } from "../services/notifications.js";
 import { signActivatorToken, requireActivator } from "../middleware/auth.js";
 
 const NOTIFICATION_TYPES = ["expiring", "dormant", "goalMiss", "newPurchase"];
@@ -109,13 +109,22 @@ activatorsRouter.patch("/me", requireActivator, async (req, res) => {
   });
 });
 
-/** GET /api/activators/me/notifications — recent notifications + unread count, newest first. */
+/**
+ * GET /api/activators/me/notifications?page=&pageSize= — recent
+ * notifications + unread count + total, newest first. `page`/`pageSize`
+ * are optional (default page=1, pageSize=30 — the bell dropdown's usual
+ * call); the "View all" list passes both for real pagination.
+ */
 activatorsRouter.get("/me/notifications", requireActivator, async (req, res) => {
-  const [notifications, unreadCount] = await Promise.all([
-    listNotifications(req.activator.activatorId),
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 30));
+  const page = Math.max(1, Number(req.query.page) || 1);
+
+  const [notifications, unreadCount, total] = await Promise.all([
+    listNotifications(req.activator.activatorId, { limit: pageSize, offset: (page - 1) * pageSize }),
     getUnreadCount(req.activator.activatorId),
+    countNotifications(req.activator.activatorId),
   ]);
-  res.json({ success: true, notifications, unreadCount });
+  res.json({ success: true, notifications, unreadCount, total, page, pageSize });
 });
 
 /** POST /api/activators/me/notifications/read — marks every unread notification as read. */

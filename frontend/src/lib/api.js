@@ -190,9 +190,13 @@ export function updateActivatorNotificationPrefs(token, notificationPrefs) {
   });
 }
 
-/** GET /api/activators/me/notifications — recent notifications + unread count. Bearer token required */
-export function getActivatorNotifications(token) {
-  return request('/activators/me/notifications', { headers: { Authorization: `Bearer ${token}` } });
+/** GET /api/activators/me/notifications?page=&pageSize= — recent notifications + unread count + total. Bearer token required */
+export function getActivatorNotifications(token, { page, pageSize } = {}) {
+  const params = new URLSearchParams();
+  if (page) params.set('page', page);
+  if (pageSize) params.set('pageSize', pageSize);
+  const qs = params.toString();
+  return request(`/activators/me/notifications${qs ? `?${qs}` : ''}`, { headers: { Authorization: `Bearer ${token}` } });
 }
 
 /** POST /api/activators/me/notifications/read — marks every unread notification as read. Bearer token required */

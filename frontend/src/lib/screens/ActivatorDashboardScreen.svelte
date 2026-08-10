@@ -34,6 +34,11 @@
   let loadingReal = $state(isReal);
   let notifications = $state([]);
   let unreadCount = $state(0);
+  let notifTotal = $state(0);
+  // Bell dropdown only ever shows a handful — "View all" (below) is what
+  // handles the rest, with real server-side pagination, once there are
+  // more than fit here.
+  const NOTIF_DROPDOWN_SIZE = 5;
 
   async function loadRealData() {
     loadingReal = true;
@@ -41,7 +46,7 @@
       getActivatorSessions(activator.token),
       getActivatorEarnings(activator.token),
       getActivatorEarningsSeries(activator.token, 365),
-      getActivatorNotifications(activator.token)
+      getActivatorNotifications(activator.token, { pageSize: NOTIF_DROPDOWN_SIZE })
     ]);
 
     // A reload can restore this dashboard straight from a persisted
@@ -61,6 +66,7 @@
     if (notificationsResult.ok) {
       notifications = notificationsResult.data?.notifications ?? [];
       unreadCount = notificationsResult.data?.unreadCount ?? 0;
+      notifTotal = notificationsResult.data?.total ?? 0;
     }
     loadingReal = false;
   }
@@ -230,6 +236,43 @@
     if (hours < 24) return `${hours}h ago`;
     return `${Math.round(hours / 24)}d ago`;
   }
+
+  // ── "View all" notifications — real server-side pagination, for once
+  // there are more than the bell dropdown's handful. ─────────────────────
+  const NOTIF_PAGE_SIZES = [10, 20, 50];
+  let showAllNotifications = $state(false);
+  let allNotifications = $state([]);
+  let notifListLoading = $state(false);
+  let notifPage = $state(1);
+  let notifPageSize = $state(10);
+  const notifTotalPages = $derived(Math.max(1, Math.ceil(notifTotal / notifPageSize)));
+
+  async function loadNotificationsPage() {
+    notifListLoading = true;
+    const result = await getActivatorNotifications(activator.token, { page: notifPage, pageSize: notifPageSize });
+    if (result.ok) {
+      allNotifications = result.data?.notifications ?? [];
+      notifTotal = result.data?.total ?? 0;
+    }
+    notifListLoading = false;
+  }
+
+  async function openAllNotifications() {
+    showNotifications = false;
+    showAllNotifications = true;
+    notifPage = 1;
+    if (unreadCount > 0) {
+      const result = await markActivatorNotificationsRead(activator.token);
+      if (result.ok) unreadCount = 0;
+    }
+  }
+
+  $effect(() => {
+    if (!showAllNotifications) return;
+    notifPage;
+    notifPageSize;
+    loadNotificationsPage();
+  });
 
   async function toggleNotifPref(key) {
     const next = !notifs[key];
@@ -469,6 +512,15 @@
                     {/each}
                   {/if}
                 </div>
+                {#if notifTotal > notifications.length}
+                  <button
+                    onclick={openAllNotifications}
+                    class="w-full py-2.5 text-[11px] font-bold shrink-0"
+                    style="border-top: 1px solid rgba(255,255,255,0.1); color: #C45C38;"
+                  >
+                    View all {notifTotal} →
+                  </button>
+                {/if}
               </div>
             {/if}
           </div>
@@ -1181,4 +1233,71 @@
       </button>
     {/if}
   </div>
+
+  {#if showAllNotifications}
+    <div class="fixed inset-0 z-[70] flex items-end justify-center">
+      <div class="absolute inset-0" style="background: rgba(0,0,0,0.55);"></div>
+      <div class="relative w-full rounded-t-3xl flex flex-col" style="background: #1D3C2A; max-width: 480px; max-height: 85vh;">
+        <div class="flex items-center justify-between px-5 pt-5 pb-3 shrink-0" style="border-bottom: 1px solid rgba(255,255,255,0.1);">
+          <p class="text-sm font-bold text-[#E8D4B0]">All notifications</p>
+          <button onclick={() => (showAllNotifications = false)} class="w-8 h-8 rounded-full flex items-center justify-center" style="background: rgba(255,255,255,0.1);">
+            <X size={14} color="#C4DAC0" />
+          </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto">
+          {#if notifListLoading}
+            <div class="flex justify-center py-10"><div class="w-6 h-6 rounded-full border-2 border-white/20 border-t-white/70 animate-spin"></div></div>
+          {:else if allNotifications.length === 0}
+            <p class="text-xs text-[#96B496] text-center py-10 px-5">No notifications yet.</p>
+          {:else}
+            {#each allNotifications as n, i (n.id)}
+              <div class="px-5 py-3.5" style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none'};">
+                <p class="text-xs font-semibold text-[#E8D4B0]">{n.title}</p>
+                {#if n.body}<p class="text-[11px] text-[#AECAAE] mt-0.5">{n.body}</p>{/if}
+                <p class="text-[10px] text-[#7A9E7A] mt-1">{formatNotifTime(n.created_at)}</p>
+              </div>
+            {/each}
+          {/if}
+        </div>
+
+        {#if notifTotal > 0}
+          <div class="flex items-center justify-between px-5 py-3 shrink-0" style="border-top: 1px solid rgba(255,255,255,0.1);">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[10px] text-[#96B496]">Show</span>
+              <select
+                value={notifPageSize}
+                onchange={(e) => { notifPageSize = Number(e.currentTarget.value); notifPage = 1; }}
+                class="text-[11px] font-bold px-2 py-1.5 rounded-lg outline-none"
+                style="background: rgba(255,255,255,0.1); color: #E8D4B0; border: none;"
+              >
+                {#each NOTIF_PAGE_SIZES as size (size)}
+                  <option value={size}>{size}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                onclick={() => (notifPage = Math.max(1, notifPage - 1))}
+                disabled={notifPage <= 1}
+                class="w-7 h-7 rounded-full flex items-center justify-center"
+                style="background: rgba(255,255,255,0.1); opacity: {notifPage <= 1 ? 0.4 : 1};"
+              >
+                <ChevronLeft size={13} color="#C4DAC0" />
+              </button>
+              <span class="text-[11px] font-semibold text-[#C4DAC0]">Page {notifPage} of {notifTotalPages}</span>
+              <button
+                onclick={() => (notifPage = Math.min(notifTotalPages, notifPage + 1))}
+                disabled={notifPage >= notifTotalPages}
+                class="w-7 h-7 rounded-full flex items-center justify-center"
+                style="background: rgba(255,255,255,0.1); opacity: {notifPage >= notifTotalPages ? 0.4 : 1};"
+              >
+                <ChevronRight size={13} color="#C4DAC0" />
+              </button>
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </div>
