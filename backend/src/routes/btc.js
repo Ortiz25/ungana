@@ -57,12 +57,14 @@ btcRouter.post("/initiate-btc-payment", async (req, res) => {
     // see resolveClientActivator's own comment.
     const resolvedActivatorId = await resolveClientActivator(clientMac, activatorCode);
 
-    const { reference, lightningInvoice, checkoutLink, expiresAt, amountSats, btcRateKes } = await initiateBtcPayment({
+    const response= await initiateBtcPayment({
       amountKES: amount,
       metadata: { clientMac, packageId },
       simulateFailure: !!simulateFailure,
     });
-
+    console.log(response)
+    const { reference, lightningInvoice, checkoutLink, expiresAt, amountSats, btcRateKes } = response
+   
     let durationSecs;
     if (APP_MODE === "active") {
       const catalogPkg = await getPackageById(packageId);

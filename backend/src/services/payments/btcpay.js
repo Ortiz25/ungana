@@ -3,16 +3,11 @@
 // BTCPAY_STORE_ID to all be set — otherwise BTC checkout transparently uses
 // ./btcpaySimulated.js instead. See config.js for the env vars.
 //
-// Built from BTCPay's documented Node.js example and REST conventions:
-// https://docs.btcpayserver.org/Development/GreenFieldExample-NodeJS/
-// The interactive API reference (docs.btcpayserver.org/API/Greenfield/v1)
-// is a JS-rendered Swagger UI that couldn't be scraped for exact field
-// names while writing this — before going live, verify against your own
-// instance's /swagger page:
-//   - PAYMENT_METHOD_ID below ("BTC-LN") is the Lightning-only checkout
-//     payment method key; older BTCPay versions used "BTC_LightningLike".
-//   - The payment-methods response fields used below (`destination`,
-//     `amount`, `rate`) — confirm they match your version's response shape.
+// Field names below are verified against BTCPayServer.Client's actual
+// model source (not just the docs site, which renders its API reference
+// via JS and can't be scraped) — specifically
+// BTCPayServer.Client/Models/InvoicePaymentMethodDataModel.cs and
+// InvoiceData.cs in https://github.com/btcpayserver/btcpayserver.
 import axios from "axios";
 import crypto from "crypto";
 import { BTCPAY_URL, BTCPAY_API_KEY, BTCPAY_STORE_ID, BTCPAY_WEBHOOK_SECRET } from "../../config.js";
@@ -43,11 +38,33 @@ export async function createBtcInvoice({ amountKES, metadata = {} }) {
 
   const invoice = response.data;
 
-  const methodsResponse = await axios.get(
-    `${BTCPAY_URL}/api/v1/stores/${BTCPAY_STORE_ID}/invoices/${invoice.id}/payment-methods`,
-    { headers: authHeaders() }
-  );
-  const lnMethod = methodsResponse.data.find((m) => m.paymentMethod === PAYMENT_METHOD_ID);
+  // The invoice-creation response already carries each requested payment
+  // method's generated destination/amount/rate (InvoiceData.paymentMethods
+  // — same InvoicePaymentMethodDataModel[] shape as the dedicated
+  // payment-methods endpoint), so the common case needs no second request.
+  // Falls back to that dedicated GET only if it ever comes back empty (e.g.
+  // a BTCPay config where payment methods are generated lazily after
+  // creation) — cheap insurance, not something observed in practice here.
+  let methods = invoice.paymentMethods ?? [];
+  if (methods.length === 0) {
+    const methodsResponse = await axios.get(
+      `${BTCPAY_URL}/api/v1/stores/${BTCPAY_STORE_ID}/invoices/${invoice.id}/payment-methods`,
+      { headers: authHeaders() }
+    );
+    methods = methodsResponse.data ?? [];
+  }
+
+  // Lightning-only checkout (see `checkout.paymentMethods` above) means
+  // there's only ever one entry — matching by id when present, falling
+  // back to "whatever's there" is extra safety against a version-specific
+  // naming quirk. This match previously used `m.paymentMethod`, which
+  // isn't a real field on this object (the actual property is
+  // `paymentMethodId`) — so it silently matched nothing on every call,
+  // and lightningInvoice/amountSats/btcRateKes always fell back to null
+  // below even though BTCPay had genuinely generated a real invoice (see
+  // the BTCPay dashboard for the same invoice id, which showed the real
+  // BOLT11 destination and rate the whole time).
+  const lnMethod = methods.find((m) => m.paymentMethodId === PAYMENT_METHOD_ID) ?? methods[0] ?? null;
 
   const amountBtc = lnMethod?.amount != null ? Number(lnMethod.amount) : null;
   const amountSats = amountBtc != null && Number.isFinite(amountBtc) ? Math.round(amountBtc * 100_000_000) : null;

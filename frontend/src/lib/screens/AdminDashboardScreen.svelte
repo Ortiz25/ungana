@@ -7,6 +7,7 @@
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import MultiLineChartMini from '$lib/components/MultiLineChartMini.svelte';
+  import AdminModal from '$lib/components/AdminModal.svelte';
   import {
     adminGetContent, adminCreateContent, adminUpdateContent,
     adminGetActivators, adminCreateActivator, adminUpdateActivator,
@@ -998,15 +999,15 @@
       </div>
     {:else if tab === 'content'}
       <button
-        onclick={() => (showContentForm = !showContentForm)}
+        onclick={() => (showContentForm = true)}
         class="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-bold text-sm"
-        style="background: {showContentForm ? 'rgba(29,60,42,0.1)' : 'linear-gradient(135deg, #C45C38, #CC8830)'}; color: {showContentForm ? '#1D3C2A' : '#fff'};"
+        style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
       >
-        {#if showContentForm}<X size={15} /> Cancel{:else}<Plus size={15} /> Add content{/if}
+        <Plus size={15} /> Add content
       </button>
 
       {#if showContentForm}
-        <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
+        <AdminModal title="Add content" onClose={() => (showContentForm = false)}>
           <div>
             <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Type</p>
             <div class="flex gap-2">
@@ -1070,7 +1071,7 @@
           >
             {contentSaving ? 'Saving…' : 'Create content item'}
           </button>
-        </div>
+        </AdminModal>
       {/if}
 
       <p class="text-xs text-[#3C6A4A] font-semibold px-1">{contentItems.length} items</p>
@@ -1095,11 +1096,11 @@
             </div>
             <div class="flex flex-col gap-1.5 shrink-0 items-end">
               <button
-                onclick={() => (editingContentId === item.id ? cancelEditContent() : startEditContent(item))}
+                onclick={() => startEditContent(item)}
                 class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full"
                 style="background: rgba(255,255,255,0.12); color: #C4DAC0;"
               >
-                {#if editingContentId === item.id}<X size={10} /> Close{:else}<Edit3 size={10} /> Edit{/if}
+                <Edit3 size={10} /> Edit
               </button>
               <button
                 onclick={() => toggleContentActive(item)}
@@ -1110,92 +1111,92 @@
               </button>
             </div>
           </div>
-
-          {#if editingContentId === item.id && contentEditDraft}
-            <div class="px-4 pb-4 flex flex-col gap-3" style="border-top: 1px solid rgba(255,255,255,0.14); padding-top: 14px;">
-              <div>
-                <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Type</p>
-                <div class="flex gap-2">
-                  {#each ['video', 'article', 'survey', 'lesson'] as t (t)}
-                    <button
-                      type="button"
-                      onclick={() => (contentEditDraft.type = t)}
-                      class="flex-1 py-2 rounded-xl text-[11px] font-semibold capitalize"
-                      style="background: {contentEditDraft.type === t ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {contentEditDraft.type === t ? '#fff' : '#C4DAC0'};"
-                    >
-                      {t}
-                    </button>
-                  {/each}
-                </div>
-              </div>
-              {@render sectionPicker(contentEditDraft.section, (id) => (contentEditDraft.section = id))}
-              {@render viewFrequencyPicker(contentEditDraft.viewFrequency, (id) => (contentEditDraft.viewFrequency = id))}
-              {@render sitePicker(contentEditDraft)}
-              {@render inputField('Title', contentEditDraft.title, (e) => (contentEditDraft.title = e.currentTarget.value))}
-              {@render inputField('Category', contentEditDraft.category, (e) => (contentEditDraft.category = e.currentTarget.value), { placeholder: 'e.g. Education' })}
-              {@render inputField('Duration label', contentEditDraft.durationLabel, (e) => (contentEditDraft.durationLabel = e.currentTarget.value), { placeholder: 'e.g. 5 min' })}
-              {#if contentEditDraft.type === 'survey' || contentEditDraft.type === 'article'}
-                {@render inputField('Reward (minutes)', contentEditDraft.earnMinutes, (e) => (contentEditDraft.earnMinutes = e.currentTarget.value), { type: 'number' })}
-              {:else}
-                <div class="grid grid-cols-2 gap-3">
-                  {@render inputField('Reward (minutes)', contentEditDraft.earnMinutes, (e) => (contentEditDraft.earnMinutes = e.currentTarget.value), { type: 'number' })}
-                  {@render inputField('Min watch (seconds)', contentEditDraft.minWatchSecs, (e) => (contentEditDraft.minWatchSecs = e.currentTarget.value), { type: 'number' })}
-                </div>
-              {/if}
-              {@render fileOrUrlField(
-                contentEditDraft.type === 'survey' ? 'Image (background behind the survey icon)' : 'Image',
-                contentEditDraft.imgUrl,
-                (e) => (contentEditDraft.imgUrl = e.currentTarget.value),
-                editImgUploading,
-                (e) => handleFileUpload(e, contentEditDraft, 'imgUrl', (v) => (editImgUploading = v), (m) => (contentEditError = m)),
-                'image/*'
-              )}
-              {#if contentEditDraft.type === 'survey'}
-                {@render surveyQuestionsEditor(contentEditDraft)}
-              {:else if contentEditDraft.type === 'article'}
-                {@render articleBodyField(contentEditDraft, (e) => (contentEditDraft.bodyUrl = e.currentTarget.value))}
-              {:else}
-                {@render fileOrUrlField(
-                  contentEditDraft.type === 'video' ? 'Video' : 'Article',
-                  contentEditDraft.bodyUrl,
-                  (e) => (contentEditDraft.bodyUrl = e.currentTarget.value),
-                  editBodyUploading,
-                  (e) => handleFileUpload(e, contentEditDraft, 'bodyUrl', (v) => (editBodyUploading = v), (m) => (contentEditError = m)),
-                  contentEditDraft.type === 'video' ? 'video/*' : undefined
-                )}
-              {/if}
-
-              {#if contentEditError}
-                <p class="text-xs text-[#E08A6A]">{contentEditError}</p>
-              {/if}
-
-              <button
-                onclick={() => saveEditContent(item.id)}
-                disabled={contentEditSaving}
-                class="w-full py-2.5 rounded-xl flex items-center justify-center gap-2 font-bold text-xs text-white"
-                style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {contentEditSaving ? 0.7 : 1};"
-              >
-                <Save size={12} />{contentEditSaving ? 'Saving…' : 'Save changes'}
-              </button>
-            </div>
-          {/if}
         </div>
       {/each}
       </div>
+
+      {#if editingContentId && contentEditDraft}
+        <AdminModal title="Edit content" onClose={cancelEditContent}>
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Type</p>
+            <div class="flex gap-2">
+              {#each ['video', 'article', 'survey', 'lesson'] as t (t)}
+                <button
+                  type="button"
+                  onclick={() => (contentEditDraft.type = t)}
+                  class="flex-1 py-2 rounded-xl text-[11px] font-semibold capitalize"
+                  style="background: {contentEditDraft.type === t ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {contentEditDraft.type === t ? '#fff' : '#C4DAC0'};"
+                >
+                  {t}
+                </button>
+              {/each}
+            </div>
+          </div>
+          {@render sectionPicker(contentEditDraft.section, (id) => (contentEditDraft.section = id))}
+          {@render viewFrequencyPicker(contentEditDraft.viewFrequency, (id) => (contentEditDraft.viewFrequency = id))}
+          {@render sitePicker(contentEditDraft)}
+          {@render inputField('Title', contentEditDraft.title, (e) => (contentEditDraft.title = e.currentTarget.value))}
+          {@render inputField('Category', contentEditDraft.category, (e) => (contentEditDraft.category = e.currentTarget.value), { placeholder: 'e.g. Education' })}
+          {@render inputField('Duration label', contentEditDraft.durationLabel, (e) => (contentEditDraft.durationLabel = e.currentTarget.value), { placeholder: 'e.g. 5 min' })}
+          {#if contentEditDraft.type === 'survey' || contentEditDraft.type === 'article'}
+            {@render inputField('Reward (minutes)', contentEditDraft.earnMinutes, (e) => (contentEditDraft.earnMinutes = e.currentTarget.value), { type: 'number' })}
+          {:else}
+            <div class="grid grid-cols-2 gap-3">
+              {@render inputField('Reward (minutes)', contentEditDraft.earnMinutes, (e) => (contentEditDraft.earnMinutes = e.currentTarget.value), { type: 'number' })}
+              {@render inputField('Min watch (seconds)', contentEditDraft.minWatchSecs, (e) => (contentEditDraft.minWatchSecs = e.currentTarget.value), { type: 'number' })}
+            </div>
+          {/if}
+          {@render fileOrUrlField(
+            contentEditDraft.type === 'survey' ? 'Image (background behind the survey icon)' : 'Image',
+            contentEditDraft.imgUrl,
+            (e) => (contentEditDraft.imgUrl = e.currentTarget.value),
+            editImgUploading,
+            (e) => handleFileUpload(e, contentEditDraft, 'imgUrl', (v) => (editImgUploading = v), (m) => (contentEditError = m)),
+            'image/*'
+          )}
+          {#if contentEditDraft.type === 'survey'}
+            {@render surveyQuestionsEditor(contentEditDraft)}
+          {:else if contentEditDraft.type === 'article'}
+            {@render articleBodyField(contentEditDraft, (e) => (contentEditDraft.bodyUrl = e.currentTarget.value))}
+          {:else}
+            {@render fileOrUrlField(
+              contentEditDraft.type === 'video' ? 'Video' : 'Article',
+              contentEditDraft.bodyUrl,
+              (e) => (contentEditDraft.bodyUrl = e.currentTarget.value),
+              editBodyUploading,
+              (e) => handleFileUpload(e, contentEditDraft, 'bodyUrl', (v) => (editBodyUploading = v), (m) => (contentEditError = m)),
+              contentEditDraft.type === 'video' ? 'video/*' : undefined
+            )}
+          {/if}
+
+          {#if contentEditError}
+            <p class="text-xs text-[#E08A6A]">{contentEditError}</p>
+          {/if}
+
+          <button
+            onclick={() => saveEditContent(editingContentId)}
+            disabled={contentEditSaving}
+            class="w-full py-2.5 rounded-xl flex items-center justify-center gap-2 font-bold text-xs text-white"
+            style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {contentEditSaving ? 0.7 : 1};"
+          >
+            <Save size={12} />{contentEditSaving ? 'Saving…' : 'Save changes'}
+          </button>
+        </AdminModal>
+      {/if}
     {:else if tab === 'activators'}
       <button
         onclick={() => {
-          if (!showActivatorForm) activatorDraft = freshActivatorDraft();
-          showActivatorForm = !showActivatorForm;
+          activatorDraft = freshActivatorDraft();
+          showActivatorForm = true;
         }}
         class="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-bold text-sm"
-        style="background: {showActivatorForm ? 'rgba(29,60,42,0.1)' : 'linear-gradient(135deg, #C45C38, #CC8830)'}; color: {showActivatorForm ? '#1D3C2A' : '#fff'};"
+        style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
       >
-        {#if showActivatorForm}<X size={15} /> Cancel{:else}<Plus size={15} /> Add activator{/if}
+        <Plus size={15} /> Add activator
       </button>
 
       {#if showActivatorForm}
-        <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
+        <AdminModal title="Add activator" onClose={() => (showActivatorForm = false)}>
           <div class="grid grid-cols-2 gap-3">
             {@render inputField('Code', activatorDraft.code, (e) => (activatorDraft.code = e.currentTarget.value), { placeholder: 'ACT-009' })}
             {@render inputField('Name', activatorDraft.name, (e) => (activatorDraft.name = e.currentTarget.value))}
@@ -1236,7 +1237,7 @@
           >
             {activatorSaving ? 'Saving…' : 'Create activator'}
           </button>
-        </div>
+        </AdminModal>
       {/if}
 
       <p class="text-xs text-[#3C6A4A] font-semibold px-1">{activators.length} activators</p>
@@ -1258,11 +1259,11 @@
             </div>
             <div class="flex flex-col gap-1.5 shrink-0 items-end">
               <button
-                onclick={() => (editingActivatorId === a.id ? cancelEditActivator() : startEditActivator(a))}
+                onclick={() => startEditActivator(a)}
                 class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full"
                 style="background: rgba(255,255,255,0.12); color: #C4DAC0;"
               >
-                {#if editingActivatorId === a.id}<X size={10} /> Close{:else}<Edit3 size={10} /> Edit{/if}
+                <Edit3 size={10} /> Edit
               </button>
               <button
                 onclick={() => toggleActivatorStatus(a)}
@@ -1273,63 +1274,66 @@
               </button>
             </div>
           </div>
-
-          {#if editingActivatorId === a.id && activatorEditDraft}
-            <div class="px-4 pb-4 flex flex-col gap-3" style="border-top: 1px solid rgba(255,255,255,0.14); padding-top: 14px;">
-              <div class="flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(255,255,255,0.06);">
-                <Phone size={12} color="#96B496" />
-                <p class="text-xs text-[#C4DAC0]">Login phone: <span class="font-semibold text-[#E8D4B0]">{a.phone}</span> <span class="text-[#96B496]">(code {a.code}, not editable here)</span></p>
-              </div>
-              {@render inputField('Name', activatorEditDraft.name, (e) => (activatorEditDraft.name = e.currentTarget.value))}
-              {@render inputField('Territory', activatorEditDraft.territory, (e) => (activatorEditDraft.territory = e.currentTarget.value), { placeholder: 'e.g. Nairobi CBD' })}
-              <div class="grid grid-cols-2 gap-3">
-                {@render inputField('M-PESA number', activatorEditDraft.mpesaNumber, (e) => (activatorEditDraft.mpesaNumber = e.currentTarget.value), { placeholder: 'if different' })}
-                {@render inputField('Commission %', activatorEditDraft.commissionRate, (e) => (activatorEditDraft.commissionRate = e.currentTarget.value), { type: 'number' })}
-              </div>
-              <div>
-                <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Reports to coordinator</p>
-                <select
-                  value={activatorEditDraft.coordinatorId}
-                  onchange={(e) => (activatorEditDraft.coordinatorId = e.currentTarget.value)}
-                  class="w-full px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] outline-none"
-                  style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
-                >
-                  <option value="" style="color: #1D3C2A;">None</option>
-                  {#each coordinators as c (c.id)}
-                    <option value={c.id} style="color: #1D3C2A;">{c.name}</option>
-                  {/each}
-                </select>
-              </div>
-              {@render inputField('Reset PIN (optional)', activatorEditDraft.pin, (e) => (activatorEditDraft.pin = e.currentTarget.value.replace(/\D/g, '').slice(0, 6)), { type: 'password', placeholder: 'leave blank to keep current' })}
-
-              {#if activatorEditError}
-                <p class="text-xs text-[#E08A6A]">{activatorEditError}</p>
-              {/if}
-
-              <button
-                onclick={() => saveEditActivator(a.id)}
-                disabled={activatorEditSaving}
-                class="w-full py-2.5 rounded-xl flex items-center justify-center gap-2 font-bold text-xs text-white"
-                style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {activatorEditSaving ? 0.7 : 1};"
-              >
-                <Save size={12} />{activatorEditSaving ? 'Saving…' : 'Save changes'}
-              </button>
-            </div>
-          {/if}
         </div>
       {/each}
       </div>
+
+      {#if editingActivatorId && activatorEditDraft}
+        {@const a = activators.find((x) => x.id === editingActivatorId)}
+        <AdminModal title="Edit activator" onClose={cancelEditActivator}>
+          {#if a}
+            <div class="flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(255,255,255,0.06);">
+              <Phone size={12} color="#96B496" />
+              <p class="text-xs text-[#C4DAC0]">Login phone: <span class="font-semibold text-[#E8D4B0]">{a.phone}</span> <span class="text-[#96B496]">(code {a.code}, not editable here)</span></p>
+            </div>
+          {/if}
+          {@render inputField('Name', activatorEditDraft.name, (e) => (activatorEditDraft.name = e.currentTarget.value))}
+          {@render inputField('Territory', activatorEditDraft.territory, (e) => (activatorEditDraft.territory = e.currentTarget.value), { placeholder: 'e.g. Nairobi CBD' })}
+          <div class="grid grid-cols-2 gap-3">
+            {@render inputField('M-PESA number', activatorEditDraft.mpesaNumber, (e) => (activatorEditDraft.mpesaNumber = e.currentTarget.value), { placeholder: 'if different' })}
+            {@render inputField('Commission %', activatorEditDraft.commissionRate, (e) => (activatorEditDraft.commissionRate = e.currentTarget.value), { type: 'number' })}
+          </div>
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Reports to coordinator</p>
+            <select
+              value={activatorEditDraft.coordinatorId}
+              onchange={(e) => (activatorEditDraft.coordinatorId = e.currentTarget.value)}
+              class="w-full px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] outline-none"
+              style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
+            >
+              <option value="" style="color: #1D3C2A;">None</option>
+              {#each coordinators as c (c.id)}
+                <option value={c.id} style="color: #1D3C2A;">{c.name}</option>
+              {/each}
+            </select>
+          </div>
+          {@render inputField('Reset PIN (optional)', activatorEditDraft.pin, (e) => (activatorEditDraft.pin = e.currentTarget.value.replace(/\D/g, '').slice(0, 6)), { type: 'password', placeholder: 'leave blank to keep current' })}
+
+          {#if activatorEditError}
+            <p class="text-xs text-[#E08A6A]">{activatorEditError}</p>
+          {/if}
+
+          <button
+            onclick={() => saveEditActivator(editingActivatorId)}
+            disabled={activatorEditSaving}
+            class="w-full py-2.5 rounded-xl flex items-center justify-center gap-2 font-bold text-xs text-white"
+            style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {activatorEditSaving ? 0.7 : 1};"
+          >
+            <Save size={12} />{activatorEditSaving ? 'Saving…' : 'Save changes'}
+          </button>
+        </AdminModal>
+      {/if}
     {:else if tab === 'coordinators'}
       <button
-        onclick={() => (showCoordinatorForm = !showCoordinatorForm)}
+        onclick={() => (showCoordinatorForm = true)}
         class="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-bold text-sm"
-        style="background: {showCoordinatorForm ? 'rgba(29,60,42,0.1)' : 'linear-gradient(135deg, #C45C38, #CC8830)'}; color: {showCoordinatorForm ? '#1D3C2A' : '#fff'};"
+        style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
       >
-        {#if showCoordinatorForm}<X size={15} /> Cancel{:else}<Plus size={15} /> Add coordinator{/if}
+        <Plus size={15} /> Add coordinator
       </button>
 
       {#if showCoordinatorForm}
-        <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
+        <AdminModal title="Add coordinator" onClose={() => (showCoordinatorForm = false)}>
           {@render inputField('Name', coordinatorDraft.name, (e) => (coordinatorDraft.name = e.currentTarget.value))}
           <div class="grid grid-cols-2 gap-3">
             {@render inputField('Phone', coordinatorDraft.phone, (e) => (coordinatorDraft.phone = e.currentTarget.value), { placeholder: '254700000000' })}
@@ -1349,7 +1353,7 @@
           >
             {coordinatorSaving ? 'Saving…' : 'Create coordinator'}
           </button>
-        </div>
+        </AdminModal>
       {/if}
 
       <p class="text-xs text-[#3C6A4A] font-semibold px-1">{coordinators.length} coordinators</p>
@@ -1370,11 +1374,11 @@
             </div>
             <div class="flex flex-col gap-1.5 shrink-0 items-end">
               <button
-                onclick={() => (editingCoordinatorId === c.id ? cancelEditCoordinator() : startEditCoordinator(c))}
+                onclick={() => startEditCoordinator(c)}
                 class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full"
                 style="background: rgba(255,255,255,0.12); color: #C4DAC0;"
               >
-                {#if editingCoordinatorId === c.id}<X size={10} /> Close{:else}<Edit3 size={10} /> Edit{/if}
+                <Edit3 size={10} /> Edit
               </button>
               <button
                 onclick={() => toggleCoordinatorStatus(c)}
@@ -1385,34 +1389,37 @@
               </button>
             </div>
           </div>
-
-          {#if editingCoordinatorId === c.id && coordinatorEditDraft}
-            <div class="px-4 pb-4 flex flex-col gap-3" style="border-top: 1px solid rgba(255,255,255,0.14); padding-top: 14px;">
-              <div class="flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(255,255,255,0.06);">
-                <Phone size={12} color="#96B496" />
-                <p class="text-xs text-[#C4DAC0]">Login phone: <span class="font-semibold text-[#E8D4B0]">{c.phone}</span> <span class="text-[#96B496]">(not editable here)</span></p>
-              </div>
-              {@render inputField('Name', coordinatorEditDraft.name, (e) => (coordinatorEditDraft.name = e.currentTarget.value))}
-              {@render inputField('Territory', coordinatorEditDraft.territory, (e) => (coordinatorEditDraft.territory = e.currentTarget.value), { placeholder: 'e.g. Nairobi Central' })}
-              {@render inputField('Reset PIN (optional)', coordinatorEditDraft.pin, (e) => (coordinatorEditDraft.pin = e.currentTarget.value.replace(/\D/g, '').slice(0, 6)), { type: 'password', placeholder: 'leave blank to keep current' })}
-
-              {#if coordinatorEditError}
-                <p class="text-xs text-[#E08A6A]">{coordinatorEditError}</p>
-              {/if}
-
-              <button
-                onclick={() => saveEditCoordinator(c.id)}
-                disabled={coordinatorEditSaving}
-                class="w-full py-2.5 rounded-xl flex items-center justify-center gap-2 font-bold text-xs text-white"
-                style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {coordinatorEditSaving ? 0.7 : 1};"
-              >
-                <Save size={12} />{coordinatorEditSaving ? 'Saving…' : 'Save changes'}
-              </button>
-            </div>
-          {/if}
         </div>
       {/each}
       </div>
+
+      {#if editingCoordinatorId && coordinatorEditDraft}
+        {@const c = coordinators.find((x) => x.id === editingCoordinatorId)}
+        <AdminModal title="Edit coordinator" onClose={cancelEditCoordinator}>
+          {#if c}
+            <div class="flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(255,255,255,0.06);">
+              <Phone size={12} color="#96B496" />
+              <p class="text-xs text-[#C4DAC0]">Login phone: <span class="font-semibold text-[#E8D4B0]">{c.phone}</span> <span class="text-[#96B496]">(not editable here)</span></p>
+            </div>
+          {/if}
+          {@render inputField('Name', coordinatorEditDraft.name, (e) => (coordinatorEditDraft.name = e.currentTarget.value))}
+          {@render inputField('Territory', coordinatorEditDraft.territory, (e) => (coordinatorEditDraft.territory = e.currentTarget.value), { placeholder: 'e.g. Nairobi Central' })}
+          {@render inputField('Reset PIN (optional)', coordinatorEditDraft.pin, (e) => (coordinatorEditDraft.pin = e.currentTarget.value.replace(/\D/g, '').slice(0, 6)), { type: 'password', placeholder: 'leave blank to keep current' })}
+
+          {#if coordinatorEditError}
+            <p class="text-xs text-[#E08A6A]">{coordinatorEditError}</p>
+          {/if}
+
+          <button
+            onclick={() => saveEditCoordinator(editingCoordinatorId)}
+            disabled={coordinatorEditSaving}
+            class="w-full py-2.5 rounded-xl flex items-center justify-center gap-2 font-bold text-xs text-white"
+            style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {coordinatorEditSaving ? 0.7 : 1};"
+          >
+            <Save size={12} />{coordinatorEditSaving ? 'Saving…' : 'Save changes'}
+          </button>
+        </AdminModal>
+      {/if}
     {:else if tab === 'analytics'}
       <div class="flex items-center justify-between px-1 mb-1">
         {#if showSiteDetail}

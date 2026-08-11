@@ -11,7 +11,8 @@
     CircleX,
     Bitcoin,
     Copy,
-    AlertTriangle
+    AlertTriangle,
+    ExternalLink
   } from '@lucide/svelte';
   import ScreenBg from '$lib/components/ScreenBg.svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
@@ -94,7 +95,16 @@
       site: getSiteId() || undefined
     });
 
-    if (!result.ok || !result.data?.lightningInvoice) {
+    // Accept either a raw Lightning invoice (renders our own in-place QR)
+    // or just a hosted checkout link (BTCPay's own page — has its own
+    // QR/copy UI) — either is enough to actually pay. Only treat this as a
+    // hard failure when NEITHER came back, which is when invoice creation
+    // genuinely failed. Previously required lightningInvoice specifically,
+    // which meant a real, payable invoice with only a checkout link (e.g.
+    // if the raw BOLT11 string wasn't extracted for some reason) still
+    // showed "could not generate an invoice" despite BTCPay having
+    // actually succeeded.
+    if (!result.ok || (!result.data?.lightningInvoice && !result.data?.checkoutLink)) {
       if (result.status === 409) {
         usernameError = result.data?.message || 'That username is taken — try another.';
       } else {
@@ -105,7 +115,9 @@
     }
 
     btcInvoice = result.data;
-    btcQrDataUrl = await QRCode.toDataURL(btcInvoice.lightningInvoice, { margin: 1, width: 220 });
+    btcQrDataUrl = btcInvoice.lightningInvoice
+      ? await QRCode.toDataURL(btcInvoice.lightningInvoice, { margin: 1, width: 220 })
+      : null;
     btcStatus = 'awaiting';
   }
 
@@ -392,24 +404,40 @@
             </div>
           {:else if btcStatus === 'awaiting' && btcInvoice}
             <div class="flex flex-col items-center gap-3 px-5 py-5">
-              <div
-                class="rounded-2xl p-3"
-                style="background: #fff; box-shadow: 0 0 0 1px rgba(247,147,26,0.4), 0 8px 24px rgba(247,147,26,0.25);"
-              >
-                <img src={btcQrDataUrl} alt="Lightning invoice QR code" width="180" height="180" />
-              </div>
-              <div class="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl" style="background: rgba(0,0,0,0.3);">
-                <p class="flex-1 text-[11px] text-[#E8D4B0] font-mono truncate">{btcInvoice.lightningInvoice}</p>
-                <button
-                  onclick={copyInvoice}
-                  class="shrink-0 flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg"
-                  style="background: {btcCopied
-                    ? 'rgba(78,128,80,0.35)'
-                    : 'rgba(247,147,26,0.25)'}; color: {btcCopied ? '#4E8050' : '#F7931A'};"
+              {#if btcQrDataUrl}
+                <div
+                  class="rounded-2xl p-3"
+                  style="background: #fff; box-shadow: 0 0 0 1px rgba(247,147,26,0.4), 0 8px 24px rgba(247,147,26,0.25);"
                 >
-                  {#if btcCopied}<CheckCircle2 size={11} /> Copied{:else}<Copy size={11} /> Copy{/if}
-                </button>
-              </div>
+                  <img src={btcQrDataUrl} alt="Lightning invoice QR code" width="180" height="180" />
+                </div>
+              {/if}
+              {#if btcInvoice.lightningInvoice}
+                <div class="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl" style="background: rgba(0,0,0,0.3);">
+                  <p class="flex-1 text-[11px] text-[#E8D4B0] font-mono truncate">{btcInvoice.lightningInvoice}</p>
+                  <button
+                    onclick={copyInvoice}
+                    class="shrink-0 flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg"
+                    style="background: {btcCopied
+                      ? 'rgba(78,128,80,0.35)'
+                      : 'rgba(247,147,26,0.25)'}; color: {btcCopied ? '#4E8050' : '#F7931A'};"
+                  >
+                    {#if btcCopied}<CheckCircle2 size={11} /> Copied{:else}<Copy size={11} /> Copy{/if}
+                  </button>
+                </div>
+              {/if}
+              {#if btcInvoice.checkoutLink}
+                <a
+                  href={btcInvoice.checkoutLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[11px] font-bold"
+                  style="background: rgba(247,147,26,0.15); color: #F7931A; border: 1px solid rgba(247,147,26,0.3);"
+                >
+                  <ExternalLink size={12} />
+                  {btcInvoice.lightningInvoice ? 'Open payment page' : 'Open payment page to scan or copy'}
+                </a>
+              {/if}
               <div class="w-full flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(247,147,26,0.1);">
                 <div class="w-2 h-2 rounded-full animate-pulse shrink-0" style="background: #F7931A;"></div>
                 <p class="text-[11px] text-[#C4DAC0]">Waiting for payment — this updates automatically</p>
