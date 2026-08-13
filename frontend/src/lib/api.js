@@ -56,9 +56,18 @@ export function getActivators() {
   return request('/activators');
 }
 
-/** POST /api/initiate-payment */
+/**
+ * POST /api/initiate-payment. A longer timeout than the default: this
+ * triggers a real STK push (our backend calling out to Paystack, which
+ * itself waits on Safaricom) — that round trip routinely takes longer than
+ * the standard 5s, and a spurious timeout here used to get silently
+ * swallowed by InitiatedScreen's "no reference" fallback, which granted
+ * access without any confirmed payment. Long timeout + a real error state
+ * on failure (see InitiatedScreen) is the actual fix; this alone just makes
+ * that failure state trigger far less often.
+ */
 export function initiatePayment(body) {
-  return request('/initiate-payment', { method: 'POST', body: JSON.stringify(body) });
+  return request('/initiate-payment', { method: 'POST', body: JSON.stringify(body), timeoutMs: 30000 });
 }
 
 /** GET /api/verify-payment/:reference */
@@ -220,6 +229,46 @@ export function getCoordinatorActivators(token) {
 /** GET /api/coordinators/me/earnings — Bearer token required */
 export function getCoordinatorEarnings(token) {
   return request('/coordinators/me/earnings', { headers: { Authorization: `Bearer ${token}` } });
+}
+
+/** GET /api/coordinators/me/activators/:id/history?period=week|month|year — Bearer token required */
+export function getCoordinatorActivatorHistory(token, activatorId, period) {
+  return request(`/coordinators/me/activators/${encodeURIComponent(activatorId)}/history?period=${period}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/** GET /api/coordinators/me/regions — Bearer token required */
+export function getCoordinatorRegions(token) {
+  return request('/coordinators/me/regions', { headers: { Authorization: `Bearer ${token}` } });
+}
+
+/** GET /api/coordinators/me/network-status — Bearer token required. `network` is null if UniFi isn't configured/reachable */
+export function getCoordinatorNetworkStatus(token) {
+  return request('/coordinators/me/network-status', { headers: { Authorization: `Bearer ${token}` } });
+}
+
+/** GET /api/coordinators/me/escalations — Bearer token required */
+export function getCoordinatorEscalations(token) {
+  return request('/coordinators/me/escalations', { headers: { Authorization: `Bearer ${token}` } });
+}
+
+/** POST /api/coordinators/me/escalations — Bearer token required. Body: { issue, priority?, activatorId? } */
+export function createCoordinatorEscalation(token, { issue, priority, activatorId }) {
+  return request('/coordinators/me/escalations', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ issue, priority, activatorId })
+  });
+}
+
+/** PATCH /api/coordinators/me/escalations/:id — Bearer token required. Body: { status } */
+export function updateCoordinatorEscalationStatus(token, id, status) {
+  return request(`/coordinators/me/escalations/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ status })
+  });
 }
 
 // ── Admin panel ──────────────────────────────────────────────────────────

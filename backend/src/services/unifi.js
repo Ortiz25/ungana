@@ -81,6 +81,109 @@ export const getSites = async () => {
 
 
 
+// UniFi's `device.state` codes, condensed to what's actually useful to show
+// a coordinator: 1 = connected is the only genuinely "healthy" value; 0 =
+// disconnected is unambiguously offline; everything else (pending adoption,
+// upgrading, provisioning, heartbeat-missed, isolated, etc.) is some kind of
+// in-between/problem state, which is what "degraded" means here — UniFi
+// doesn't expose a single "degraded" flag, this is our own bucket over its
+// real state codes, not a fabricated metric.
+function classifyApState(state) {
+  if (state === 1) return "online";
+  if (state === 0) return "offline";
+  return "degraded";
+}
+
+/**
+ * AP status across every UniFi site — per-site breakdown (each access
+ * point's name and online/degraded/offline state) plus totals across all
+ * sites. One login, then one sites call and one device call per site (all
+ * in parallel) — no caching or polling: this answers "is the network
+ * broadly OK right now", not a telemetry system. Returns null if UNIFI_URL
+ * isn't configured or the console is unreachable — callers should treat
+ * that as "nothing to show", not an error to surface loudly.
+ */
+export async function getNetworkSummary() {
+  if (!UNIFI_URL) return null;
+
+  try {
+    const session = await login();
+    if (!session) return null;
+
+    const sitesResponse = await axios.get(`${UNIFI_URL}${NETWORK_API}/api/self/sites`, {
+      headers: authHeaders(session),
+      httpsAgent: insecureAgent,
+    });
+    const siteRows = sitesResponse.data?.data ?? [];
+    if (siteRows.length === 0) return null;
+
+    // `/api/s/<x>/...` takes the site's short `name` slug (e.g. "default",
+    // "99kv3joz") — its `_id` (the Mongo ObjectId) returns
+    // api.err.NoSiteContext. Same field `listUnifiSiteOptions()` in
+    // services/sites.js already uses for `sites.id` — matching that
+    // convention here too, not just what happens to work.
+    const deviceResponses = await Promise.all(
+      siteRows.map((s) =>
+        axios
+          .get(`${UNIFI_URL}${NETWORK_API}/api/s/${s.name}/stat/device`, {
+            headers: authHeaders(session),
+            httpsAgent: insecureAgent,
+          })
+          .then((r) => r.data?.data ?? [])
+          .catch(() => []) // one site being unreachable shouldn't blank out the rest
+      )
+    );
+
+    const sites = siteRows.map((s, i) => {
+      const devices = deviceResponses[i];
+      // Only access points, not switches/gateways — `type` is a reasonably
+      // stable UniFi field, but if it doesn't match anything on this
+      // console's version (rather than genuinely having zero APs), showing
+      // every adopted device is a better fallback than showing none.
+      const uaps = devices.filter((d) => d.type === "uap");
+      const accessPoints = (uaps.length > 0 ? uaps : devices).map((d) => ({
+        id: d._id,
+        name: d.name || d.model || d.mac,
+        // Client-count field name has drifted across UniFi OS/controller
+        // versions — try the known shapes, default to 0 rather than guess
+        // wrong on a version this hasn't been checked against.
+        clients: d.num_sta ?? d["user-num_sta"] ?? 0,
+        status: classifyApState(d.state),
+      }));
+
+      const onlineAPs = accessPoints.filter((d) => d.status === "online").length;
+      const degradedAPs = accessPoints.filter((d) => d.status === "degraded").length;
+      const totalClients = accessPoints.reduce((sum, d) => sum + d.clients, 0);
+
+      return {
+        site: { id: s.name, name: s.desc || s.name },
+        totalAPs: accessPoints.length,
+        onlineAPs,
+        degradedAPs,
+        offlineAPs: accessPoints.length - onlineAPs - degradedAPs,
+        totalClients,
+        accessPoints,
+      };
+    });
+
+    const totals = sites.reduce(
+      (acc, s) => ({
+        totalAPs: acc.totalAPs + s.totalAPs,
+        onlineAPs: acc.onlineAPs + s.onlineAPs,
+        degradedAPs: acc.degradedAPs + s.degradedAPs,
+        offlineAPs: acc.offlineAPs + s.offlineAPs,
+        totalClients: acc.totalClients + s.totalClients,
+      }),
+      { totalAPs: 0, onlineAPs: 0, degradedAPs: 0, offlineAPs: 0, totalClients: 0 }
+    );
+
+    return { totals, sites };
+  } catch (error) {
+    console.error("❌ UniFi network summary error:", error.response?.data || error.message);
+    return null;
+  }
+}
+
 function authHeaders(session, extra = {}) {
   return {
     Cookie: session.cookie,

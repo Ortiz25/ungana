@@ -12,13 +12,24 @@
   const displayTxId = reference || localTxId;
 
   const failureReason = { title: 'Payment declined', detail: 'The M-PESA prompt was cancelled or declined on your phone.' };
+  const connectionIssue = {
+    title: 'Connection problem',
+    detail: "We couldn't confirm your payment. If you completed the M-PESA prompt, use \"Check Status Now\" — otherwise, please try again."
+  };
+  const timedOut = {
+    title: 'Taking longer than expected',
+    detail: 'We could not confirm your payment in time. If you completed the M-PESA prompt, tap "Check Status Now" — otherwise please try again.'
+  };
 
-  // Local fallback path — used when there's no backend reference at all
-  // (initiate-payment failed/unreachable) or the backend never resolves in
-  // time. Mirrors the same `simulateFailure` intent the backend was asked
-  // to honour, so behaviour is consistent either way. Only ever reached in
-  // simulation mode or when the backend is genuinely unreachable — never
-  // used to short-circuit a real, still-pending payment.
+  // Local fallback path — ONLY safe in simulation mode (no real money, a
+  // fake/local "provider" backs it) or genuinely offline dev (no backend
+  // reachable at all, so there's nothing real to confirm either way). In
+  // `active` mode this must never fire on its own: silently granting access
+  // whenever something is merely uncertain (a slow response, one dropped
+  // poll, the deadline passing with no confirmation) used to mean a flaky
+  // connection — or someone whose payment plainly never went through — got
+  // free internet exactly as if they'd paid. Real failures/uncertainty in
+  // active mode now surface as a genuine error state instead.
   function localFallbackProceed() {
     if (willFail) onFailed(failureReason);
     else onContinue();
@@ -43,8 +54,20 @@
     if (pollCancelled) return;
 
     if (!result.ok && result.error) {
-      // Network/timeout — backend unreachable mid-flow, fall back.
-      localFallbackProceed();
+      // Network/timeout on this one poll attempt — never treat that as
+      // confirmation of anything. In active mode, just retry until the
+      // deadline (a single dropped request mid-poll is normal, not a
+      // reason to either grant or deny access); only fall back to the
+      // demo shortcut in simulation mode.
+      if (mode !== 'active') {
+        localFallbackProceed();
+        return;
+      }
+      if (Date.now() <= pollDeadline) {
+        pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
+        return;
+      }
+      onFailed(connectionIssue);
       return;
     }
 
@@ -58,7 +81,11 @@
       return;
     }
     if (Date.now() > pollDeadline) {
-      localFallbackProceed();
+      if (mode !== 'active') {
+        localFallbackProceed();
+      } else {
+        onFailed(timedOut);
+      }
       return;
     }
     pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
@@ -83,8 +110,21 @@
 
   $effect(() => {
     if (!reference) {
-      const t = setTimeout(localFallbackProceed, 4000);
-      return () => clearTimeout(t);
+      // By the time this screen mounts, initiate-payment has already fully
+      // resolved (PaymentScreen awaits it before navigating here) — no
+      // reference means it's already known to have failed, not "still in
+      // flight". In active mode that's a real, immediate failure: no
+      // reference means no way to ever confirm a real payment, so there is
+      // nothing to wait 4 seconds for before saying so.
+      if (mode !== 'active') {
+        const t = setTimeout(localFallbackProceed, 4000);
+        return () => clearTimeout(t);
+      }
+      onFailed({
+        title: 'Could not start payment',
+        detail: "We couldn't reach the payment provider to send your M-PESA prompt. Please check your connection and try again."
+      });
+      return;
     }
 
     pollCancelled = false;

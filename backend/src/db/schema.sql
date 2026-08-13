@@ -492,6 +492,29 @@ ALTER TABLE content_completions ADD CONSTRAINT content_completions_claimed_secs_
 CREATE INDEX IF NOT EXISTS idx_content_completions_client ON content_completions(client_id);
 CREATE INDEX IF NOT EXISTS idx_content_completions_unclaimed ON content_completions(client_id) WHERE claimed = false;
 
+-- ── Escalations ──────────────────────────────────────────────────────────
+-- Issues a coordinator raises — either self-reported (e.g. a network
+-- problem) or attributed to one of their activators (e.g. "this activator
+-- is struggling") — tracked through open → resolved/escalated. Replaces the
+-- coordinator dashboard's old client-only INIT_ESCALATIONS mock (Issues tab).
+CREATE TABLE IF NOT EXISTS escalations (
+  id             BIGSERIAL PRIMARY KEY,
+  coordinator_id INTEGER NOT NULL REFERENCES coordinators(id) ON DELETE CASCADE,
+  activator_id   INTEGER REFERENCES activators(id) ON DELETE SET NULL, -- NULL = not attributed to a specific activator
+  issue          TEXT NOT NULL,
+  priority       TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high')),
+  status         TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'escalated')),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS escalations_set_updated_at ON escalations;
+CREATE TRIGGER escalations_set_updated_at
+  BEFORE UPDATE ON escalations
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_escalations_coordinator ON escalations(coordinator_id, status);
+
 -- ── Convenience view ─────────────────────────────────────────────────────
 -- Per-activator earnings summary — the query the activator dashboard needs.
 CREATE OR REPLACE VIEW activator_earnings AS

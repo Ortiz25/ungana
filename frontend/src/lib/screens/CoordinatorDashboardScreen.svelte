@@ -9,42 +9,71 @@
   import {
     ACCESS_POINTS, COORD_ACTS, INIT_ESCALATIONS, ACT_WEEKLY, ACT_MONTHLY, ACT_DAYS, ACT_YEARLY
   } from '$lib/data.js';
-  import { getCoordinatorActivators, getCoordinatorEarnings } from '$lib/api.js';
+  import {
+    getCoordinatorActivators,
+    getCoordinatorEarnings,
+    getCoordinatorActivatorHistory,
+    getCoordinatorEscalations,
+    createCoordinatorEscalation,
+    updateCoordinatorEscalationStatus,
+    getCoordinatorRegions,
+    getCoordinatorNetworkStatus
+  } from '$lib/api.js';
 
   let { coordinator, onLogout } = $props();
 
-  // Real login (see CoordinatorLoginScreen) carries a JWT; the offline
-  // demo fallback doesn't. Network health/APs and escalations below are
-  // facility-wide mock data unrelated to which coordinator is logged in —
-  // that's a separate feature (real AP monitoring + a ticketing system)
-  // that doesn't exist yet, so those two tabs stay demo-only in both modes.
-  // Team performance vs. weekly/monthly targets (COORD_ACTS) IS
-  // coordinator-specific data the backend can now provide for real, so that
-  // part switches to live data when isReal — without the target-tracking
-  // UI, since no real per-activator targets exist to track against.
+  // Real login (see CoordinatorLoginScreen) carries a JWT; the offline demo
+  // fallback doesn't. All four tabs are backed by real, coordinator-scoped
+  // data when isReal: Team (COORD_ACTS), Issues (INIT_ESCALATIONS), and now
+  // the old Network tab too — reframed as "Regions" (real territory rollups
+  // of activator performance, since that's what a coordinator's role is
+  // actually about, not raw AP hardware) plus a small live online/offline +
+  // client-count summary straight from the UniFi controller, no polling or
+  // caching layer.
   const isReal = !!coordinator.token;
   let realActivators = $state([]);
   let realEarnings = $state(null);
+  let realEscalations = $state([]);
   let loadingReal = $state(isReal);
+
+  // Network status is fetched eagerly here too (not lazily on tab-open like
+  // Regions is) because the hero header's health donut and the "Active
+  // Users" stat tile need it immediately on load, not just when the
+  // Regions tab is opened. Still just one login + a handful of lightweight
+  // per-site requests — cheap enough to always run.
+  let realNetwork = $state(null);
+  let realNetworkLoading = $state(isReal);
+  let realNetworkFetchedOnce = $state(false);
+
+  async function loadRealNetworkStatus() {
+    realNetworkLoading = true;
+    const result = await getCoordinatorNetworkStatus(coordinator.token);
+    realNetwork = result.ok ? (result.data?.network ?? null) : null;
+    realNetworkLoading = false;
+    realNetworkFetchedOnce = true;
+  }
 
   onMount(async () => {
     if (!isReal) return;
-    const [activatorsResult, earningsResult] = await Promise.all([
+    const [activatorsResult, earningsResult, escalationsResult] = await Promise.all([
       getCoordinatorActivators(coordinator.token),
-      getCoordinatorEarnings(coordinator.token)
+      getCoordinatorEarnings(coordinator.token),
+      getCoordinatorEscalations(coordinator.token),
+      loadRealNetworkStatus()
     ]);
 
     // Reconciles a dashboard restored from a persisted session (see
     // dashboardSession.js) on reload — a 401 means the token's since
     // expired/been revoked, so bounce to login (which also clears the
     // stale persisted session) instead of leaving a dead dashboard up.
-    if ([activatorsResult, earningsResult].some((r) => r.status === 401)) {
+    if ([activatorsResult, earningsResult, escalationsResult].some((r) => r.status === 401)) {
       onLogout();
       return;
     }
 
     if (activatorsResult.ok) realActivators = activatorsResult.data?.activators ?? [];
     if (earningsResult.ok) realEarnings = earningsResult.data?.earnings ?? null;
+    if (escalationsResult.ok) realEscalations = escalationsResult.data?.escalations ?? [];
     loadingReal = false;
   });
 
@@ -53,7 +82,64 @@
   const realPaidSessions = $derived(Number(realEarnings?.paid_sessions ?? 0));
   const realActivatorCount = $derived(Number(realEarnings?.activator_count ?? realActivators.length));
 
+  // ── Real activator drill-down (GET /coordinators/me/activators/:id/history) ──
+  // A separate, smaller drill view from the mock one below — real activators
+  // don't have targets/streaks/trends, so this only shows what's actually
+  // backed by `sessions`: bucketed commission history plus the same
+  // all-time stats already on the team list.
+  let realDrillId = $state(null);
+  let realHistory = $state([]);
+  let realHistoryPeriod = $state('week');
+  let realHistoryLoading = $state(false);
+  const realDrillAct = $derived(realDrillId ? realActivators.find((a) => a.id === realDrillId) : null);
+
+  $effect(() => {
+    if (!realDrillAct) return;
+    const id = realDrillAct.id;
+    const period = realHistoryPeriod;
+    realHistoryLoading = true;
+    realHistory = [];
+    getCoordinatorActivatorHistory(coordinator.token, id, period).then((result) => {
+      // The drill target or period may have changed again while this was
+      // in flight — only apply a response that's still describing what's
+      // currently selected.
+      if (realDrillId !== id || realHistoryPeriod !== period) return;
+      realHistory = result.ok ? (result.data?.history ?? []) : [];
+      realHistoryLoading = false;
+    });
+  });
+
+  function historyBucketLabel(bucket, period) {
+    const d = new Date(bucket);
+    if (period === 'week') return d.toLocaleDateString('en-GB', { weekday: 'short' });
+    if (period === 'month') return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    return d.toLocaleDateString('en-GB', { month: 'short' });
+  }
+
+  const realHistoryChartData = $derived(
+    realHistory.map((h) => ({ label: historyBucketLabel(h.bucket, realHistoryPeriod), earn: Number(h.commission_kes) }))
+  );
+
   let tab = $state('overview');
+
+  // ── Real Regions tab (GET /coordinators/me/regions) ──────────────────────
+  // Cheap, already-joined DB data — fetched once, the first time the tab is
+  // opened. Network status (above) is loaded eagerly instead, since the
+  // hero header needs it before this tab is ever visited.
+  let realRegions = $state([]);
+  let realRegionsLoading = $state(false);
+  let realRegionsLoaded = $state(false);
+
+  $effect(() => {
+    if (!isReal || tab !== 'network' || realRegionsLoaded) return;
+    realRegionsLoaded = true;
+    realRegionsLoading = true;
+    getCoordinatorRegions(coordinator.token).then((result) => {
+      realRegions = result.ok ? (result.data?.regions ?? []) : [];
+      realRegionsLoading = false;
+    });
+  });
+
   let escalations = $state(INIT_ESCALATIONS.map((e) => ({ ...e })));
   let actTargets = $state({});
   let editingTarget = $state(null);
@@ -96,7 +182,74 @@
   const healthLabel = networkHealth >= 90 ? 'Healthy' : networkHealth >= 70 ? 'Degraded' : 'Critical';
   const totalCapacity = ACCESS_POINTS.reduce((s, a) => s + a.capacity, 0);
 
-  const openEscs = $derived(escalations.filter((e) => e.status === 'open'));
+  // Real equivalents, from the live multi-site UniFi summary — "health" here
+  // is honestly just "% of APs currently online" (there's no real uptime-%
+  // metric available), not the same weighted-uptime formula the mock uses
+  // above; it just fills the same visual role. Everything defaults to 0
+  // before the fetch resolves or if UniFi is unreachable, rather than
+  // borrowing the mock numbers.
+  const realOnlineAPs = $derived(realNetwork?.totals?.onlineAPs ?? 0);
+  const realDegradedAPs = $derived(realNetwork?.totals?.degradedAPs ?? 0);
+  const realOfflineAPs = $derived(realNetwork?.totals?.offlineAPs ?? 0);
+  const realTotalAPs = $derived(realNetwork?.totals?.totalAPs ?? 0);
+  const realTotalClients = $derived(realNetwork?.totals?.totalClients ?? 0);
+  const realNetworkHealth = $derived(realTotalAPs > 0 ? Math.round((realOnlineAPs / realTotalAPs) * 100) : 0);
+  const realHealthColor = $derived(realNetworkHealth >= 90 ? '#4E8050' : realNetworkHealth >= 70 ? '#CC8830' : '#B85038');
+  const realHealthLabel = $derived(realNetworkHealth >= 90 ? 'Healthy' : realNetworkHealth >= 70 ? 'Degraded' : 'Critical');
+
+  // Single source every hero/stats-strip usage below reads from, so nothing
+  // ever mixes real and mock numbers depending on which line forgot a
+  // ternary.
+  const displayOnlineAPs = $derived(isReal ? realOnlineAPs : onlineAPs);
+  const displayDegradedAPs = $derived(isReal ? realDegradedAPs : degradedAPs);
+  const displayOfflineAPs = $derived(isReal ? realOfflineAPs : offlineAPs);
+  const displayTotalUsers = $derived(isReal ? realTotalClients : totalUsers);
+  const displayNetworkHealth = $derived(isReal ? realNetworkHealth : networkHealth);
+  const displayHealthColor = $derived(isReal ? realHealthColor : healthColor);
+  const displayHealthLabel = $derived(isReal ? realHealthLabel : healthLabel);
+
+  // Same "open issues" concept whichever mode is active — every place that
+  // reads openEscs (stats strip, tab-bar badge, overview banner) stays
+  // correct without needing an isReal branch of its own.
+  const openEscs = $derived((isReal ? realEscalations : escalations).filter((e) => e.status === 'open'));
+
+  // ── Real escalations (GET/POST/PATCH /coordinators/me/escalations) ───────
+  let realComposing = $state(false);
+  let realComposeText = $state('');
+  let realComposePriority = $state('medium');
+  let realComposeSubmitting = $state(false);
+
+  async function submitRealEscalation() {
+    if (!realComposeText.trim() || realComposeSubmitting) return;
+    realComposeSubmitting = true;
+    const result = await createCoordinatorEscalation(coordinator.token, {
+      issue: realComposeText.trim(),
+      priority: realComposePriority
+    });
+    realComposeSubmitting = false;
+    if (result.ok && result.data?.escalation) {
+      realEscalations = [result.data.escalation, ...realEscalations];
+      realComposing = false;
+      realComposeText = '';
+      realComposePriority = 'medium';
+    }
+  }
+
+  async function setRealEscalationStatus(id, status) {
+    const prev = realEscalations;
+    realEscalations = realEscalations.map((e) => (e.id === id ? { ...e, status } : e));
+    const result = await updateCoordinatorEscalationStatus(coordinator.token, id, status);
+    if (!result.ok) realEscalations = prev; // revert an optimistic update the backend didn't actually accept
+  }
+
+  function timeAgo(iso) {
+    const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  }
   const weeklyRevenue = COORD_ACTS.reduce((s, a) => s + a.weekEarn, 0);
   const monthlyRevenue = COORD_ACTS.reduce((s, a) => {
     const m = ACT_MONTHLY[a.id];
@@ -326,6 +479,79 @@
       {/if}
     </div>
   </div>
+{:else if realDrillAct}
+  <!-- Real drill-down — deliberately smaller than the mock one above: real
+       activators have no targets/streaks/trends/dormant-users-list to show,
+       just what `sessions` actually backs (all-time stats + bucketed
+       commission history from GET .../history). -->
+  <div style="min-height: 100dvh; background: #E8D4B0;">
+    <div class="px-5 pt-5 pb-16" style={`background-image: ${DRILL_BG}; background-size: cover; background-position: center;`}>
+      <div class="flex items-center gap-3 mb-5">
+        <button onclick={() => (realDrillId = null)} class="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style="background: rgba(255,255,255,0.10);">
+          <ArrowLeft size={15} color="#E8D4B0" />
+        </button>
+        <p class="text-[10px] text-[#C4DAC0] font-semibold uppercase tracking-widest">Activator Profile</p>
+        <div class="ml-auto flex rounded-xl overflow-hidden" style="background: rgba(0,0,0,0.2);">
+          {#each [{ id: 'week', label: 'Week' }, { id: 'month', label: 'Month' }, { id: 'year', label: 'Year' }] as p (p.id)}
+            <button onclick={() => (realHistoryPeriod = p.id)} class="px-2.5 py-1 text-[9px] font-bold" style="background: {realHistoryPeriod === p.id ? '#C45C38' : 'transparent'}; color: {realHistoryPeriod === p.id ? '#fff' : '#96B496'};">
+              {p.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+      <div class="flex items-center gap-4">
+        <div class="w-16 h-16 rounded-2xl flex items-center justify-center shrink-0 text-lg font-bold" style="background: rgba(196,92,56,0.35); color: #C45C38;">{inits(realDrillAct.name)}</div>
+        <div class="flex-1 min-w-0">
+          <p class="text-base font-bold text-[#E8D4B0]" style="font-family: 'Playfair Display', serif;">{realDrillAct.name}</p>
+          <p class="text-[10px] text-[#C4DAC0] flex items-center gap-1 mb-2">
+            {#if realDrillAct.territory}<MapPin size={9} />{realDrillAct.territory} · {/if}{realDrillAct.code}
+          </p>
+          <span class="text-[9px] font-bold px-2 py-0.5 rounded-full capitalize" style="background: rgba(255,255,255,0.18); color: #C4DAC0;">{realDrillAct.status}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats strip -->
+    <div class="mx-4 -mt-10 rounded-3xl shadow-xl mb-4 grid grid-cols-4 divide-x overflow-hidden" style="background: #162C1E;">
+      {#each [
+        { label: 'Sessions', value: String(Number(realDrillAct.paid_sessions)), sub: 'paid', alert: false },
+        { label: 'Gross', value: `KES ${Number(realDrillAct.gross_kes).toLocaleString()}`, sub: 'all-time', alert: false },
+        { label: 'Commission', value: `KES ${Number(realDrillAct.commission_kes).toLocaleString()}`, sub: 'all-time', alert: false },
+        { label: 'Dormant', value: String(Number(realDrillAct.dormant_count)), sub: 'users', alert: Number(realDrillAct.dormant_count) > 0 }
+      ] as s (s.label)}
+        <div class="flex flex-col items-center py-3 px-1.5" style="border-color: rgba(255,255,255,0.14);">
+          <span class="text-xs font-bold leading-tight text-center" style="color: {s.alert ? '#B85038' : '#C45C38'};">{s.value}</span>
+          <span class="text-[8px] uppercase tracking-wider mt-0.5 text-center" style="color: {s.alert ? '#C07860' : '#C4DAC0'};">{s.label}</span>
+          <span class="text-[8px] text-[#96B496] mt-0.5 text-center">{s.sub}</span>
+        </div>
+      {/each}
+    </div>
+
+    <div class="px-4 pb-8 flex flex-col gap-3">
+      <div class="rounded-2xl px-4 pt-4 pb-3" style="background: #2E5A3E;">
+        <p class="text-[10px] text-[#C4DAC0] font-semibold uppercase tracking-wider mb-3">Commission by {realHistoryPeriod}</p>
+        {#if realHistoryLoading}
+          <div class="flex justify-center py-8"><div class="w-6 h-6 rounded-full border-2 border-white/30 border-t-white animate-spin"></div></div>
+        {:else if realHistoryChartData.every((h) => h.earn === 0)}
+          <p class="text-xs text-[#96B496] text-center py-8">No sessions in this period</p>
+        {:else}
+          <BarChartMini
+            data={realHistoryChartData}
+            yKey="earn"
+            xKey="label"
+            height={90}
+            color="#C45C38"
+            barSize={realHistoryPeriod === 'year' ? 13 : realHistoryPeriod === 'month' ? 22 : 18}
+            radius={4}
+            showGrid
+            showYLabels
+            yAxisWidth={30}
+            labelColor="#96B496"
+          />
+        {/if}
+      </div>
+    </div>
+  </div>
 {:else}
   <div style="min-height: 100dvh; background: #E8D4B0;">
     <!-- Hero header -->
@@ -351,21 +577,21 @@
         <div class="relative w-24 h-24 shrink-0">
           <svg viewBox="0 0 100 100" class="w-full h-full" style="transform: rotate(-90deg);">
             <circle cx="50" cy="50" r="36" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="10" />
-            <circle cx="50" cy="50" r="36" fill="none" stroke={healthColor} stroke-width="10" stroke-linecap="round" stroke-dasharray={`${(networkHealth / 100) * 226.2} 226.2`} />
+            <circle cx="50" cy="50" r="36" fill="none" stroke={displayHealthColor} stroke-width="10" stroke-linecap="round" stroke-dasharray={`${(displayNetworkHealth / 100) * 226.2} 226.2`} />
           </svg>
           <div class="absolute inset-0 flex flex-col items-center justify-center">
-            <span class="text-xl font-bold text-[#E8D4B0]">{networkHealth}%</span>
+            <span class="text-xl font-bold text-[#E8D4B0]">{displayNetworkHealth}%</span>
             <span class="text-[8px] text-[#C4DAC0] uppercase tracking-wider">health</span>
           </div>
         </div>
         <div class="flex-1">
           <div class="flex items-center gap-2 mb-1">
-            <div class="w-2 h-2 rounded-full" style="background: {healthColor};"></div>
-            <span class="text-sm font-bold" style="color: {healthColor};">{healthLabel}</span>
+            <div class="w-2 h-2 rounded-full" style="background: {displayHealthColor};"></div>
+            <span class="text-sm font-bold" style="color: {displayHealthColor};">{displayHealthLabel}</span>
           </div>
           <p class="text-[10px] text-[#C4DAC0] mb-2">{coordinator.area} network</p>
           <div class="grid grid-cols-3 gap-1.5">
-            {#each [{ v: onlineAPs, l: 'Online', c: '#4E8050' }, { v: degradedAPs, l: 'Degraded', c: '#CC8830' }, { v: offlineAPs, l: 'Offline', c: '#B85038' }] as g (g.l)}
+            {#each [{ v: displayOnlineAPs, l: 'Online', c: '#4E8050' }, { v: displayDegradedAPs, l: 'Degraded', c: '#CC8830' }, { v: displayOfflineAPs, l: 'Offline', c: '#B85038' }] as g (g.l)}
               <div class="rounded-xl px-2 py-1.5 flex flex-col items-center" style="background: rgba(255,255,255,0.14);">
                 <span class="text-sm font-bold" style="color: {g.c};">{g.v}</span>
                 <span class="text-[8px] text-[#C4DAC0]">{g.l}</span>
@@ -378,7 +604,7 @@
 
     <!-- Floating stats strip -->
     <div class="mx-4 -mt-12 rounded-3xl shadow-xl mb-4 grid grid-cols-3 divide-x overflow-hidden" style="background: #162C1E;">
-      {#each [{ label: 'Active Users', value: totalUsers, sub: `of ${totalCapacity} capacity`, alert: false, dest: 'network' }, isReal ? { label: 'Activators', value: realActivatorCount, sub: `${realPaidSessions} paid sessions`, alert: false, dest: 'activators' } : { label: 'Activators', value: COORD_ACTS.length, sub: `${COORD_ACTS.filter((a) => actPct(a) >= 100).length} on target`, alert: false, dest: 'activators' }, { label: 'Escalations', value: openEscs.length, sub: 'open tickets', alert: openEscs.length > 0, dest: 'escalations' }] as s (s.label)}
+      {#each [{ label: 'Active Users', value: displayTotalUsers, sub: isReal ? 'clients online' : `of ${totalCapacity} capacity`, alert: false, dest: 'network' }, isReal ? { label: 'Activators', value: realActivatorCount, sub: `${realPaidSessions} paid sessions`, alert: false, dest: 'activators' } : { label: 'Activators', value: COORD_ACTS.length, sub: `${COORD_ACTS.filter((a) => actPct(a) >= 100).length} on target`, alert: false, dest: 'activators' }, { label: 'Escalations', value: openEscs.length, sub: 'open tickets', alert: openEscs.length > 0, dest: 'escalations' }] as s (s.label)}
         <button onclick={() => (tab = s.dest)} class="flex flex-col items-center py-3 px-2 active:opacity-70 transition-opacity" style="border-color: rgba(255,255,255,0.14);">
           <span class="text-base font-bold" style="color: {s.alert ? '#B85038' : '#C45C38'};">{s.value}</span>
           <span class="text-[9px] uppercase tracking-wider mt-0.5 text-center" style="color: {s.alert ? '#C07860' : '#C4DAC0'};">{s.label}</span>
@@ -389,11 +615,11 @@
 
     <!-- Tab bar -->
     <div class="flex mx-4 mb-4 rounded-2xl overflow-hidden p-1 gap-0.5" style="background: rgba(46,90,62,0.12);">
-      {#each [{ id: 'overview', label: 'Overview', Icon: TrendingUp }, { id: 'network', label: 'Network', Icon: Radio }, { id: 'activators', label: 'Team', Icon: Users }, { id: 'escalations', label: 'Issues', Icon: ShieldCheck }] as t (t.id)}
+      {#each [{ id: 'overview', label: 'Overview', Icon: TrendingUp }, { id: 'network', label: isReal ? 'Regions' : 'Network', Icon: isReal ? MapPin : Radio }, { id: 'activators', label: 'Team', Icon: Users }, { id: 'escalations', label: 'Issues', Icon: ShieldCheck }] as t (t.id)}
         {@const Icon = t.Icon}
         <button onclick={() => (tab = t.id)} class="flex-1 py-2 rounded-xl flex flex-col items-center gap-0.5 transition-all relative" style="background: {tab === t.id ? '#2E5A3E' : 'transparent'};">
-          <Icon size={14} color={tab === t.id ? '#C45C38' : '#C4DAC0'} />
-          <span class="text-[9px] font-bold" style="color: {tab === t.id ? '#E8D4B0' : '#C4DAC0'};">{t.label}</span>
+          <Icon size={14} color={tab === t.id ? '#C45C38' : '#3C6A4A'} />
+          <span class="text-[9px] font-bold" style="color: {tab === t.id ? '#E8D4B0' : '#3C6A4A'};">{t.label}</span>
           {#if t.id === 'escalations' && openEscs.length > 0}
             <div class="w-1.5 h-1.5 rounded-full absolute" style="background: #B85038; margin-top: -2px;"></div>
           {/if}
@@ -528,8 +754,112 @@
         {/if}
       {/if}
 
-      <!-- NETWORK -->
+      <!-- NETWORK / REGIONS -->
       {#if tab === 'network'}
+        {#if isReal}
+          <!-- Live UniFi summary — one on-demand request per Refresh tap,
+               no polling. Every site's APs, each one's name and
+               online/degraded/offline state, plus totals — that's what's
+               cheaply/reliably available across controller versions, not a
+               full telemetry dashboard. -->
+          <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; border: 1px solid rgba(255,255,255,0.08);">
+            <div class="px-4 py-3.5 flex items-center justify-between gap-3">
+              <div class="flex items-center gap-2.5 min-w-0">
+                <Radio size={14} color="#C45C38" class="shrink-0" />
+                <div class="min-w-0">
+                  <p class="text-xs font-bold text-[#E8D4B0]">Network Status</p>
+                  {#if realNetworkLoading}
+                    <p class="text-[10px] text-[#96B496]">Checking controller…</p>
+                  {:else if realNetwork}
+                    <p class="text-[10px] text-[#96B496]">
+                      {realNetwork.totals.onlineAPs} of {realNetwork.totals.totalAPs} access points online across {realNetwork.sites.length} site{realNetwork.sites.length === 1 ? '' : 's'} · {realNetwork.totals.totalClients} clients connected
+                    </p>
+                  {:else}
+                    <p class="text-[10px] text-[#96B496]">Unavailable right now</p>
+                  {/if}
+                </div>
+              </div>
+              <button onclick={loadRealNetworkStatus} disabled={realNetworkLoading} class="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style="background: rgba(255,255,255,0.14);">
+                <RefreshCw size={12} color="#C4DAC0" class={realNetworkLoading ? 'animate-spin' : ''} />
+              </button>
+            </div>
+          </div>
+
+          {#if realNetwork?.sites?.length > 0}
+            {#each realNetwork.sites as siteGroup (siteGroup.site.id)}
+              <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; border: 1px solid rgba(255,255,255,0.08);">
+                <div class="px-4 py-3 flex items-center justify-between">
+                  <p class="text-xs font-bold text-[#E8D4B0]">{siteGroup.site.name}</p>
+                  <span class="text-[9px] font-bold px-2 py-0.5 rounded-full" style="background: rgba(196,92,56,0.28); color: #C45C38;">
+                    {siteGroup.onlineAPs}/{siteGroup.totalAPs} online
+                  </span>
+                </div>
+                {#if siteGroup.accessPoints.length > 0}
+                  <div class="px-4 pb-3.5 flex flex-col gap-1.5">
+                    {#each siteGroup.accessPoints as ap (ap.id)}
+                      {@const sc = ap.status === 'online' ? '#4E8050' : ap.status === 'degraded' ? '#CC8830' : '#B85038'}
+                      <div class="flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(0,0,0,0.15);">
+                        <div class="w-2 h-2 rounded-full shrink-0" style="background: {sc};"></div>
+                        <p class="flex-1 min-w-0 text-xs font-semibold text-[#E8D4B0] truncate">{ap.name}</p>
+                        <span class="text-[9px] font-bold px-2 py-0.5 rounded-full shrink-0 capitalize" style="background: {sc}22; color: {sc};">
+                          {ap.status}
+                        </span>
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="px-4 pb-3.5 text-[11px] text-[#96B496]">No access points adopted on this site</p>
+                {/if}
+              </div>
+            {/each}
+          {/if}
+
+          <p class="text-xs text-[#3C6A4A] font-semibold mt-1">Regions</p>
+          {#if realRegionsLoading}
+            <div class="flex justify-center py-8"><div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div></div>
+          {:else if realRegions.length === 0}
+            <div class="rounded-2xl px-4 py-8 flex flex-col items-center gap-2" style="background: #2E5A3E;">
+              <MapPin size={24} color="#96B496" />
+              <p class="text-xs text-[#96B496]">No activators assigned yet</p>
+            </div>
+          {:else}
+            {#each realRegions as region (region.territory)}
+              <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; border: 1px solid {Number(region.open_escalations) > 0 ? 'rgba(184,80,56,0.35)' : 'rgba(255,255,255,0.08)'};">
+                <div class="px-4 pt-4 pb-3">
+                  <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <MapPin size={13} color="#C45C38" class="shrink-0" />
+                      <p class="text-sm font-bold text-[#E8D4B0] truncate">{region.territory}</p>
+                    </div>
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0" style="background: rgba(196,92,56,0.28); color: #C45C38;">
+                      {region.activator_count} activator{Number(region.activator_count) === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-3 gap-2 mb-2">
+                    <div class="rounded-xl px-2 py-2" style="background: rgba(0,0,0,0.15);">
+                      <p class="text-xs font-bold text-[#E8D4B0]">{Number(region.paid_sessions)}</p>
+                      <p class="text-[9px] text-[#C4DAC0]">sessions</p>
+                    </div>
+                    <div class="rounded-xl px-2 py-2" style="background: rgba(0,0,0,0.15);">
+                      <p class="text-xs font-bold text-[#E8D4B0]">KES {Number(region.commission_kes).toLocaleString()}</p>
+                      <p class="text-[9px] text-[#C4DAC0]">commission</p>
+                    </div>
+                    <div class="rounded-xl px-2 py-2" style="background: rgba(0,0,0,0.15);">
+                      <p class="text-xs font-bold" style="color: {Number(region.dormant_count) > 0 ? '#CC8830' : '#E8D4B0'};">{Number(region.dormant_count)}</p>
+                      <p class="text-[9px] text-[#C4DAC0]">dormant</p>
+                    </div>
+                  </div>
+                  {#if Number(region.open_escalations) > 0}
+                    <button onclick={() => (tab = 'escalations')} class="w-full flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(184,80,56,0.22);">
+                      <AlertTriangle size={12} color="#B85038" />
+                      <p class="text-[11px] text-[#B85038] font-semibold">{region.open_escalations} open issue{Number(region.open_escalations) > 1 ? 's' : ''} — tap to review</p>
+                    </button>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          {/if}
+        {:else}
         <div class="flex items-center justify-between">
           <p class="text-xs text-[#3C6A4A] font-semibold">{ACCESS_POINTS.length} access points · {onlineAPs} online</p>
           <button class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full" style="background: rgba(46,90,62,0.12); color: #3C6A4A;">
@@ -577,13 +907,16 @@
             </div>
           </div>
         {/each}
+        {/if}
       {/if}
 
       <!-- TEAM -->
       {#if tab === 'activators'}
         {#if isReal}
-          <!-- Plain real list — no target/streak/drill-down UI, since none
-               of that exists for real activators (see Overview's comment). -->
+          <!-- Real list — tap an activator to drill into their real
+               bucketed commission history (see realDrillAct above). No
+               target/streak UI, since none of that exists for real
+               activators (see Overview's comment). -->
           <p class="text-xs text-[#3C6A4A] font-semibold">{realActivators.length} activator{realActivators.length === 1 ? '' : 's'}</p>
           {#if loadingReal}
             <div class="flex justify-center py-8"><div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div></div>
@@ -594,27 +927,37 @@
             </div>
           {:else}
             {#each [...realActivators].sort((a, b) => Number(b.commission_kes) - Number(a.commission_kes)) as act (act.id)}
-              <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; opacity: {act.status === 'active' ? 1 : 0.5};">
+              <button
+                onclick={() => (realDrillId = act.id)}
+                class="w-full text-left rounded-2xl overflow-hidden active:scale-[0.98] transition-all"
+                style="background: #2E5A3E; opacity: {act.status === 'active' ? 1 : 0.5};"
+              >
                 <div class="flex items-center gap-3 px-4 py-3.5">
                   <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 text-xs font-bold" style="background: rgba(196,92,56,0.28); color: #C45C38;">{inits(act.name)}</div>
                   <div class="flex-1 min-w-0">
                     <p class="text-sm font-bold text-[#E8D4B0] truncate">{act.name} <span class="text-[10px] text-[#96B496] font-normal">· {act.code}</span></p>
                     <p class="text-[10px] text-[#C4DAC0] flex items-center gap-1">
                       {#if act.territory}<MapPin size={9} />{act.territory} · {/if}{act.paid_sessions} sessions
+                      {#if Number(act.dormant_count) > 0}
+                        · <span style="color: #C07860;">{act.dormant_count} dormant</span>
+                      {/if}
                     </p>
                   </div>
-                  <div class="text-right shrink-0">
-                    <p class="text-sm font-bold text-[#C45C38]">KES {Number(act.commission_kes).toLocaleString()}</p>
-                    <p class="text-[9px] text-[#96B496]">{act.status}</p>
+                  <div class="text-right shrink-0 flex items-center gap-1.5">
+                    <div>
+                      <p class="text-sm font-bold text-[#C45C38]">KES {Number(act.commission_kes).toLocaleString()}</p>
+                      <p class="text-[9px] text-[#96B496]">{act.status}</p>
+                    </div>
+                    <ChevronRight size={14} color="#96B496" />
                   </div>
                 </div>
-              </div>
+              </button>
             {/each}
           {/if}
         {:else}
         <div class="flex rounded-2xl overflow-hidden" style="background: rgba(46,90,62,0.12);">
           {#each ['day', 'week', 'month', 'year'] as p (p)}
-            <button onclick={() => (teamPeriod = p)} class="flex-1 py-2 text-[10px] font-bold" style="background: {teamPeriod === p ? '#2E5A3E' : 'transparent'}; color: {teamPeriod === p ? '#E8D4B0' : '#96B496'};">
+            <button onclick={() => (teamPeriod = p)} class="flex-1 py-2 text-[10px] font-bold" style="background: {teamPeriod === p ? '#2E5A3E' : 'transparent'}; color: {teamPeriod === p ? '#E8D4B0' : '#3C6A4A'};">
               {p === 'day' ? 'Today' : p === 'week' ? 'Week' : p === 'month' ? 'Month' : 'Year'}
             </button>
           {/each}
@@ -623,7 +966,7 @@
         <div class="flex gap-2">
           <div class="flex rounded-xl overflow-hidden flex-1" style="background: rgba(46,90,62,0.12);">
             {#each ['target', 'earnings', 'users'] as s (s)}
-              <button onclick={() => (teamSort = s)} class="flex-1 py-1.5 text-[9px] font-bold capitalize" style="background: {teamSort === s ? '#2E5A3E' : 'transparent'}; color: {teamSort === s ? '#E8D4B0' : '#96B496'};">
+              <button onclick={() => (teamSort = s)} class="flex-1 py-1.5 text-[9px] font-bold capitalize" style="background: {teamSort === s ? '#2E5A3E' : 'transparent'}; color: {teamSort === s ? '#E8D4B0' : '#3C6A4A'};">
                 {s === 'target' ? 'Target %' : s === 'earnings' ? 'Earned' : 'Users'}
               </button>
             {/each}
@@ -631,7 +974,7 @@
         </div>
         <div class="flex gap-1.5 flex-wrap">
           {#each ['all', 'risk', 'ontrack', 'exceeding'] as f (f)}
-            <button onclick={() => (teamFilter = f)} class="px-2.5 py-1 rounded-full text-[9px] font-bold" style="background: {teamFilter === f ? (f === 'risk' ? '#B85038' : f === 'exceeding' ? '#4E8050' : '#2E5A3E') : 'rgba(46,90,62,0.12)'}; color: {teamFilter === f ? '#E8D4B0' : '#96B496'};">
+            <button onclick={() => (teamFilter = f)} class="px-2.5 py-1 rounded-full text-[9px] font-bold" style="background: {teamFilter === f ? (f === 'risk' ? '#B85038' : f === 'exceeding' ? '#4E8050' : '#2E5A3E') : 'rgba(46,90,62,0.12)'}; color: {teamFilter === f ? '#E8D4B0' : '#3C6A4A'};">
               {f === 'all' ? `All (${COORD_ACTS.length})` : f === 'risk' ? `At Risk (${COORD_ACTS.filter((a) => actPct(a) < 70).length})` : f === 'ontrack' ? `Watch (${COORD_ACTS.filter((a) => { const p = actPct(a); return p >= 70 && p < 100; }).length})` : `Exceeding (${COORD_ACTS.filter((a) => actPct(a) >= 100).length})`}
             </button>
           {/each}
@@ -726,6 +1069,97 @@
 
       <!-- ESCALATIONS -->
       {#if tab === 'escalations'}
+        {#if isReal}
+          <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.35);">
+            <button class="w-full flex items-center justify-between px-4 py-3.5" onclick={() => (realComposing = !realComposing)}>
+              <div class="flex items-center gap-2">
+                <Send size={14} color="#C45C38" />
+                <p class="text-xs font-bold text-[#E8D4B0]">Raise an Issue</p>
+              </div>
+              <ChevronDown size={14} color="#C4DAC0" style="transform: {realComposing ? 'rotate(180deg)' : 'none'}; transition: transform 0.2s;" />
+            </button>
+            {#if realComposing}
+              <div class="px-4 pb-4">
+                <textarea bind:value={realComposeText} placeholder="Describe the issue clearly — include AP IDs, affected users, and steps already tried…" class="w-full rounded-xl px-3 py-2 text-xs text-[#E8D4B0] outline-none resize-none" style="background: rgba(0,0,0,0.2); height: 80px;"></textarea>
+                <div class="flex rounded-xl overflow-hidden mt-2" style="background: rgba(0,0,0,0.2);">
+                  {#each ['low', 'medium', 'high'] as p (p)}
+                    <button onclick={() => (realComposePriority = p)} class="flex-1 py-1.5 text-[9px] font-bold capitalize" style="background: {realComposePriority === p ? (p === 'high' ? '#B85038' : p === 'medium' ? '#CC8830' : '#3C6A4A') : 'transparent'}; color: {realComposePriority === p ? '#fff' : '#96B496'};">
+                      {p}
+                    </button>
+                  {/each}
+                </div>
+                <button onclick={submitRealEscalation} disabled={!realComposeText.trim() || realComposeSubmitting} class="mt-2 w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2" style="background: {realComposeText.trim() ? 'linear-gradient(135deg, #C45C38, #CC8830)' : 'rgba(255,255,255,0.1)'}; color: {realComposeText.trim() ? '#fff' : '#96B496'};">
+                  {#if realComposeSubmitting}
+                    <div class="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin"></div>
+                  {:else}
+                    <Send size={12} />
+                  {/if}
+                  Submit
+                </button>
+              </div>
+            {/if}
+          </div>
+
+          {#if loadingReal}
+            <div class="flex justify-center py-8"><div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div></div>
+          {:else}
+            {@const openReal = realEscalations.filter((e) => e.status !== 'resolved')}
+            {@const resolvedReal = realEscalations.filter((e) => e.status === 'resolved')}
+
+            {#if realEscalations.length === 0}
+              <div class="rounded-2xl px-4 py-8 flex flex-col items-center gap-2" style="background: #2E5A3E;">
+                <ShieldCheck size={24} color="#96B496" />
+                <p class="text-xs text-[#96B496]">No issues raised yet</p>
+              </div>
+            {/if}
+
+            {#if openReal.length > 0}
+              <p class="text-xs text-[#3C6A4A] font-semibold">Open · {openEscs.length} action needed</p>
+            {/if}
+            {#each openReal as esc (esc.id)}
+              {@const pc = ESC_PRIORITY_COLOR[esc.priority]}
+              <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; border: 1px solid {pc}30;">
+                <div class="px-4 pt-4 pb-3">
+                  <div class="flex items-start justify-between mb-2">
+                    <div class="flex-1 min-w-0 pr-2">
+                      <div class="flex items-center gap-2 mb-1">
+                        <span class="text-[9px] font-bold px-2 py-0.5 rounded-full capitalize" style="background: {pc}18; color: {pc};">{esc.priority}</span>
+                        {#if esc.status === 'escalated'}
+                          <span class="text-[9px] font-bold px-2 py-0.5 rounded-full" style="background: rgba(204,136,48,0.15); color: #CC8830;">↑ Sent to Central</span>
+                        {/if}
+                      </div>
+                      <p class="text-xs font-semibold text-[#E8D4B0] leading-snug">{esc.issue}</p>
+                      <p class="text-[10px] text-[#C4DAC0] mt-0.5">From {esc.activator_name ?? 'You'} · {timeAgo(esc.created_at)}</p>
+                    </div>
+                  </div>
+                  {#if esc.status === 'open'}
+                    <div class="flex gap-2 mt-2">
+                      <button onclick={() => setRealEscalationStatus(esc.id, 'resolved')} class="flex-1 py-2 rounded-xl text-[10px] font-bold flex items-center justify-center gap-1" style="background: rgba(78,128,80,0.30); color: #4E8050;">
+                        <CheckCircle2 size={11} /> Resolve
+                      </button>
+                      <button onclick={() => setRealEscalationStatus(esc.id, 'escalated')} class="flex-1 py-2 rounded-xl text-[10px] font-bold flex items-center justify-center gap-1" style="background: rgba(184,80,56,0.32); color: #B85038;">
+                        <Send size={11} /> Escalate ↑
+                      </button>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+
+            {#if resolvedReal.length > 0}
+              <p class="text-xs text-[#3C6A4A] font-semibold mt-1">Resolved</p>
+              {#each resolvedReal as esc (esc.id)}
+                <div class="rounded-2xl px-4 py-3 flex items-center gap-3 opacity-60" style="background: #2E5A3E;">
+                  <CheckCircle2 size={16} color="#4E8050" class="shrink-0" />
+                  <div class="flex-1 min-w-0">
+                    <p class="text-xs text-[#E8D4B0] font-medium truncate">{esc.issue}</p>
+                    <p class="text-[10px] text-[#C4DAC0]">From {esc.activator_name ?? 'You'} · {timeAgo(esc.created_at)}</p>
+                  </div>
+                </div>
+              {/each}
+            {/if}
+          {/if}
+        {:else}
         <div class="rounded-2xl overflow-hidden" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.35);">
           <button class="w-full flex items-center justify-between px-4 py-3.5" onclick={() => (composing = !composing)}>
             <div class="flex items-center gap-2">
@@ -788,6 +1222,7 @@
               </div>
             </div>
           {/each}
+        {/if}
         {/if}
       {/if}
     </div>
