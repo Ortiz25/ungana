@@ -170,6 +170,24 @@
     setTimeout(() => (btcCopied = false), 2000);
   }
 
+  // "Pay in Wallet" is a plain same-tab `lightning:` link — same mechanism
+  // BTCPay's own checkout uses. Any "choose an app" prompt on tap is the
+  // phone's OS resolving that URI scheme against installed apps; a page
+  // can't add code to force that dialog to appear, it either has handlers
+  // registered or it doesn't. This just detects the "doesn't" case — if
+  // tapping it didn't send the tab to the background within ~1.5s (a sign
+  // some app intercepted the link), surface a hint instead of leaving the
+  // tap looking like it did nothing.
+  let btcNoWalletHint = $state(false);
+  let noWalletTimer;
+  function attemptOpenWallet() {
+    clearTimeout(noWalletTimer);
+    btcNoWalletHint = false;
+    noWalletTimer = setTimeout(() => {
+      if (!document.hidden) btcNoWalletHint = true;
+    }, 1500);
+  }
+
   // Background polling while the QR is on screen — tied to btcStatus so it
   // starts/stops automatically as the invoice lifecycle changes.
   $effect(() => {
@@ -499,12 +517,18 @@
                 </div>
                 <a
                   href={`lightning:${btcInvoice.lightningInvoice}`}
+                  onclick={attemptOpenWallet}
                   class="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[11px] font-bold"
                   style="background: linear-gradient(135deg, #F7931A, #FFB74D); color: #fff; box-shadow: 0 4px 14px rgba(247,147,26,0.35);"
                 >
                   <Wallet size={12} strokeWidth={2.5} />
                   Pay in Wallet
                 </a>
+                {#if btcNoWalletHint}
+                  <p class="text-[10px] text-center" style="color: #C4A870;">
+                    No Lightning wallet app found on this device — copy the invoice above or scan the QR instead
+                  </p>
+                {/if}
               {/if}
               <div class="w-full flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(247,147,26,0.1);">
                 <div class="w-2 h-2 rounded-full animate-pulse shrink-0" style="background: #F7931A;"></div>
