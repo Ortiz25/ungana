@@ -1,5 +1,4 @@
 <script>
-  import { onMount } from 'svelte';
   import { Wifi, Signal, Clock, Phone, RotateCcw, MessageCircle, Globe } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import DemoBadge from '$lib/components/DemoBadge.svelte';
@@ -72,18 +71,15 @@
     { icon: Clock, label: 'Plan', value: pkg.label }
   ];
 
+  // Deliberately NOT auto-triggered on mount. `_blank` hands focus straight
+  // to the new tab — firing this the instant the screen loads (e.g. right
+  // after "Check Session" lands here) yanks the user onto google.com and
+  // leaves the countdown running behind them, unseen, until they switch
+  // tabs back. A tap-only button keeps the timer the thing actually on
+  // screen; opening a new tab is only ever something the user asked for.
   function goOnline() {
     window.open('https://www.google.com', '_blank', 'noopener,noreferrer');
   }
-
-  // Best-effort: get the client online the moment this screen mounts, no
-  // tap required. Some browsers only allow window.open() from a direct
-  // user gesture and will silently block a call made from onMount — the
-  // button below is the fail-safe for exactly that case, not a step
-  // everyone needs.
-  onMount(() => {
-    goOnline();
-  });
 </script>
 
 <div
@@ -191,15 +187,12 @@
     </div>
   </div>
 
-  <!-- Fail-safe only — goOnline() already fires automatically on mount.
-       This exists purely for the case where the browser blocked that
-       automatic call, so it reads as a backup action, not the primary CTA. -->
   <button
     onclick={goOnline}
-    class="w-full py-3.5 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 mb-2"
-    style="background: rgba(255,255,255,0.14); color: #C4DAC0; border: 1.5px solid rgba(196,92,56,0.3);"
+    class="w-full py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 mb-2"
+    style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
   >
-    <Globe size={15} />Not redirected? Go Online
+    <Globe size={16} />Go Online
   </button>
   <button
     onclick={onExtend}
