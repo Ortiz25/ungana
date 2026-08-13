@@ -76,7 +76,6 @@
   // locked here so a returning client can't be re-attributed, deliberately
   // or not. `locked` with a null activator means permanently self-onboarded.
   let activatorLocked = $state(false);
-  const chosen = $derived(packages.find((p) => p.id === selected) ?? packages[0]);
 
   onMount(async () => {
     const result = await getActivatorForMac(getClientMac());
@@ -156,9 +155,17 @@
     {#each packages as pkg (pkg.id)}
       {@const Icon = pkg.icon}
       {@const isSelected = selected === pkg.id}
-      <button
+      <div
+        role="button"
+        tabindex="0"
         onclick={() => (selected = pkg.id)}
-        class="w-full text-left rounded-3xl transition-all duration-200 active:scale-[0.98]"
+        onkeydown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            selected = pkg.id;
+          }
+        }}
+        class="w-full text-left rounded-3xl transition-all duration-200 active:scale-[0.98] cursor-pointer"
         style="background: {isSelected ? '#2E5A3E' : 'rgba(46,90,62,0.08)'}; border: {isSelected
           ? '2px solid #C45C38'
           : '2px solid transparent'}; box-shadow: {isSelected ? '0 8px 28px rgba(196,92,56,0.18)' : 'none'};"
@@ -187,67 +194,81 @@
           </div>
         </div>
         {#if isSelected}
-          <div class="mx-5 mb-4 px-4 py-2 rounded-xl flex items-center justify-between" style="background: rgba(196,92,56,0.28);">
-            <span class="text-xs text-[#C45C38] font-semibold">Selected</span>
-            <div class="flex items-center gap-1">
-              {#each [1, 0.6, 0.3] as o, i (i)}
-                <div class="w-1.5 h-1.5 rounded-full bg-[#C45C38]" style="opacity: {o};"></div>
-              {/each}
-            </div>
+          <div class="mx-5 mb-4">
+            {#if pkg.id === 'weekly' || pkg.id === 'monthly'}
+              <div class="flex items-center gap-2 mb-3 px-1">
+                <Clock size={13} color="#E8D4B0" />
+                <p class="text-[11px]" style="color: #C4DAC0;">
+                  That's only <span class="font-bold text-[#E8D4B0]">{(pkg.price / (pkg.id === 'weekly' ? 7 : 30)).toFixed(0)} KES/day</span>
+                  {' '}— saving you {pkg.id === 'weekly' ? '30%' : '50%'}
+                </p>
+              </div>
+            {/if}
+            <button
+              onclick={(e) => {
+                e.stopPropagation();
+                if (!activator) {
+                  activatorError = true;
+                  return;
+                }
+                onSelect(pkg, activator);
+              }}
+              class="w-full py-3.5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95"
+              style="background: {activator
+                ? 'linear-gradient(135deg, #C45C38, #CC8830)'
+                : 'transparent'}; border: {activator
+                ? 'none'
+                : '2px dashed rgba(232,212,176,0.4)'}; color: {activator
+                ? '#fff'
+                : 'rgba(232,212,176,0.6)'}; letter-spacing: 0.04em; box-shadow: {activator
+                ? '0 6px 20px rgba(196,92,56,0.3)'
+                : 'none'};"
+            >
+              Buy Package
+              <ChevronRight size={16} />
+            </button>
           </div>
         {/if}
-      </button>
+      </div>
     {/each}
   </div>
-
-  {#if chosen.id === 'weekly' || chosen.id === 'monthly'}
-    <div
-      class="rounded-2xl px-4 py-3 flex items-center gap-3 mb-4"
-      style="background: rgba(46,90,62,0.1); border: 1px solid rgba(46,90,62,0.15);"
-    >
-      <Clock size={15} color="#C45C38" />
-      <p class="text-xs text-[#3C6A4A]">
-        That's only <span class="font-bold text-[#1D3C2A]">{(chosen.price / (chosen.id === 'weekly' ? 7 : 30)).toFixed(0)} KES/day</span>
-        {' '}— saving you {chosen.id === 'weekly' ? '30%' : '50%'}
-      </p>
-    </div>
-  {/if}
-
-  <button
-    onclick={() => {
-      if (!activator) {
-        activatorError = true;
-        return;
-      }
-      onSelect(chosen, activator);
-    }}
-    class="w-full py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95"
-    style="background: {activator ? 'linear-gradient(135deg, #C45C38, #CC8830)' : 'transparent'}; border: {activator
-      ? 'none'
-      : '2px dashed rgba(29,60,42,0.4)'}; color: {activator ? '#fff' : 'rgba(29,60,42,0.55)'}; letter-spacing: 0.04em;"
-  >
-    Continue with {chosen.label} — {chosen.price} KES
-    <ChevronRight size={16} />
-  </button>
   {/if}
 
   {#if siteMode && siteMode !== 'pay_only'}
   {#if siteMode !== 'earn_only'}
   <!-- Earn Access divider — only shown between the two options when both are actually available. -->
-  <div class="flex items-center gap-3 mt-3 mb-1">
+  <div class="flex items-center gap-3 mt-3 mb-3">
     <div class="flex-1 h-px" style="background: rgba(29,60,42,0.15);"></div>
     <span class="text-[11px] font-medium" style="color: #9AB498;">or</span>
     <div class="flex-1 h-px" style="background: rgba(29,60,42,0.15);"></div>
   </div>
   {/if}
-  <button
-    onclick={onEarnAccess}
-    class="w-full py-3 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 mb-2 transition-all active:scale-95"
-    style="background: rgba(196,92,56,0.1); border: 1.5px solid rgba(196,92,56,0.45); color: #B84A28;"
-  >
-    <Zap size={15} />
-    Earn Free Access — Watch & Learn
-  </button>
+  <!-- Styled as a full card at the same visual weight as the paid plans
+       above (icon, title, subtitle, badge) instead of a plain outlined
+       button — that version read as a minor/skippable link and was easy to
+       scroll past. The glow wrapper nudges attention toward it without a
+       constant distracting pulse (see .earn-glow-wrap below). -->
+  <div class="earn-glow-wrap w-full mb-2">
+    <button
+      onclick={onEarnAccess}
+      class="w-full text-left rounded-3xl overflow-hidden transition-all active:scale-[0.98]"
+      style="background: linear-gradient(135deg, #C45C38, #E0983F); box-shadow: 0 8px 24px rgba(196,92,56,0.3);"
+    >
+      <div class="flex items-center gap-4 px-5 py-4">
+        <div class="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0" style="background: rgba(255,255,255,0.22);">
+          <Zap size={20} color="#fff" strokeWidth={2} />
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-0.5">
+            <span class="text-base font-bold text-white">Earn Free Access</span>
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background: rgba(255,255,255,0.28); color: #fff;">FREE</span>
+          </div>
+          <p class="text-xs" style="color: rgba(255,255,255,0.85);">Watch & learn to unlock internet time</p>
+        </div>
+        <ChevronRight size={18} color="#fff" />
+      </div>
+    </button>
+  </div>
   {/if}
 
   <div class="flex flex-col items-center gap-1.5 mt-2">
@@ -282,3 +303,34 @@
     </div>
   </div>
 </ScreenBg>
+
+<style>
+  /* A slow, subtle glow ring rather than a constant scale pulse — this
+     button sits right below the primary paid-plan CTAs, so it needs to
+     register as "there's a free option too" without competing with them
+     for attention the way a full breathing/scale animation would. */
+  .earn-glow-wrap {
+    position: relative;
+    border-radius: 1.5rem;
+  }
+  .earn-glow-wrap::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 1.5rem;
+    box-shadow: 0 0 0 0 rgba(196, 92, 56, 0.4);
+    animation: earn-glow-ring 2.8s ease-out infinite;
+    pointer-events: none;
+  }
+  @keyframes earn-glow-ring {
+    0% {
+      box-shadow: 0 0 0 0 rgba(196, 92, 56, 0.4);
+    }
+    70% {
+      box-shadow: 0 0 0 10px rgba(196, 92, 56, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(196, 92, 56, 0);
+    }
+  }
+</style>

@@ -12,7 +12,7 @@
     Bitcoin,
     Copy,
     AlertTriangle,
-    ExternalLink
+    Wallet
   } from '@lucide/svelte';
   import ScreenBg from '$lib/components/ScreenBg.svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
@@ -65,7 +65,23 @@
   let usernameStatus = $state(null); // null | 'checking' | 'available' | 'taken'
   let simulateFailure = $state(false);
   let submitting = $state(false);
-  const ready = $derived(phone.length >= 9 && !submitting && usernameStatus !== 'taken');
+  // A username is mandatory — either already locked in from an earlier
+  // purchase on this MAC, or freshly typed and not already taken by
+  // someone else. Empty blocks submission just like an unset activator
+  // blocks package selection on the previous screen.
+  const usernameValid = $derived(usernameLocked || (username.trim().length > 0 && usernameStatus !== 'taken'));
+  // Stricter than usernameValid: also waits out the in-flight availability
+  // check (avoids firing BTC auto-generation on every keystroke). Does NOT
+  // require the check to have resolved 'available' specifically — if it
+  // never comes back (network hiccup, unreachable backend in dev) status
+  // just sits at null, and requiring 'available' literally left the BTC
+  // flow permanently stuck with no invoice and no way to proceed. Backend
+  // still enforces uniqueness for real (409 on submit), this is only a UX
+  // nicety.
+  const usernameSettled = $derived(
+    usernameLocked || (username.trim().length > 0 && usernameStatus !== 'checking' && usernameStatus !== 'taken')
+  );
+  const ready = $derived(phone.length >= 9 && !submitting && usernameValid);
   const PkgIcon = $derived(pkg.icon);
 
   // ── BTC / Lightning ────────────────────────────────────────────────────
@@ -74,7 +90,7 @@
   let btcQrDataUrl = $state(null);
   let btcCopied = $state(false);
   let btcError = $state('');
-  const btcReady = $derived(btcStatus !== 'generating' && usernameStatus !== 'taken');
+  const btcReady = $derived(btcStatus !== 'generating' && usernameValid);
 
   const BTC_POLL_INTERVAL_MS = 10000;
 
@@ -106,11 +122,21 @@
     // actually succeeded.
     if (!result.ok || (!result.data?.lightningInvoice && !result.data?.checkoutLink)) {
       if (result.status === 409) {
+        // A username problem, not an invoice-generation problem — resets to
+        // idle so the auto-generate effect below waits for a corrected
+        // username, but forces usernameStatus to 'taken' first so that same
+        // effect doesn't immediately re-fire with the still-taken value and
+        // loop.
         usernameError = result.data?.message || 'That username is taken — try another.';
+        usernameStatus = 'taken';
+        btcStatus = 'idle';
       } else {
+        // A real generation failure — lands on 'failed' (not 'idle') so the
+        // auto-generate effect won't immediately retry on its own; the user
+        // has to tap "Try Again".
         btcError = 'Could not generate an invoice — try again in a moment.';
+        btcStatus = 'failed';
       }
-      btcStatus = 'idle';
       return;
     }
 
@@ -120,6 +146,22 @@
       : null;
     btcStatus = 'awaiting';
   }
+
+  // A returning client (username already locked in from an earlier
+  // purchase on this MAC) gets a seamless BTC flow — switching to it
+  // generates the invoice immediately, no extra tap. A first-time client
+  // still has to type and settle a username, then explicitly tap "Generate
+  // Invoice" below — auto-firing off a freshly-typed, not-yet-fully-trusted
+  // username felt too eager, and this also sidesteps ever needing to guess
+  // whether the user is "done typing". `btcStatus` flips to 'generating'
+  // synchronously inside generateBtcInvoice before its first await, so this
+  // effect naturally stops re-firing once the request starts.
+  $effect(() => {
+    if (paymentMethod !== 'btc') return;
+    if (btcStatus !== 'idle') return;
+    if (!usernameLocked) return;
+    generateBtcInvoice();
+  });
 
   function copyInvoice() {
     if (!btcInvoice?.lightningInvoice) return;
@@ -351,8 +393,10 @@
 
       <div>
         <div
-          class="flex items-center rounded-2xl overflow-hidden border border-white/10"
-          style="background: #3C6A4A; opacity: {usernameLocked ? 0.75 : 1};"
+          class="flex items-center rounded-2xl overflow-hidden border transition-colors"
+          style="background: #3C6A4A; opacity: {usernameLocked ? 0.75 : 1}; border-color: {usernameStatus === 'taken'
+            ? 'rgba(240,160,138,0.5)'
+            : 'rgba(255,255,255,0.1)'};"
         >
           <div class="px-4 py-3.5 border-r border-white/15 shrink-0">
             <User size={13} color="#C4DAC0" />
@@ -362,7 +406,8 @@
             value={username}
             oninput={onUsernameInput}
             disabled={usernameLocked}
-            placeholder="Username (optional)"
+            placeholder="Username"
+            required
             class="flex-1 bg-transparent px-4 py-3.5 text-[#E8D4B0] placeholder-[#7A9E7A] text-sm outline-none"
           />
           <div class="pr-4 shrink-0">
@@ -383,6 +428,8 @@
           <p class="text-[11px] mt-1.5 px-1" style="color: #7A9E7A;">Your username from a previous purchase</p>
         {:else if usernameStatus === 'taken'}
           <p class="text-[11px] text-[#F0A08A] mt-1.5 px-1">That username is taken — try another</p>
+        {:else if !username}
+          <p class="text-[11px] mt-1.5 px-1" style="color: #C4A870;">Required — so you can check your session later from any browser</p>
         {:else}
           <p class="text-[11px] mt-1.5 px-1" style="color: #7A9E7A;">
             So you can check your session later from any browser
@@ -395,9 +442,34 @@
         <span class="text-sm font-semibold text-[#E8D4B0]">{pkg.duration} free internet</span>
       </div>
 
-      {#if paymentMethod === 'btc' && btcStatus !== 'idle'}
+      {#if paymentMethod === 'btc'}
         <div class="rounded-2xl overflow-hidden" style="background: rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.1);">
-          {#if btcStatus === 'generating'}
+          {#if btcStatus === 'idle'}
+            {#if usernameLocked}
+              <!-- Returning client — the auto-generate effect is about to
+                   kick off the real request; this is a brief bridge so
+                   there's no dead frame between "username OK" and the
+                   'generating' state below. -->
+              <div class="flex flex-col items-center gap-3 py-8">
+                <div class="w-6 h-6 rounded-full border-2 border-white/30 border-t-white animate-spin"></div>
+                <p class="text-xs text-[#C4DAC0]">Preparing your Lightning invoice…</p>
+              </div>
+            {:else if usernameSettled}
+              <div class="flex flex-col items-center gap-2.5 py-8 px-5 text-center">
+                <div class="w-9 h-9 rounded-full flex items-center justify-center" style="background: rgba(247,147,26,0.15);">
+                  <Bitcoin size={16} color="#F7931A" />
+                </div>
+                <p class="text-xs text-[#C4DAC0]">Ready — tap "Generate Invoice" below to continue</p>
+              </div>
+            {:else}
+              <div class="flex flex-col items-center gap-2.5 py-8 px-5 text-center">
+                <div class="w-9 h-9 rounded-full flex items-center justify-center" style="background: rgba(247,147,26,0.15);">
+                  <User size={16} color="#F7931A" />
+                </div>
+                <p class="text-xs text-[#C4DAC0]">Set a username above to continue</p>
+              </div>
+            {/if}
+          {:else if btcStatus === 'generating'}
             <div class="flex flex-col items-center gap-3 py-8">
               <div class="w-6 h-6 rounded-full border-2 border-white/30 border-t-white animate-spin"></div>
               <p class="text-xs text-[#C4DAC0]">Generating Lightning invoice…</p>
@@ -425,17 +497,13 @@
                     {#if btcCopied}<CheckCircle2 size={11} /> Copied{:else}<Copy size={11} /> Copy{/if}
                   </button>
                 </div>
-              {/if}
-              {#if btcInvoice.checkoutLink}
                 <a
-                  href={btcInvoice.checkoutLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href={`lightning:${btcInvoice.lightningInvoice}`}
                   class="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[11px] font-bold"
-                  style="background: rgba(247,147,26,0.15); color: #F7931A; border: 1px solid rgba(247,147,26,0.3);"
+                  style="background: linear-gradient(135deg, #F7931A, #FFB74D); color: #fff; box-shadow: 0 4px 14px rgba(247,147,26,0.35);"
                 >
-                  <ExternalLink size={12} />
-                  {btcInvoice.lightningInvoice ? 'Open payment page' : 'Open payment page to scan or copy'}
+                  <Wallet size={12} strokeWidth={2.5} />
+                  Pay in Wallet
                 </a>
               {/if}
               <div class="w-full flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(247,147,26,0.1);">
@@ -486,7 +554,28 @@
           {/if}
         </button>
       </div>
-    {:else if btcStatus === 'idle' || btcStatus === 'failed'}
+    {:else if btcStatus === 'idle' && !usernameLocked}
+      <!-- First-time client — the auto-generate effect only fires for an
+           already-locked username, so this is the explicit trigger for a
+           freshly-typed one. Disabled until the availability check settles
+           (usernameSettled), not just usernameValid, so this can't be
+           tapped mid-check. -->
+      <div class="px-5 pt-4 pb-5">
+        <button
+          onclick={generateBtcInvoice}
+          disabled={!usernameSettled}
+          class="w-full py-4 rounded-2xl font-bold text-sm tracking-wide transition-all duration-200 active:scale-95 flex items-center justify-center gap-2"
+          style="background: {usernameSettled
+            ? 'linear-gradient(135deg, #F7931A, #FFB74D)'
+            : 'rgba(255,255,255,0.1)'}; color: {usernameSettled ? '#fff' : '#AECAAE'}; box-shadow: {usernameSettled
+            ? '0 6px 20px rgba(247,147,26,0.35)'
+            : 'none'};"
+        >
+          <Bitcoin size={15} strokeWidth={2.25} />
+          Generate Invoice
+        </button>
+      </div>
+    {:else if btcStatus === 'failed'}
       <div class="px-5 pt-4 pb-5">
         <button
           onclick={generateBtcInvoice}
@@ -499,7 +588,7 @@
             : 'none'};"
         >
           <Bitcoin size={15} strokeWidth={2.25} />
-          {btcStatus === 'failed' ? 'Try Again' : 'Generate Invoice'}
+          Try Again
         </button>
       </div>
     {/if}

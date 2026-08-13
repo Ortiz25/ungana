@@ -28,6 +28,20 @@
     <p class="text-sm text-[#3C6A4A] mt-1.5 text-center">Your {pkg.label} session has ended</p>
   </div>
 
+  <!-- Primary CTA — surfaced above the summary since re-buying is the action
+       almost everyone here takes; the summary is reference info, not the
+       ask. -->
+  <div class="cta-pulse-wrap w-full mb-2">
+    <button
+      onclick={onBuyAgain}
+      class="w-full py-4 rounded-2xl font-bold text-base flex items-center justify-center gap-2 transition-transform active:scale-90"
+      style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
+    >
+      <RotateCcw size={18} />Buy Another Session
+    </button>
+  </div>
+  <p class="text-xs text-[#3C6A4A] text-center mb-5">Stay connected with a new plan</p>
+
   <!-- Summary card -->
   <div class="w-full rounded-3xl overflow-hidden shadow-xl mb-4" style="background: #2E5A3E;">
     <div class="px-5 pt-5 pb-4">
@@ -39,22 +53,6 @@
         </div>
       {/each}
     </div>
-  </div>
-
-  <!-- Prompt -->
-  <div class="w-full rounded-2xl px-4 py-4 mb-5 text-center" style="background: rgba(46,90,62,0.1); border: 1px solid rgba(46,90,62,0.15);">
-    <p class="text-sm font-semibold text-[#1D3C2A]">Would you like to buy another session?</p>
-    <p class="text-xs text-[#3C6A4A] mt-1">Stay connected with a new plan</p>
-  </div>
-
-  <div class="cta-pulse-wrap w-full mb-3">
-    <button
-      onclick={onBuyAgain}
-      class="w-full py-4 rounded-2xl font-bold text-base flex items-center justify-center gap-2 transition-transform active:scale-90"
-      style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
-    >
-      <RotateCcw size={18} />Buy Another Session
-    </button>
   </div>
 
   <button

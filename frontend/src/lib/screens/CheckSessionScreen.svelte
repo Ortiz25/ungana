@@ -88,10 +88,11 @@
 
   <button
     onclick={onSkip}
-    class="w-full py-3.5 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 active:scale-95"
-    style="background: rgba(46,90,62,0.1); border: 1.5px solid rgba(46,90,62,0.2); color: #1D3C2A;"
+    class="new-here-btn w-full py-3.5 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all active:scale-95"
+    style="background: rgba(46,90,62,0.08); border: 1.5px solid rgba(46,90,62,0.22); color: #1D3C2A;"
   >
-    New here? Buy a package <ArrowRight size={15} />
+    New here? <span class="font-bold" style="color: #C45C38;">Buy a package</span>
+    <ArrowRight size={15} class="arrow-nudge" />
   </button>
 
   <p class="text-[10px] text-[#9AB498] text-center mt-4">
@@ -127,3 +128,22 @@
     </button>
   </div>
 </ScreenBg>
+
+<style>
+  /* Repeating small rightward nudge on the arrow — cues "this leads
+     somewhere" without a full attention-grabbing pulse like the primary
+     CTAs elsewhere; this is a secondary action, so the motion stays subtle
+     and lives on the icon alone, not the whole button. */
+  :global(.new-here-btn .arrow-nudge) {
+    animation: arrow-nudge 1.6s ease-in-out infinite;
+  }
+  @keyframes arrow-nudge {
+    0%,
+    100% {
+      transform: translateX(0);
+    }
+    50% {
+      transform: translateX(4px);
+    }
+  }
+</style>
