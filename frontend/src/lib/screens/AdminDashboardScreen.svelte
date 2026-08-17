@@ -229,11 +229,15 @@
       earnSecs: Math.round(Number(draft.earnMinutes) * 60),
       // Surveys and articles have no dwell-time UI — always save 0 rather
       // than resubmitting a stale value from before that field was hidden.
+      // Lesson keeps a real dwell time — it's a video, same as 'video'.
       minWatchSecs: draft.type === 'survey' || draft.type === 'article' ? 0 : Number(draft.minWatchSecs) || 0,
       imgUrl: draft.imgUrl.trim() || undefined,
       bodyUrl: draft.bodyUrl.trim() || undefined,
+      // A lesson's quiz is optional — a lesson with every question left
+      // blank saves as [] (a plain video with no follow-up quiz), same
+      // shape a survey would produce if someone cleared it out.
       surveyQuestions:
-        draft.type === 'survey'
+        draft.type === 'survey' || draft.type === 'lesson'
           ? draft.surveyQuestions
               .map((q) => ({ question: q.question.trim(), answers: q.answers.map((a) => a.trim()).filter(Boolean) }))
               .filter((q) => q.question && q.answers.length > 0)
@@ -847,9 +851,9 @@
   </div>
 {/snippet}
 
-{#snippet surveyQuestionsEditor(draft)}
+{#snippet surveyQuestionsEditor(draft, heading = 'Questions & answer options')}
   <div>
-    <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Questions & answer options</p>
+    <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">{heading}</p>
     <div class="flex flex-col gap-2.5">
       {#each draft.surveyQuestions as q, qi (qi)}
         <div class="rounded-xl p-3" style="background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);">
@@ -1050,13 +1054,16 @@
             {@render articleBodyField(contentDraft, (e) => (contentDraft.bodyUrl = e.currentTarget.value))}
           {:else}
             {@render fileOrUrlField(
-              contentDraft.type === 'video' ? 'Video' : 'Article',
+              'Video',
               contentDraft.bodyUrl,
               (e) => (contentDraft.bodyUrl = e.currentTarget.value),
               bodyUploading,
               (e) => handleFileUpload(e, contentDraft, 'bodyUrl', (v) => (bodyUploading = v), (m) => (contentFormError = m)),
-              contentDraft.type === 'video' ? 'video/*' : undefined
+              'video/*'
             )}
+            {#if contentDraft.type === 'lesson'}
+              {@render surveyQuestionsEditor(contentDraft, 'Quiz — questions & answer options (optional)')}
+            {/if}
           {/if}
 
           {#if contentFormError}
@@ -1090,6 +1097,9 @@
                 · {item.category || item.type} · {formatEarn(item.earn_secs)} reward{item.min_watch_secs > 0 ? ` · ${item.min_watch_secs}s min` : ''}
                 {#if item.view_frequency && item.view_frequency !== 'once'}
                   · <span style="color: #CC8830;">{VIEW_FREQUENCY_LABEL[item.view_frequency]}</span>
+                {/if}
+                {#if item.type === 'lesson' && item.survey_questions?.length > 0}
+                  · <span style="color: #5C8C3C;">+ quiz ({item.survey_questions.length})</span>
                 {/if}
               </p>
               <p class="text-[10px] text-[#96B496] flex items-center gap-1 mt-0.5"><Eye size={9} />{Number(item.impressions ?? 0).toLocaleString()} views</p>
@@ -1160,13 +1170,16 @@
             {@render articleBodyField(contentEditDraft, (e) => (contentEditDraft.bodyUrl = e.currentTarget.value))}
           {:else}
             {@render fileOrUrlField(
-              contentEditDraft.type === 'video' ? 'Video' : 'Article',
+              'Video',
               contentEditDraft.bodyUrl,
               (e) => (contentEditDraft.bodyUrl = e.currentTarget.value),
               editBodyUploading,
               (e) => handleFileUpload(e, contentEditDraft, 'bodyUrl', (v) => (editBodyUploading = v), (m) => (contentEditError = m)),
-              contentEditDraft.type === 'video' ? 'video/*' : undefined
+              'video/*'
             )}
+            {#if contentEditDraft.type === 'lesson'}
+              {@render surveyQuestionsEditor(contentEditDraft, 'Quiz — questions & answer options (optional)')}
+            {/if}
           {/if}
 
           {#if contentEditError}
@@ -1601,29 +1614,48 @@
                       </div>
                       <p class="text-[10px] text-[#96B496] mb-3">Total reward time awarded: <span class="font-bold text-[#C45C38]">{formatEarn(contentDetail.totalEarnSecsAwarded)}</span></p>
 
-                      {#if contentDetail.type === 'survey' && contentDetail.surveyQuestions}
-                        <p class="text-[10px] font-bold text-[#C4DAC0] uppercase tracking-wider mb-2">Answer breakdown</p>
-                        {#each contentDetail.surveyQuestions as q, qi (qi)}
-                          {@const answers = contentDetail.surveyBreakdown?.[String(qi)] ?? []}
-                          {@const totalAnswers = answers.reduce((s, a) => s + a.count, 0)}
-                          <div class="mb-3 last:mb-0">
-                            <p class="text-xs text-[#E8D4B0] mb-1.5">{q.question ?? q}</p>
-                            {#if totalAnswers === 0}
-                              <p class="text-[10px] text-[#96B496]">No answers yet</p>
-                            {:else}
-                              {#each answers as a (a.answer)}
-                                {@const pct = Math.round((a.count / totalAnswers) * 100)}
-                                <div class="flex items-center gap-2 mb-1 last:mb-0">
-                                  <span class="text-[10px] w-16 shrink-0 text-right" style="color: #C4DAC0;">{a.answer}</span>
-                                  <div class="flex-1 h-2 rounded-full overflow-hidden" style="background: rgba(255,255,255,0.1);">
-                                    <div class="h-full rounded-full" style="width: {pct}%; background: #C45C38;"></div>
-                                  </div>
-                                  <span class="text-[10px] w-10 shrink-0" style="color: #96B496;">{pct}%</span>
+                      {#if (contentDetail.type === 'survey' || contentDetail.type === 'lesson') && contentDetail.surveyQuestions?.length > 0}
+                        <p class="text-[10px] font-bold text-[#C4DAC0] uppercase tracking-wider mb-2">
+                          {contentDetail.type === 'lesson' ? 'Quiz breakdown' : 'Answer breakdown'}
+                        </p>
+                        <div class="flex flex-col gap-2.5">
+                          {#each contentDetail.surveyQuestions as q, qi (qi)}
+                            {@const answers = contentDetail.surveyBreakdown?.[String(qi)] ?? []}
+                            {@const totalAnswers = answers.reduce((s, a) => s + a.count, 0)}
+                            {@const topCount = Math.max(0, ...answers.map((a) => a.count))}
+                            <div class="rounded-xl p-3" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);">
+                              <div class="flex items-start justify-between gap-2 mb-2">
+                                <p class="text-xs font-semibold text-[#E8D4B0]">{qi + 1}. {q.question ?? q}</p>
+                                <span class="text-[9px] text-[#96B496] shrink-0 whitespace-nowrap">{totalAnswers} response{totalAnswers === 1 ? '' : 's'}</span>
+                              </div>
+                              {#if totalAnswers === 0}
+                                <p class="text-[10px] text-[#6B8A6B] italic">No answers yet</p>
+                              {:else}
+                                <div class="flex flex-col gap-1.5">
+                                  {#each answers as a (a.answer)}
+                                    {@const pct = Math.round((a.count / totalAnswers) * 100)}
+                                    {@const isTop = a.count === topCount}
+                                    <div class="flex items-center gap-2">
+                                      <span
+                                        class="text-[10px] w-20 shrink-0 truncate text-right"
+                                        style="color: {isTop ? '#E8D4B0' : '#96B496'}; font-weight: {isTop ? 700 : 400};"
+                                      >
+                                        {a.answer}
+                                      </span>
+                                      <div class="flex-1 h-2.5 rounded-full overflow-hidden" style="background: rgba(255,255,255,0.08);">
+                                        <div
+                                          class="h-full rounded-full transition-all duration-500"
+                                          style="width: {pct}%; background: {isTop ? 'linear-gradient(90deg, #C45C38, #CC8830)' : 'rgba(196,92,56,0.4)'};"
+                                        ></div>
+                                      </div>
+                                      <span class="text-[10px] w-9 shrink-0 font-semibold" style="color: {isTop ? '#C45C38' : '#96B496'};">{pct}%</span>
+                                    </div>
+                                  {/each}
                                 </div>
-                              {/each}
-                            {/if}
-                          </div>
-                        {/each}
+                              {/if}
+                            </div>
+                          {/each}
+                        </div>
                       {/if}
                     {:else}
                       <p class="text-[10px] text-[#96B496] text-center py-2">Could not load details.</p>

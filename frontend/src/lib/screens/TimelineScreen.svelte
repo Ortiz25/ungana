@@ -113,6 +113,13 @@
   let viewingItem = $state(null);
   let viewProgress = $state(0);
   let viewDone = $state(false);
+  // Lesson-only: true once the video portion is watched. A lesson with quiz
+  // questions doesn't set `viewDone` the moment the video ends — it moves
+  // into the same answer-every-question carousel a standalone survey uses,
+  // and `viewDone` only flips once that's complete too. A lesson with no
+  // quiz questions attached skips straight to `viewDone`, same as a plain
+  // video — this flag only ever becomes true when there's a quiz to show.
+  let lessonVideoDone = $state(false);
   let surveyAnswers = $state({});
   let surveyIndex = $state(0); // which question the carousel is currently showing
   let claimError = $state(false);
@@ -253,8 +260,10 @@
   // Both native <video> and YouTube now drive videoCurrentTime from a real
   // player — startContent()/claimReward() treat them the same way: skip
   // the wall-clock fallback timer and trust the real position instead.
+  // A lesson is a video with a quiz bolted on, so it gets the exact same
+  // real playback tracking a plain video does.
   function hasTrackedVideoPlayback(item) {
-    return item?.type === 'video' && !!item.bodyUrl;
+    return (item?.type === 'video' || item?.type === 'lesson') && !!item.bodyUrl;
   }
 
   function startContent(item) {
@@ -263,6 +272,7 @@
     viewingItem = item;
     viewProgress = 0;
     viewDone = false;
+    lessonVideoDone = false;
     surveyAnswers = {};
     surveyIndex = 0;
     claimError = false;
@@ -287,9 +297,23 @@
       if (viewProgress >= 100) {
         clearInterval(progressTimer);
         progressTimer = null;
-        viewDone = true;
+        markVideoWatched();
       }
     }, 150);
+  }
+
+  // Shared "the watch requirement was just met" handler for all three
+  // playback sources (native <video>, YouTube, and the wall-clock fallback
+  // for items with no real player) — a lesson with quiz questions moves
+  // into the quiz carousel instead of going straight to `viewDone`; every
+  // other case (plain video, or a lesson with no questions attached)
+  // behaves exactly as before.
+  function markVideoWatched() {
+    if (viewingItem?.type === 'lesson' && (viewingItem.surveyQuestions?.length ?? 0) > 0) {
+      lessonVideoDone = true;
+    } else {
+      viewDone = true;
+    }
   }
 
   // Bound to the native <video>'s ontimeupdate — only fires while actually
@@ -297,11 +321,11 @@
   // time since the viewer opened (pausing/scrubbing back correctly stalls
   // or reduces progress instead of ignoring it).
   function handleVideoTimeUpdate(e) {
-    if (!viewingItem || viewDone) return;
+    if (!viewingItem || viewDone || lessonVideoDone) return;
     videoCurrentTime = e.currentTarget.currentTime;
     const requiredSecs = viewingItem.minWatchSecs > 0 ? viewingItem.minWatchSecs : FALLBACK_WATCH_SECS;
     viewProgress = Math.min(100, (videoCurrentTime / requiredSecs) * 100);
-    if (viewProgress >= 100) viewDone = true;
+    if (viewProgress >= 100) markVideoWatched();
   }
 
   // Carousel — one question on screen at a time, matching the feed's
@@ -342,7 +366,9 @@
       // elapsed otherwise (survey, or no player at all).
       const elapsedSecs = hasTrackedVideoPlayback(item) ? Math.round(videoCurrentTime) : Math.round((Date.now() - startedAt) / 1000);
       const body = { mac, elapsedSecs };
-      if (item.type === 'survey') body.response = surveyAnswers;
+      if (item.type === 'survey' || (item.type === 'lesson' && (item.surveyQuestions?.length ?? 0) > 0)) {
+        body.response = surveyAnswers;
+      }
 
       const result = await completeContentItem(item.id, body);
       if (!result.ok || !result.data?.ok) {
@@ -490,6 +516,10 @@
   // Content viewer derived
   const ViewerIcon = $derived(viewingItem ? TL_TYPE_ICON[viewingItem.type] : null);
   const viewerTypeColor = $derived(viewingItem ? TL_TYPE_COLOR[viewingItem.type] : '#C45C38');
+  // The quiz carousel shows for a standalone survey immediately, or for a
+  // lesson once its video has been watched — same UI either way, since both
+  // just read viewingItem.surveyQuestions/surveyAnswers/surveyIndex.
+  const showingQuiz = $derived(viewingItem?.type === 'survey' || (viewingItem?.type === 'lesson' && lessonVideoDone));
 
   // Real video playback — only real items carry a bodyUrl (the demo
   // catalogue only ever had thumbnail images), so demo videos keep the old
@@ -502,7 +532,7 @@
     return match ? match[1] : null;
   }
   const playableVideoUrl = $derived(
-    viewingItem?.type === 'video' && viewingItem?.bodyUrl ? viewingItem.bodyUrl : null
+    (viewingItem?.type === 'video' || viewingItem?.type === 'lesson') && viewingItem?.bodyUrl ? viewingItem.bodyUrl : null
   );
 
   // YouTube IFrame Player API — loaded once, reused for every YouTube item
@@ -587,7 +617,7 @@
             }
             if (e.data !== YT.PlayerState.PLAYING) return;
             ytPollTimer = setInterval(() => {
-              if (!ytPlayer || viewDone) {
+              if (!ytPlayer || viewDone || lessonVideoDone) {
                 clearInterval(ytPollTimer);
                 ytPollTimer = null;
                 return;
@@ -595,7 +625,7 @@
               videoCurrentTime = ytPlayer.getCurrentTime();
               const requiredSecs = viewingItem?.minWatchSecs > 0 ? viewingItem.minWatchSecs : FALLBACK_WATCH_SECS;
               viewProgress = Math.min(100, (videoCurrentTime / requiredSecs) * 100);
-              if (viewProgress >= 100) viewDone = true;
+              if (viewProgress >= 100) markVideoWatched();
             }, 250);
           },
         },
@@ -871,7 +901,31 @@
         </div>
         <h2 class="text-xl font-bold mb-4" style="color: #E8D4B0; font-family: 'Playfair Display', serif;">{viewingItem.title}</h2>
 
-        {#if viewingItem.type === 'survey'}
+        {#if viewingItem.type === 'lesson' && (viewingItem.surveyQuestions?.length ?? 0) > 0}
+          <!-- Two-step indicator — a lesson is watch-then-quiz, and it's not
+               obvious from the video player alone that a quiz follows it. -->
+          <div class="flex items-center gap-1.5 mb-4">
+            <span
+              class="text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
+              style="background: {lessonVideoDone ? 'rgba(46,90,62,0.32)' : 'rgba(196,92,56,0.28)'}; color: {lessonVideoDone ? '#7EC88E' : '#C45C38'};"
+            >
+              {#if lessonVideoDone}<CheckCircle2 size={10} />{/if} Watch
+            </span>
+            <span class="w-3 h-px shrink-0" style="background: rgba(255,255,255,0.15);"></span>
+            <span
+              class="text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
+              style="background: {viewDone ? 'rgba(46,90,62,0.32)' : lessonVideoDone ? 'rgba(196,92,56,0.28)' : 'rgba(255,255,255,0.08)'}; color: {viewDone
+                ? '#7EC88E'
+                : lessonVideoDone
+                  ? '#C45C38'
+                  : '#6B8A6B'};"
+            >
+              {#if viewDone}<CheckCircle2 size={10} />{/if} Quiz
+            </span>
+          </div>
+        {/if}
+
+        {#if showingQuiz}
         {@const questions = viewingItem.surveyQuestions ?? []}
         {@const currentQuestion = questions[surveyIndex]}
         <div class="mb-5">
@@ -942,7 +996,7 @@
       {/if}
 
       {#if !viewDone}
-        {#if viewingItem.type !== 'survey' && viewingItem.type !== 'article'}
+        {#if !showingQuiz && viewingItem.type !== 'article'}
           <p class="text-sm text-center" style="color: #C4DAC0;">
             Complete this {TL_TYPE_LABEL[viewingItem.type].toLowerCase()} to earn{' '}
             <span class="font-bold" style="color: #C45C38;">{viewingItem.earnLabel} free internet</span>

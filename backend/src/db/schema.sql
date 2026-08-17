@@ -365,7 +365,7 @@ CREATE TABLE IF NOT EXISTS content_items (
   min_watch_secs   INTEGER NOT NULL DEFAULT 0 CHECK (min_watch_secs >= 0), -- real seconds the client must dwell before /complete accepts it (video/article/lesson only — irrelevant for surveys)
   img_url          TEXT,
   body_url         TEXT,                           -- video/article URL, or article body text
-  survey_questions JSONB,                          -- only set when type = 'survey'
+  survey_questions JSONB,                          -- set for type = 'survey' (the whole item), or optionally for type = 'lesson' (a quiz shown after the video — same shape, empty/absent means no quiz)
   -- How often a client can re-earn this item's reward. 'once' = today's
   -- original behaviour (forever, per client) — see content_completions'
   -- period_key for how the others (daily/weekly/monthly reset on a

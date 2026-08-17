@@ -83,9 +83,11 @@ export async function getClientCompletions(macAddress, siteId = null) {
 /**
  * Server-authoritative completion recording — the only thing that actually
  * credits a reward. Rejects video/article/lesson completions that don't
- * report enough real elapsed time, and survey completions with no answers,
- * rather than trusting the client's own progress bar (see TimelineScreen's
- * old client-only `completedIds` Set, which this replaces).
+ * report enough real elapsed time, survey completions with no answers, and
+ * (lesson only, when the item actually has quiz questions attached) lesson
+ * completions with an incomplete quiz — rather than trusting the client's
+ * own progress bar/carousel state (see TimelineScreen's old client-only
+ * `completedIds` Set, which this replaces).
  *
  * Returns { ok: false, reason } on rejection, or
  * { ok: true, alreadyCompleted, earnSecs } — `earnSecs` is 0 when the item
@@ -100,8 +102,19 @@ export async function recordCompletion(macAddress, contentItemId, { elapsedSecs 
   if (item.type === "survey") {
     const answered = Array.isArray(response) ? response.length > 0 : !!response && Object.keys(response).length > 0;
     if (!answered) return { ok: false, reason: "response_required" };
-  } else if (elapsedSecs < item.min_watch_secs) {
-    return { ok: false, reason: "insufficient_watch_time" };
+  } else {
+    if (elapsedSecs < item.min_watch_secs) return { ok: false, reason: "insufficient_watch_time" };
+
+    // A lesson with quiz questions attached must answer every one of them —
+    // same completeness bar a standalone survey enforces, not just trusting
+    // that the client showed the quiz UI. A lesson with no questions
+    // configured (or video/article, which never carry any) behaves exactly
+    // like before.
+    const questions = Array.isArray(item.survey_questions) ? item.survey_questions : [];
+    if (item.type === "lesson" && questions.length > 0) {
+      const answeredCount = response && typeof response === "object" && !Array.isArray(response) ? Object.keys(response).length : 0;
+      if (answeredCount < questions.length) return { ok: false, reason: "quiz_incomplete" };
+    }
   }
 
   const clientId = await upsertClient(macAddress);

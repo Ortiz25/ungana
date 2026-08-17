@@ -30,6 +30,15 @@
   // of the accelerated demo timers, and hide the "Demo" badges.
   let appMode = $state('simulation');
   let activeInitialRemaining = $state(null);
+  // Distinguishes the two ways `screen` can become 'active': arriving fresh
+  // from ConnectingScreen right after a payment just confirmed (true), vs.
+  // applySessionData() restoring an already-active session — on load, or
+  // via CheckSessionScreen's manual lookup (false). ActiveScreen uses this
+  // to decide whether to auto-trigger "Go Online" itself: doing that on
+  // every restore/reload of an already-connected session would pop a new
+  // tab on the user unprompted; doing it once, right after a fresh payment
+  // is confirmed, is the actual point of the button.
+  let cameFromConnecting = $state(false);
   let selectedPkg = $state(PACKAGES.find((p) => p.id === 'weekly'));
   let selectedActivator = $state(null);
   let loggedInActivator = $state(null);
@@ -86,6 +95,7 @@
       activeInitialRemaining = data.expiresAt
         ? Math.max(0, Math.round((data.expiresAt - serverNow) / 1000))
         : restoredPkg.demoSecs;
+      cameFromConnecting = false; // restoring an existing session, not a fresh payment
       screen = 'active';
     } else {
       screen = 'ended';
@@ -322,6 +332,7 @@
     <ConnectingScreen
       onConnected={() => {
         activeInitialRemaining = null;
+        cameFromConnecting = true; // fresh payment just confirmed — safe to auto-trigger Go Online
         screen = 'active';
       }}
     />
@@ -329,6 +340,7 @@
   {#if screen === 'active'}
     <ActiveScreen
       pkg={selectedPkg}
+      autoGoOnline={cameFromConnecting}
       {phone}
       mode={appMode}
       initialRemaining={activeInitialRemaining}

@@ -285,10 +285,11 @@ export async function getAdminAnalytics() {
 
 /**
  * Per-item drill-down for the Analytics tab's "view details" on a single
- * content item — impressions/completions/engagement, plus, for surveys,
- * a per-question answer breakdown built from every completion's stored
- * `response` (see TimelineScreen's answerSurveyQuestion — response is
- * `{questionIndex: answerText}`, one row per client per completion).
+ * content item — impressions/completions/engagement, plus, for surveys and
+ * quiz-carrying lessons, a per-question answer breakdown built from every
+ * completion's stored `response` (see TimelineScreen's answerSurveyQuestion
+ * — response is `{questionIndex: answerText}`, one row per client per
+ * completion; a lesson's quiz answers are stored the exact same way).
  * Returns null if the item doesn't exist.
  */
 export async function getContentItemAnalytics(contentItemId) {
@@ -303,7 +304,7 @@ export async function getContentItemAnalytics(contentItemId) {
   const stats = completionsResult.rows[0];
 
   let surveyBreakdown = null;
-  if (item.type === "survey") {
+  if (item.type === "survey" || item.type === "lesson") {
     const { rows } = await query(
       `SELECT kv.key AS question_index, kv.value AS answer, COUNT(*) AS count
        FROM content_completions cc, jsonb_each_text(cc.response) AS kv

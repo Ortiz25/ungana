@@ -6,6 +6,7 @@
 
   const Icon = $derived(TL_TYPE_ICON[item.type]);
   const done = $derived(completedIds.has(item.id));
+  const hasQuiz = $derived(item.type === 'lesson' && (item.surveyQuestions?.length ?? 0) > 0);
   // Says WHEN it re-unlocks (e.g. "Viewed today") rather than a flat
   // "Done" — a daily/weekly/monthly item that's already been claimed for
   // its current period still looks tappable otherwise, which is what let
@@ -39,7 +40,9 @@
 
   <!-- bottom info -->
   <div class="absolute bottom-0 left-0 right-0 p-2.5">
-    <p class="text-[9px] font-semibold mb-0.5" style="color: #C4DAC0;">{item.category} · {item.duration}</p>
+    <p class="text-[9px] font-semibold mb-0.5" style="color: #C4DAC0;">
+      {item.category} · {item.duration}{hasQuiz ? ' · + Quiz' : ''}
+    </p>
     <p class="text-xs font-bold text-white leading-tight line-clamp-2">{item.title}</p>
   </div>
 </button>

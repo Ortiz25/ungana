@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import { Wifi, Signal, Clock, Phone, RotateCcw, MessageCircle, Globe } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import DemoBadge from '$lib/components/DemoBadge.svelte';
@@ -7,7 +8,12 @@
   // `initialRemaining` lets a restored session (page reload while still
   // connected) resume the countdown from the actual time left instead of
   // restarting the full duration — see +page.svelte's session-restore check.
-  let { pkg, phone, mode = 'simulation', initialRemaining = null, onExpiring, onExtend } = $props();
+  // `autoGoOnline` is true only when this screen was just reached fresh from
+  // ConnectingScreen (a payment that just confirmed) — false when it's a
+  // restored/reloaded already-active session (on-load MAC check or
+  // CheckSessionScreen), where auto-popping a new tab on every visit would
+  // be unwanted. See +page.svelte's `cameFromConnecting`.
+  let { pkg, phone, mode = 'simulation', initialRemaining = null, autoGoOnline = false, onExpiring, onExtend } = $props();
 
   const total = pkg.demoSecs;
   const warningThreshold = getWarningThreshold(total);
@@ -71,15 +77,20 @@
     { icon: Clock, label: 'Plan', value: pkg.label }
   ];
 
-  // Deliberately NOT auto-triggered on mount. `_blank` hands focus straight
-  // to the new tab — firing this the instant the screen loads (e.g. right
-  // after "Check Session" lands here) yanks the user onto google.com and
-  // leaves the countdown running behind them, unseen, until they switch
-  // tabs back. A tap-only button keeps the timer the thing actually on
-  // screen; opening a new tab is only ever something the user asked for.
+  // `_blank` hands focus straight to the new tab — firing this on every
+  // visit to an already-active session (restored on load, or via "Check
+  // Session") would yank the user onto google.com unprompted and leave the
+  // countdown running unseen behind it. Auto-firing it exactly once, right
+  // after a fresh payment is confirmed (autoGoOnline, set by
+  // ConnectingScreen's onConnected), is the one case where that's actually
+  // wanted — everywhere else the button stays purely tap-only.
   function goOnline() {
     window.open('https://www.google.com', '_blank', 'noopener,noreferrer');
   }
+
+  onMount(() => {
+    if (autoGoOnline) goOnline();
+  });
 </script>
 
 <div
@@ -187,13 +198,26 @@
     </div>
   </div>
 
-  <button
-    onclick={goOnline}
-    class="w-full py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 mb-2"
-    style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
-  >
-    <Globe size={16} />Go Online
-  </button>
+  {#if autoGoOnline}
+    <!-- Already auto-triggered on mount — this is purely the fail-safe for
+         a browser that blocked the automatic window.open() call, so it
+         reads as a backup action, not the primary CTA. -->
+    <button
+      onclick={goOnline}
+      class="w-full py-3.5 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 mb-2"
+      style="background: rgba(255,255,255,0.14); color: #C4DAC0; border: 1.5px solid rgba(196,92,56,0.3);"
+    >
+      <Globe size={15} />Not redirected? Go Online
+    </button>
+  {:else}
+    <button
+      onclick={goOnline}
+      class="w-full py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 mb-2"
+      style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
+    >
+      <Globe size={16} />Go Online
+    </button>
+  {/if}
   <button
     onclick={onExtend}
     class="w-full py-3.5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 mb-2"
