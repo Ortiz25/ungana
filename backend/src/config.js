@@ -50,6 +50,13 @@ export const DARAJA_ENV = (process.env.DARAJA_ENV || "sandbox").toLowerCase();
 export const DARAJA_CONSUMER_KEY = process.env.DARAJA_CONSUMER_KEY;
 export const DARAJA_CONSUMER_SECRET = process.env.DARAJA_CONSUMER_SECRET;
 export const DARAJA_SHORTCODE = process.env.DARAJA_SHORTCODE;
+// The till/store PartyB — only needed when it differs from DARAJA_SHORTCODE,
+// which is the case for a Till issued under an Agent/Store hierarchy (a
+// mismatch here fails STK pushes with ResultCode 2002, "Agent number and
+// Store number entered do not match", after the push already reached
+// Safaricom). Falls back to DARAJA_SHORTCODE for a standard PayBill/Till
+// where the organisation shortcode and PartyB are the same number.
+export const DARAJA_TILL_NUMBER = process.env.DARAJA_TILL_NUMBER || DARAJA_SHORTCODE;
 export const DARAJA_PASSKEY = process.env.DARAJA_PASSKEY;
 export const DARAJA_TRANSACTION_TYPE = process.env.DARAJA_TRANSACTION_TYPE || "CustomerPayBillOnline";
 export const DARAJA_CALLBACK_URL = process.env.DARAJA_CALLBACK_URL;
