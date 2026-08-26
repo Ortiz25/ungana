@@ -6,7 +6,7 @@ import { completeAuthorization } from "../services/authorization.js";
 import { resolveClientActivator } from "../services/activators.js";
 import { getPackageById } from "../services/catalog.js";
 import { getSite } from "../services/sites.js";
-import { APP_MODE } from "../config.js";
+import { APP_MODE, BTC_PROVIDER } from "../config.js";
 
 export const btcRouter = Router();
 
@@ -80,7 +80,7 @@ btcRouter.post("/initiate-btc-payment", async (req, res) => {
       packageId,
       activatorId: resolvedActivatorId,
       amountKES: amount,
-      paymentProvider: "btcpay",
+      paymentProvider: BTC_PROVIDER === "minmo" ? "minmo" : "btcpay",
       durationSecs,
       username: username || undefined,
       amountSats,

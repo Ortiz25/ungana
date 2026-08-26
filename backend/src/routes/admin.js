@@ -11,9 +11,10 @@ import { createActivator, adminListActivators, updateActivator } from "../servic
 import { createCoordinator, adminListCoordinators, updateCoordinator } from "../services/coordinators.js";
 import { uploadContentFile, optimizeUploadedVideo } from "../services/uploads.js";
 import { adminGetSettings, setEarnConnectThresholdSecs, setDefaultActivatorCommissionRate, setNotificationRetentionDays } from "../services/settings.js";
-import { getAdminAnalytics, getContentItemAnalytics, getPurchasesBySiteSeries } from "../services/analytics.js";
+import { getAdminAnalytics, getContentItemAnalytics, getPurchasesBySiteSeries, getPurchasesByPackageSeries } from "../services/analytics.js";
 import { adminListSites, createSite, updateSite, deleteSite, listUnifiSiteOptions } from "../services/sites.js";
 import { adminListPackages, updatePackage } from "../services/catalog.js";
+import { testMinmoConnection } from "../services/payments/minmo.js";
 
 export const adminRouter = Router();
 
@@ -427,6 +428,26 @@ adminRouter.get("/analytics/purchases-by-site", async (req, res) => {
   }
 });
 
+/**
+ * GET /api/admin/analytics/purchases-by-package?granularity=day|week|month&package=<id>
+ * The "View more" drill-down behind the dashboard's compact 14-day
+ * purchases-by-package chart — same per-package series shape as
+ * purchases-by-site, but purchase COUNT (not revenue) is the primary
+ * series — see getPurchasesByPackageSeries.
+ */
+adminRouter.get("/analytics/purchases-by-package", async (req, res) => {
+  const granularity = SITE_TIMELINE_GRANULARITIES.includes(req.query.granularity) ? req.query.granularity : "day";
+  const packageId = req.query.package || null;
+
+  try {
+    const timeline = await getPurchasesByPackageSeries({ granularity, packageId });
+    res.json({ success: true, timeline });
+  } catch (error) {
+    console.error("❌ Admin purchases-by-package error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 /** GET /api/admin/analytics/content/:id — per-item drill-down, including survey answer breakdown. */
 adminRouter.get("/analytics/content/:id", async (req, res) => {
   try {
@@ -436,5 +457,22 @@ adminRouter.get("/analytics/content/:id", async (req, res) => {
   } catch (error) {
     console.error("❌ Admin content analytics error:", error.message);
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ── Minmo (evaluation) ──────────────────────────────────────────────────
+
+/**
+ * GET /api/admin/minmo/test — read-only connectivity check (account.get +
+ * integrations.pay.listStores) so MINMO_PARTNER_ID/MINMO_API_KEY can be
+ * verified from the admin panel before any real integration is built on top.
+ */
+adminRouter.get("/minmo/test", async (_req, res) => {
+  try {
+    const { partner, stores } = await testMinmoConnection();
+    res.json({ success: true, partner, stores });
+  } catch (error) {
+    console.error("❌ Minmo connectivity test error:", error.response?.data || error.message);
+    res.status(500).json({ success: false, message: error.response?.data?.message || error.message });
   }
 });

@@ -37,7 +37,7 @@ export async function createBtcInvoice({ amountKES, metadata = {} }) {
   );
 
   const invoice = response.data;
-
+  console.log(invoice)
   // The invoice-creation response already carries each requested payment
   // method's generated destination/amount/rate (InvoiceData.paymentMethods
   // — same InvoicePaymentMethodDataModel[] shape as the dedicated

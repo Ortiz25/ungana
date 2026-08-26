@@ -283,7 +283,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   source            TEXT NOT NULL DEFAULT 'purchase' CHECK (source IN ('purchase', 'earned')),
   amount_kes        NUMERIC(10,2) NOT NULL DEFAULT 0,
   commission_kes    NUMERIC(10,2) NOT NULL DEFAULT 0, -- amount_kes * activator.commission_rate, frozen at authorisation
-  payment_provider  TEXT CHECK (payment_provider IN ('paystack', 'daraja', 'btcpay')),
+  payment_provider  TEXT CHECK (payment_provider IN ('paystack', 'daraja', 'btcpay', 'minmo')),
   payment_status    TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'success', 'failed')),
   -- 'paid'    = provider confirmed the charge but router authorisation hasn't
   --             succeeded yet (retried by the background sweep in server.js)
@@ -303,7 +303,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- constraint, so widen it explicitly.
 ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_payment_provider_check;
 ALTER TABLE sessions ADD CONSTRAINT sessions_payment_provider_check
-  CHECK (payment_provider IN ('paystack', 'daraja', 'btcpay'));
+  CHECK (payment_provider IN ('paystack', 'daraja', 'btcpay', 'minmo'));
 
 -- Idempotent for databases created before BTC amount/rate tracking existed.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS amount_sats BIGINT;

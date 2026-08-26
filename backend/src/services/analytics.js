@@ -83,6 +83,50 @@ async function getPurchasesBySiteTimeline() {
   return { days, series };
 }
 
+/**
+ * Daily purchase COUNTS (not revenue) for the last SITE_TIMELINE_DAYS days,
+ * one series per package — answers "which plans are actually selling",
+ * a different question than the by-site revenue chart. Zero-filled via
+ * CROSS JOIN, same as getPurchasesBySiteTimeline. Excludes inactive
+ * packages (in particular 'earned', which is never purchased — see
+ * schema.sql's comment on that row — so it would otherwise show as a flat
+ * zero line here forever).
+ */
+async function getPurchasesByPackageTimeline() {
+  const [daysResult, perPackageResult] = await Promise.all([
+    query(
+      `SELECT generate_series(CURRENT_DATE - INTERVAL '${SITE_TIMELINE_DAYS - 1} days', CURRENT_DATE, INTERVAL '1 day')::date AS day`
+    ),
+    query(
+      `WITH days AS (
+         SELECT generate_series(CURRENT_DATE - INTERVAL '${SITE_TIMELINE_DAYS - 1} days', CURRENT_DATE, INTERVAL '1 day')::date AS day
+       )
+       SELECT p.id AS package_id, p.label AS package_label, d.day,
+              COUNT(se.id) FILTER (WHERE se.id IS NOT NULL) AS count
+       FROM packages p
+       CROSS JOIN days d
+       LEFT JOIN sessions se
+         ON se.package_id = p.id AND se.source = 'purchase' AND se.payment_status = 'success'
+         AND date_trunc('day', se.authorized_at) = d.day
+       WHERE p.is_active = true
+       GROUP BY p.id, p.label, d.day
+       ORDER BY p.id, d.day`
+    ),
+  ]);
+
+  const days = daysResult.rows.map((r) => formatDbDate(r.day));
+
+  const byPackage = new Map();
+  for (const row of perPackageResult.rows) {
+    if (!byPackage.has(row.package_id)) {
+      byPackage.set(row.package_id, { packageId: row.package_id, packageLabel: row.package_label, data: [] });
+    }
+    byPackage.get(row.package_id).data.push(Number(row.count));
+  }
+
+  return { days, series: [...byPackage.values()] };
+}
+
 // Bucket unit -> how many buckets back to show and the matching interval
 // literal. Whitelisted (not built from caller input directly) since the
 // unit gets interpolated into date_trunc()/interval literals, which can't
@@ -183,6 +227,62 @@ export async function getPurchasesBySiteSeries({ granularity = "day", siteId = n
   return { granularity, periods, series };
 }
 
+/**
+ * The "View more" detail behind the compact 14-day purchases-by-package
+ * chart — same shape as getPurchasesBySiteSeries, but `data` is purchase
+ * COUNT per bucket (the chart's actual y-axis) with revenue carried
+ * alongside as `revenue` for the totals list, the reverse of the site
+ * version's revenue-primary/count-secondary shape. `packageId` narrows to
+ * one package's series when given, otherwise every active (purchasable)
+ * package is returned.
+ */
+export async function getPurchasesByPackageSeries({ granularity = "day", packageId = null } = {}) {
+  const config = GRANULARITY_CONFIG[granularity] ?? GRANULARITY_CONFIG.day;
+  const { unit, count } = config;
+  const bucketsCte = `
+    WITH buckets AS (
+      SELECT generate_series(
+        date_trunc('${unit}', now()) - INTERVAL '${count - 1} ${unit}',
+        date_trunc('${unit}', now()),
+        INTERVAL '1 ${unit}'
+      )::date AS bucket
+    )
+  `;
+
+  const [bucketsResult, perPackageResult] = await Promise.all([
+    query(`${bucketsCte} SELECT bucket FROM buckets ORDER BY bucket`),
+    query(
+      `${bucketsCte}
+       SELECT p.id AS package_id, p.label AS package_label, b.bucket,
+              COUNT(se.id) FILTER (WHERE se.id IS NOT NULL) AS count,
+              COALESCE(SUM(se.amount_kes) FILTER (WHERE se.id IS NOT NULL), 0) AS revenue
+       FROM packages p
+       CROSS JOIN buckets b
+       LEFT JOIN sessions se
+         ON se.package_id = p.id AND se.source = 'purchase' AND se.payment_status = 'success'
+         AND date_trunc('${unit}', se.authorized_at)::date = b.bucket
+       WHERE p.is_active = true AND ($1::text IS NULL OR p.id = $1)
+       GROUP BY p.id, p.label, b.bucket
+       ORDER BY p.id, b.bucket`,
+      [packageId]
+    ),
+  ]);
+
+  const periods = bucketsResult.rows.map((r) => formatDbDate(r.bucket));
+
+  const byPackage = new Map();
+  for (const row of perPackageResult.rows) {
+    if (!byPackage.has(row.package_id)) {
+      byPackage.set(row.package_id, { packageId: row.package_id, packageLabel: row.package_label, data: [], revenue: [] });
+    }
+    const s = byPackage.get(row.package_id);
+    s.data.push(Number(row.count));
+    s.revenue.push(Number(row.revenue));
+  }
+
+  return { granularity, periods, series: [...byPackage.values()] };
+}
+
 export async function getAdminAnalytics() {
   const [
     impressionsResult,
@@ -197,6 +297,7 @@ export async function getAdminAnalytics() {
     byPackageResult,
     byProviderResult,
     bySiteTimeline,
+    byPackageTimeline,
   ] = await Promise.all([
     query(`SELECT COALESCE(SUM(impressions), 0) AS total FROM content_items`),
     query(`SELECT COUNT(*) AS total FROM content_completions`),
@@ -243,6 +344,7 @@ export async function getAdminAnalytics() {
        GROUP BY payment_provider ORDER BY revenue DESC`
     ),
     getPurchasesBySiteTimeline(),
+    getPurchasesByPackageTimeline(),
   ]);
 
   return {
@@ -279,6 +381,7 @@ export async function getAdminAnalytics() {
         revenueKes: Number(r.revenue),
       })),
       bySiteTimeline,
+      byPackageTimeline,
     },
   };
 }

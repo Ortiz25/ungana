@@ -57,12 +57,30 @@ export const DARAJA_ACCOUNT_REF = process.env.DARAJA_ACCOUNT_REF || "HOTSPOT";
 export const DARAJA_BASE_URL =
   DARAJA_ENV === "production" ? "https://api.safaricom.co.ke" : "https://sandbox.safaricom.co.ke";
 
+// ── Minmo (Partner API) ────────────────────────────────────────────────────
+// See services/payments/minmo.js. Invoice create/status/event-subscription
+// shape confirmed against Minmo's own sdk-pay-demo reference app (gitignored
+// at /sdk-pay-demo — not part of this codebase, kept locally as a working
+// example). Wired in as an alternative BTC/Lightning provider — see
+// BTC_PROVIDER below. The M-Pesa/local-currency side isn't wired up yet:
+// Minmo Pay settles via a hosted checkoutUrl page, a different UX than the
+// current in-app phone-number/STK flow, so that needs a product decision
+// before PAYMENT_PROVIDER=minmo is added.
+export const MINMO_PARTNER_ID = process.env.MINMO_PARTNER_ID;
+export const MINMO_API_KEY = process.env.MINMO_API_KEY;
+export const MINMO_STORE_ID = process.env.MINMO_STORE_ID; // a Minmo Pay store already connected to a wallet
+export const MINMO_BASE_URL = process.env.MINMO_BASE_URL; // optional — defaults to production inside the SDK
+
 // ── BTCPay Server (Lightning/Bitcoin) ──────────────────────────────────────
 // Independent of PAYMENT_PROVIDER — this is a second, parallel payment
 // method (M-Pesa vs BTC is a per-checkout choice, not a global setting) via
-// its own /initiate-btc-payment route. Dormant until BTCPAY_URL is set, same
-// convention as UNIFI_URL — until then, BTC checkout always uses the
-// simulated invoice generator regardless of APP_MODE.
+// its own /initiate-btc-payment route. Which real backend serves it is
+// picked by BTC_PROVIDER ('btcpay', the default, or 'minmo') — dormant
+// until that provider's own credentials are set (BTCPAY_URL, or
+// MINMO_PARTNER_ID/MINMO_API_KEY/MINMO_STORE_ID), same convention as
+// UNIFI_URL — until then, BTC checkout always uses the simulated invoice
+// generator regardless of APP_MODE.
+export const BTC_PROVIDER = (process.env.BTC_PROVIDER || "btcpay").toLowerCase();
 export const BTCPAY_URL = process.env.BTCPAY_URL; // e.g. https://btcpay.yourdomain.com
 export const BTCPAY_API_KEY = process.env.BTCPAY_API_KEY;
 export const BTCPAY_STORE_ID = process.env.BTCPAY_STORE_ID;
