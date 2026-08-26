@@ -13,7 +13,7 @@
     adminGetActivators, adminCreateActivator, adminUpdateActivator,
     adminGetCoordinators, adminCreateCoordinator, adminUpdateCoordinator,
     adminUploadContentFile, adminGetSettings, adminUpdateSettings, adminGetAnalytics, adminGetContentAnalytics,
-    adminGetPurchasesBySite,
+    adminGetPurchasesBySite, adminGetPurchasesByPackage,
     adminGetSites, adminCreateSite, adminUpdateSite, adminDeleteSite, adminGetUnifiSiteOptions,
     adminGetPackages, adminUpdatePackage
   } from '$lib/api.js';
@@ -113,13 +113,18 @@
     Math.max(1, ...(analytics?.earned.contentOverview.map((c) => c.impressions) ?? [1]))
   );
 
-  // ── Purchases by Site — detail view ("View more" behind the compact chart) ──
+  // ── Purchases detail views ("View more" behind the compact charts) ───────
+  // One shared 3-way toggle rather than a separate boolean per chart — the
+  // header (back button/title, Refresh target) reads off this instead of
+  // needing a growing pile of independent flags as more detail views get
+  // added.
   const SITE_TIMELINE_GRANULARITIES = [
     { id: 'day', label: 'Day' },
     { id: 'week', label: 'Week' },
     { id: 'month', label: 'Month' }
   ];
-  let showSiteDetail = $state(false);
+  let activeDetail = $state('none'); // 'none' | 'site' | 'package'
+
   let siteDetailGranularity = $state('day');
   let siteDetailSiteId = $state(''); // '' = every site
   let siteDetailData = $state(null);
@@ -136,14 +141,14 @@
   }
 
   function openSiteDetail() {
-    showSiteDetail = true;
+    activeDetail = 'site';
   }
 
-  // Re-fetches whenever the detail view is open and either filter changes
-  // — covers the initial load (showSiteDetail flipping true) and every
-  // subsequent granularity/site pill click in one place.
+  // Re-fetches whenever the site detail view is open and either filter
+  // changes — covers the initial load (activeDetail flipping to 'site') and
+  // every subsequent granularity/site pill click in one place.
   $effect(() => {
-    if (!showSiteDetail) return;
+    if (activeDetail !== 'site') return;
     siteDetailGranularity;
     siteDetailSiteId;
     loadSiteDetail();
@@ -161,6 +166,48 @@
         sessions: s.counts.reduce((sum, v) => sum + v, 0)
       }))
       .sort((a, b) => b.revenueKes - a.revenueKes);
+  });
+
+  // ── Purchases by Package — detail view (purchase COUNTS, not revenue) ────
+  let packageDetailGranularity = $state('day');
+  let packageDetailPackageId = $state(''); // '' = every package
+  let packageDetailData = $state(null);
+  let packageDetailLoading = $state(false);
+
+  async function loadPackageDetail() {
+    packageDetailLoading = true;
+    const r = await adminGetPurchasesByPackage(token, {
+      granularity: packageDetailGranularity,
+      packageId: packageDetailPackageId || undefined
+    });
+    if (r.ok) packageDetailData = r.data.timeline;
+    packageDetailLoading = false;
+  }
+
+  function openPackageDetail() {
+    activeDetail = 'package';
+  }
+
+  $effect(() => {
+    if (activeDetail !== 'package') return;
+    packageDetailGranularity;
+    packageDetailPackageId;
+    loadPackageDetail();
+  });
+
+  // Package totals for the selected window, sorted by purchase count (this
+  // chart's whole point — "which plans are selling" — so count leads, with
+  // revenue carried alongside for context).
+  const packageDetailTotals = $derived.by(() => {
+    if (!packageDetailData) return [];
+    return [...packageDetailData.series]
+      .map((s) => ({
+        packageId: s.packageId,
+        packageLabel: s.packageLabel,
+        purchases: s.data.reduce((sum, v) => sum + v, 0),
+        revenueKes: s.revenue.reduce((sum, v) => sum + v, 0)
+      }))
+      .sort((a, b) => b.purchases - a.purchases);
   });
 
   // Per-content drill-down (impressions/completions/survey answer
@@ -1435,28 +1482,38 @@
       {/if}
     {:else if tab === 'analytics'}
       <div class="flex items-center justify-between px-1 mb-1">
-        {#if showSiteDetail}
+        {#if activeDetail === 'site'}
           <button
-            onclick={() => (showSiteDetail = false)}
+            onclick={() => (activeDetail = 'none')}
             class="flex items-center gap-1 text-sm font-bold text-[#1D3C2A]"
           >
             <ChevronLeft size={16} /> Purchases by Site
+          </button>
+        {:else if activeDetail === 'package'}
+          <button
+            onclick={() => (activeDetail = 'none')}
+            class="flex items-center gap-1 text-sm font-bold text-[#1D3C2A]"
+          >
+            <ChevronLeft size={16} /> Purchases by Package
           </button>
         {:else}
           <h2 class="text-sm font-bold text-[#1D3C2A]">Analytics overview</h2>
         {/if}
         <button
-          onclick={showSiteDetail ? loadSiteDetail : loadAnalytics}
-          disabled={showSiteDetail ? siteDetailLoading : analyticsLoading}
+          onclick={activeDetail === 'site' ? loadSiteDetail : activeDetail === 'package' ? loadPackageDetail : loadAnalytics}
+          disabled={activeDetail === 'site' ? siteDetailLoading : activeDetail === 'package' ? packageDetailLoading : analyticsLoading}
           class="flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-full transition-all active:scale-95"
-          style="background: rgba(29,60,42,0.1); color: #1D3C2A; opacity: {(showSiteDetail ? siteDetailLoading : analyticsLoading) ? 0.6 : 1};"
+          style="background: rgba(29,60,42,0.1); color: #1D3C2A; opacity: {(activeDetail === 'site' ? siteDetailLoading : activeDetail === 'package' ? packageDetailLoading : analyticsLoading) ? 0.6 : 1};"
         >
-          <RefreshCw size={12} class={(showSiteDetail ? siteDetailLoading : analyticsLoading) ? 'animate-spin' : ''} />
+          <RefreshCw
+            size={12}
+            class={(activeDetail === 'site' ? siteDetailLoading : activeDetail === 'package' ? packageDetailLoading : analyticsLoading) ? 'animate-spin' : ''}
+          />
           Refresh
         </button>
       </div>
 
-      {#if showSiteDetail}
+      {#if activeDetail === 'site'}
         <div class="flex gap-1.5 flex-wrap px-1">
           {#each SITE_TIMELINE_GRANULARITIES as g (g.id)}
             <button
@@ -1518,6 +1575,74 @@
                 <div class="flex items-center justify-between px-4 py-2.5" style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.1)' : 'none'};">
                   <span class="text-xs text-[#E8D4B0]">{t.siteName}</span>
                   <span class="text-xs text-[#96B496]">{t.sessions} sessions · <span class="font-bold" style="color: #C45C38;">KES {t.revenueKes.toLocaleString()}</span></span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {/if}
+      {:else if activeDetail === 'package'}
+        <div class="flex gap-1.5 flex-wrap px-1">
+          {#each SITE_TIMELINE_GRANULARITIES as g (g.id)}
+            <button
+              type="button"
+              onclick={() => (packageDetailGranularity = g.id)}
+              class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+              style="background: {packageDetailGranularity === g.id ? '#C45C38' : 'rgba(29,60,42,0.1)'}; color: {packageDetailGranularity === g.id ? '#fff' : '#1D3C2A'};"
+            >
+              {g.label}
+            </button>
+          {/each}
+        </div>
+        <div class="flex gap-1.5 flex-wrap px-1">
+          <button
+            type="button"
+            onclick={() => (packageDetailPackageId = '')}
+            class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+            style="background: {packageDetailPackageId === '' ? '#C45C38' : 'rgba(29,60,42,0.1)'}; color: {packageDetailPackageId === '' ? '#fff' : '#1D3C2A'};"
+          >
+            All packages
+          </button>
+          {#each packages as p (p.id)}
+            <button
+              type="button"
+              onclick={() => (packageDetailPackageId = p.id)}
+              class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+              style="background: {packageDetailPackageId === p.id ? '#C45C38' : 'rgba(29,60,42,0.1)'}; color: {packageDetailPackageId === p.id ? '#fff' : '#1D3C2A'};"
+            >
+              {p.label}
+            </button>
+          {/each}
+        </div>
+
+        {#if packageDetailLoading && !packageDetailData}
+          <div class="flex items-center justify-center py-12">
+            <div class="w-6 h-6 rounded-full border-2 border-[#1D3C2A]/30 border-t-[#1D3C2A] animate-spin"></div>
+          </div>
+        {:else if packageDetailData}
+          <div class="rounded-2xl overflow-hidden shadow-md px-4 pt-3.5 pb-4" style="background: #2E5A3E; opacity: {packageDetailLoading ? 0.6 : 1};">
+            {#if packageDetailData.series.length === 0}
+              <p class="text-xs text-[#96B496] text-center py-8">No purchases in this window.</p>
+            {:else}
+              <p class="text-[9px] text-[#96B496] uppercase tracking-wider mb-2">Purchases (count)</p>
+              <MultiLineChartMini
+                days={packageDetailData.periods}
+                series={packageDetailData.series.map((s) => ({ siteId: s.packageId, siteName: s.packageLabel, data: s.data }))}
+                height={200}
+                showGrid
+                showYLabels
+              />
+            {/if}
+          </div>
+
+          {#if packageDetailTotals.length > 0}
+            <div class="rounded-2xl overflow-hidden shadow-md" style="background: #2E5A3E;">
+              <div class="px-4 pt-3.5 pb-2">
+                <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Totals for this window</p>
+              </div>
+              {#each packageDetailTotals as t, i (t.packageId ?? i)}
+                <div class="flex items-center justify-between px-4 py-2.5" style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.1)' : 'none'};">
+                  <span class="text-xs text-[#E8D4B0]">{t.packageLabel}</span>
+                  <span class="text-xs text-[#96B496]">{t.purchases} purchases · <span class="font-bold" style="color: #C45C38;">KES {t.revenueKes.toLocaleString()}</span></span>
                 </div>
               {/each}
             </div>
@@ -1684,7 +1809,7 @@
 
         {#if analytics.purchased.bySiteTimeline?.series.length > 0}
           <div class="rounded-2xl overflow-hidden shadow-md px-4 pt-3.5 pb-4" style="background: #2E5A3E;">
-            <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center justify-between mb-0.5">
               <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Purchases by Site (last 14 days)</p>
               <button
                 type="button"
@@ -1695,9 +1820,34 @@
                 View more →
               </button>
             </div>
+            <p class="text-[9px] text-[#96B496] uppercase tracking-wider mb-2">Revenue (KES)</p>
             <MultiLineChartMini
               days={analytics.purchased.bySiteTimeline.days}
               series={analytics.purchased.bySiteTimeline.series}
+              height={160}
+              showGrid
+              showYLabels
+            />
+          </div>
+        {/if}
+
+        {#if analytics.purchased.byPackageTimeline?.series.length > 0}
+          <div class="rounded-2xl overflow-hidden shadow-md px-4 pt-3.5 pb-4" style="background: #2E5A3E;">
+            <div class="flex items-center justify-between mb-0.5">
+              <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Purchases by Package (last 14 days)</p>
+              <button
+                type="button"
+                onclick={openPackageDetail}
+                class="text-[11px] font-bold shrink-0"
+                style="color: #C45C38;"
+              >
+                View more →
+              </button>
+            </div>
+            <p class="text-[9px] text-[#96B496] uppercase tracking-wider mb-2">Purchase count</p>
+            <MultiLineChartMini
+              days={analytics.purchased.byPackageTimeline.days}
+              series={analytics.purchased.byPackageTimeline.series.map((s) => ({ siteId: s.packageId, siteName: s.packageLabel, data: s.data }))}
               height={160}
               showGrid
               showYLabels

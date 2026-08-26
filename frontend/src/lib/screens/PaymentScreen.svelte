@@ -529,6 +529,33 @@
                     No Lightning wallet app found on this device — copy the invoice above or scan the QR instead
                   </p>
                 {/if}
+              {:else if btcInvoice.checkoutLink}
+                <!-- Provider returned a hosted checkout page instead of a raw
+                     BOLT11 string (e.g. Minmo Pay) — no in-place QR possible
+                     to build ourselves, so embed the provider's own checkout
+                     (it renders its own QR/copy UI) rather than sending the
+                     customer out to a separate browser tab. Confirmed
+                     embeddable: the page sends no X-Frame-Options and its CSP
+                     has no frame-ancestors restriction. The "open in new tab"
+                     link below is just a fallback if the iframe ever fails to
+                     render (e.g. a future header change on their end).
+                -->
+                <iframe
+                  src={btcInvoice.checkoutLink}
+                  title="Lightning invoice checkout"
+                  class="w-full rounded-2xl"
+                  style="height: 420px; border: none; background: #fff;"
+                  allow="clipboard-write"
+                ></iframe>
+                <a
+                  href={btcInvoice.checkoutLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-[10px] text-center underline"
+                  style="color: #C4A870;"
+                >
+                  Not loading? Open checkout in a new tab
+                </a>
               {/if}
               <div class="w-full flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(247,147,26,0.1);">
                 <div class="w-2 h-2 rounded-full animate-pulse shrink-0" style="background: #F7931A;"></div>
