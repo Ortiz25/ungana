@@ -1,5 +1,5 @@
 <script>
-  import { UserCheck, ChevronRight, AlertTriangle, ArrowRight, ShieldCheck } from '@lucide/svelte';
+  import { UserCheck, ChevronRight, AlertTriangle, ArrowRight, ShieldCheck, Package } from '@lucide/svelte';
   import ScreenBg from '$lib/components/ScreenBg.svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import { getSessionByUsername } from '$lib/api.js';
@@ -86,46 +86,67 @@
     </div>
   </div>
 
+  <!-- Restyled from a plain outlined text button to the same icon-box +
+       title/subtitle card language used everywhere else in the app
+       (PackageScreen's plan cards, Campus tiles) — stays visually secondary
+       to the orange "Check Session" CTA above (softer tint, no gradient
+       fill) rather than competing with it, but reads as a proper tappable
+       card instead of a link-like strip. -->
   <button
     onclick={onSkip}
-    class="new-here-btn w-full py-3.5 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all active:scale-95"
-    style="background: rgba(46,90,62,0.08); border: 1.5px solid rgba(46,90,62,0.22); color: #1D3C2A;"
+    class="new-here-btn w-full rounded-3xl flex items-center gap-3.5 px-4 py-3.5 text-left transition-all active:scale-[0.98]"
+    style="background: rgba(46,90,62,0.08); border: 1.5px solid rgba(46,90,62,0.18);"
   >
-    New here? <span class="font-bold" style="color: #C45C38;">Buy a package</span>
-    <ArrowRight size={15} class="arrow-nudge" />
+    <div class="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.14);">
+      <Package size={18} color="#C45C38" strokeWidth={2} />
+    </div>
+    <div class="flex-1 min-w-0">
+      <p class="text-[11px] font-medium" style="color: #2E5A3E;">New here?</p>
+      <p class="text-sm font-bold" style="color: #1D3C2A;">Buy a package</p>
+    </div>
+    <ArrowRight size={16} color="#C45C38" class="arrow-nudge shrink-0" />
   </button>
 
   <p class="text-[10px] text-[#9AB498] text-center mt-4">
     Didn't set a username? Reconnect to the Wi-Fi network to be recognised automatically.
   </p>
 
-  <div class="flex items-center gap-3 mt-4">
-    <button
-      onclick={onActivatorLogin}
-      class="flex items-center gap-1.5 text-[11px] font-semibold transition-opacity active:opacity-60"
-      style="color: #2E5A3E;"
+  <!-- Same pill-bar footer as PackageScreen's Activator/Coordinator/Admin
+       row, for visual consistency between the two entry screens instead of
+       this screen's own plain inline-links-with-dot-separators treatment. -->
+  <div class="flex flex-col items-center gap-2.5 mt-4">
+    <div
+      class="flex items-center rounded-full overflow-hidden"
+      style="background: rgba(46,90,62,0.08); border: 1px solid rgba(29,60,42,0.08);"
     >
-      <UserCheck size={12} />
-      Activator Portal
-    </button>
-    <span class="text-[#C4A870]">·</span>
-    <button
-      onclick={onCoordinatorLogin}
-      class="flex items-center gap-1.5 text-[11px] font-semibold transition-opacity active:opacity-60"
-      style="color: #96B496;"
-    >
-      <ShieldCheck size={12} />
-      Coordinator
-    </button>
-    <span class="text-[#C4A870]">·</span>
-    <button
-      onclick={onAdminLogin}
-      class="flex items-center gap-1.5 text-[11px] font-semibold transition-opacity active:opacity-60"
-      style="color: #96B496;"
-    >
-      <ShieldCheck size={12} />
-      Admin
-    </button>
+      <button
+        onclick={onActivatorLogin}
+        class="flex items-center gap-1.5 text-[11px] font-semibold px-3.5 py-2 transition-opacity active:opacity-60"
+        style="color: #2E5A3E;"
+      >
+        <UserCheck size={12} />
+        Activator
+      </button>
+      <span class="w-px h-3.5" style="background: rgba(29,60,42,0.12);"></span>
+      <button
+        onclick={onCoordinatorLogin}
+        class="flex items-center gap-1.5 text-[11px] font-semibold px-3.5 py-2 transition-opacity active:opacity-60"
+        style="color: #3C6A4A;"
+      >
+        <ShieldCheck size={12} />
+        Coordinator
+      </button>
+      <span class="w-px h-3.5" style="background: rgba(29,60,42,0.12);"></span>
+      <button
+        onclick={onAdminLogin}
+        class="flex items-center gap-1.5 text-[11px] font-semibold px-3.5 py-2 transition-opacity active:opacity-60"
+        style="color: #3C6A4A;"
+      >
+        <ShieldCheck size={12} />
+        Admin
+      </button>
+    </div>
+    <p class="text-[10px]" style="color: #9AB498;">swap.ungana.app</p>
   </div>
 </ScreenBg>
 

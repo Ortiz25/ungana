@@ -34,6 +34,7 @@ const ALLOWED_MIME_TYPES = new Set([
   "image/gif",
   "video/mp4",
   "video/webm",
+  "application/pdf", // campus post attachments — exam results/circulars are usually a PDF, not an image or video
 ]);
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB — generous enough for a short clip, not for a full movie

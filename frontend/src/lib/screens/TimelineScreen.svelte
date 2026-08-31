@@ -1,8 +1,13 @@
 <script>
   import { onMount } from 'svelte';
-  import { ArrowLeft, Zap, CheckCircle2, CircleX, Play, Gift, FileText, Unlock, User, ExternalLink, Wallet, X, Clock } from '@lucide/svelte';
+  import { ArrowLeft, Zap, CheckCircle2, CircleX, Play, Gift, FileText, Unlock, User, ExternalLink, Wallet, X, Clock, Search } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import TLContentCard from '$lib/components/TLContentCard.svelte';
+  import NoticeBoard from '$lib/components/NoticeBoard.svelte';
+  import CampusEventsStrip from '$lib/components/CampusEventsStrip.svelte';
+  import ExamTimetable from '$lib/components/ExamTimetable.svelte';
+  import CampusResources from '$lib/components/CampusResources.svelte';
+  import PastEvents from '$lib/components/PastEvents.svelte';
   import {
     TL_FEATURED,
     TL_NEW,
@@ -23,7 +28,9 @@
     getSettings,
     recordContentImpression,
     getUsernameForMac,
-    checkUsernameAvailable
+    checkUsernameAvailable,
+    getSite,
+    getCampusPosts
   } from '$lib/api.js';
   import { getClientMac, getSiteId } from '$lib/device.js';
 
@@ -42,6 +49,65 @@
   let mac = $state('');
   const site = getSiteId(); // null in dev (no captive-portal URL) — every call below treats that as "don't filter by site"
   let liveItems = $state([]);
+
+  // Institution-only Notice Board / Campus Events (see NoticeBoard.svelte /
+  // CampusEventsStrip.svelte) — gated on the site's own `vertical` field
+  // (sites.vertical, defaults to 'general') so every existing non-institution
+  // site's feed is completely unaffected. `siteInfo` is separate from `site`
+  // above (that's just the id string read from the URL).
+  let siteInfo = $state(null);
+  const isInstitution = $derived(siteInfo?.vertical === 'institution');
+  let campusNotices = $state([]);
+  let campusEvents = $state([]);
+  let campusTimetable = $state([]);
+  let campusResources = $state([]);
+  // Which half of the institution feed is showing — 'campus' (Notice
+  // Board/Events, academic-styled) or 'watch' (the standard Watch & Learn
+  // feed, unchanged styling). Defaults to 'campus' since that's the
+  // time-sensitive content a student most likely opened this screen for.
+  // Irrelevant for non-institution sites, which never show the tab bar.
+  let campusView = $state('campus');
+
+  // Constellation-dot texture for the Campus tab background — shared by
+  // both the outer min-height:100dvh wrapper and the inner pb-24 feed div
+  // (see the comments at each usage) so the pattern tiles seamlessly across
+  // the whole tab regardless of which of the two ends up taller.
+  const campusTexture =
+    "background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220' viewBox='0 0 220 220'%3E%3Cg fill='none' stroke='rgba(255,255,255,0.07)' stroke-width='1'%3E%3Cline x1='20' y1='30' x2='72' y2='62'/%3E%3Cline x1='72' y1='62' x2='132' y2='42'/%3E%3Cline x1='132' y1='42' x2='188' y2='92'/%3E%3Cline x1='20' y1='30' x2='12' y2='118'/%3E%3Cline x1='12' y1='118' x2='62' y2='168'/%3E%3Cline x1='62' y1='168' x2='128' y2='150'/%3E%3Cline x1='128' y1='150' x2='188' y2='92'/%3E%3Cline x1='132' y1='42' x2='150' y2='132'/%3E%3Cline x1='150' y1='132' x2='202' y2='188'/%3E%3Cline x1='62' y1='168' x2='150' y2='132'/%3E%3C/g%3E%3Cg fill='rgba(255,255,255,0.16)'%3E%3Ccircle cx='20' cy='30' r='1.8'/%3E%3Ccircle cx='72' cy='62' r='1.4'/%3E%3Ccircle cx='132' cy='42' r='1.6'/%3E%3Ccircle cx='188' cy='92' r='1.8'/%3E%3Ccircle cx='12' cy='118' r='1.4'/%3E%3Ccircle cx='62' cy='168' r='1.6'/%3E%3Ccircle cx='128' cy='150' r='1.4'/%3E%3Ccircle cx='150' cy='132' r='1.8'/%3E%3Ccircle cx='202' cy='188' r='1.4'/%3E%3C/g%3E%3C/svg%3E\"); background-repeat: repeat; background-size: 220px 220px;";
+
+  // Global "Search Campus" — one box filters notices, timetable, events,
+  // and resources at once by title/category/location/body, rather than
+  // needing to open each section separately. Matches on the raw arrays
+  // (pre-split by type) so a single query reaches everything.
+  let campusQuery = $state('');
+  function matchesCampusQuery(post) {
+    const q = campusQuery.trim().toLowerCase();
+    if (!q) return true;
+    return [post.title, post.category, post.location, post.body].some((f) => (f || '').toLowerCase().includes(q));
+  }
+  const filteredCampusNotices = $derived(campusNotices.filter(matchesCampusQuery));
+  const filteredCampusTimetable = $derived(campusTimetable.filter(matchesCampusQuery));
+  const filteredCampusEvents = $derived(campusEvents.filter(matchesCampusQuery));
+  const filteredCampusResources = $derived(campusResources.filter(matchesCampusQuery));
+  // Split into upcoming (CampusEventsStrip, soonest-first — already the
+  // backend's sort) vs past (PastEvents, most-recent-first — a browsable
+  // highlights feed reads better newest-to-oldest than the reverse). An
+  // event with no end time falls back to its start time for the split, so
+  // a same-day event stays "upcoming" until its start time itself passes.
+  const filteredUpcomingEvents = $derived(
+    filteredCampusEvents.filter((e) => new Date(e.event_ends_at ?? e.event_starts_at) >= new Date())
+  );
+  const filteredPastEvents = $derived(
+    filteredCampusEvents
+      .filter((e) => new Date(e.event_ends_at ?? e.event_starts_at) < new Date())
+      .sort((a, b) => new Date(b.event_starts_at) - new Date(a.event_starts_at))
+  );
+  const campusHasAnyResults = $derived(
+    filteredCampusNotices.length > 0 ||
+      filteredCampusTimetable.length > 0 ||
+      filteredCampusEvents.length > 0 ||
+      filteredCampusResources.length > 0
+  );
 
   function formatEarnLabel(secs) {
     const h = Math.floor(secs / 3600);
@@ -109,6 +175,20 @@
   const surveys = $derived([...normalized.filter((i) => i.section === 'survey'), ...DEMO_SURVEYS]);
   const articles = $derived([...normalized.filter((i) => i.section === 'news'), ...DEMO_ARTICLES]);
   const videos = $derived([...normalized.filter((i) => i.section === 'watch_earn'), ...DEMO_VIDEOS]);
+
+  // "See all" — each of the four list sections opens the same modal, wrapping
+  // its own full item list at the card size that section already uses (the
+  // horizontal strip technically holds every item too, via scrolling; this
+  // just gives a proper non-scrolling overview instead). Getter functions
+  // (not the arrays themselves) so this static lookup table still reads the
+  // current value of each $derived array at render time.
+  let expandedSection = $state(null);
+  const SECTION_META = {
+    whats_new: { title: "What's new around?", items: () => newItems, width: 132, height: 170 },
+    survey: { title: 'Quick surveys', items: () => surveys, width: 132, height: 170 },
+    news: { title: 'News & Stories', items: () => articles, width: 158, height: 128 },
+    watch_earn: { title: 'Watch & Earn', items: () => videos, width: 178, height: 128 }
+  };
 
   let viewingItem = $state(null);
   let viewProgress = $state(0);
@@ -213,6 +293,21 @@
     const settingsResult = await getSettings();
     if (settingsResult.ok && Number.isFinite(settingsResult.data?.earnConnectThresholdSecs)) {
       connectThresholdSecs = settingsResult.data.earnConnectThresholdSecs;
+    }
+
+    if (site) {
+      const siteResult = await getSite(site);
+      if (siteResult.ok && siteResult.data?.site) {
+        siteInfo = siteResult.data.site;
+        if (siteInfo.vertical === 'institution') {
+          const postsResult = await getCampusPosts(site);
+          const allPosts = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
+          campusNotices = allPosts.filter((p) => p.type === 'notice' || p.type === 'release');
+          campusEvents = allPosts.filter((p) => p.type === 'event');
+          campusTimetable = allPosts.filter((p) => p.type === 'timetable');
+          campusResources = allPosts.filter((p) => p.type === 'resource');
+        }
+      }
     }
 
     const usernameResult = await getUsernameForMac(mac);
@@ -1034,8 +1129,15 @@
        scrolling). Header stays pinned via `sticky`, the Connect Now bar
        via `fixed`, and the transient banners via `fixed` too (they used to
        ride along with document flow via `position: absolute`, which only
-       looked right because the page never used to scroll past them). -->
-  <div class="flex flex-col" style="min-height: 100dvh; background: #0E1F14;">
+       looked right because the page never used to scroll past them). The
+       background is the Campus tab's dark dashboard color when that tab is
+       showing — otherwise short content leaves this wrapper's own
+       min-height: 100dvh slack visible below the Campus divs' background,
+       as a mismatched band above the fixed bottom bar. -->
+  <div
+    class="flex flex-col"
+    style="min-height: 100dvh; background: {isInstitution && campusView === 'campus' ? '#05140b' : '#0E1F14'}; {isInstitution && campusView === 'campus' ? campusTexture : ''}"
+  >
     <!-- Header -->
     <div class="px-4 pt-5 pb-3 flex items-center justify-between shrink-0" style="background: #1D3C2A; position: sticky; top: 0; z-index: 40;">
       <div class="flex items-center gap-2">
@@ -1109,9 +1211,140 @@
       </div>
     </div>
 
+    <!-- Campus / Watch & Learn segmented tabs — institution sites only.
+         Separates the academic content from the shared Watch & Learn feed
+         instead of stacking both in one long scroll. -->
+    {#if isInstitution}
+      <div class="px-4 pt-3 shrink-0" style="background: #1D3C2A;">
+        <div class="flex justify-center gap-6" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
+          <button
+            onclick={() => (campusView = 'campus')}
+            class="pb-2.5 text-sm font-bold transition-all"
+            style="color: {campusView === 'campus' ? '#E8D4B0' : '#6B8A6B'}; border-bottom: 2px solid {campusView === 'campus' ? '#c29d53' : 'transparent'};"
+          >
+            Campus
+          </button>
+          <button
+            onclick={() => (campusView = 'watch')}
+            class="pb-2.5 text-sm font-bold transition-all"
+            style="color: {campusView === 'watch' ? '#E8D4B0' : '#6B8A6B'}; border-bottom: 2px solid {campusView === 'watch' ? '#C45C38' : 'transparent'};"
+          >
+            Watch & Learn
+          </button>
+        </div>
+      </div>
+    {/if}
+
     <!-- Feed content — normal document flow now; pb-24 keeps the last
-         items clear of the fixed Connect Now bar below. -->
-    <div class="pb-24">
+         items clear of the fixed Connect Now bar below. On the Campus tab
+         the dark dashboard background/texture lives HERE, on the shared
+         wrapper itself, rather than on inner divs that stop short of the
+         pb-24 padding — otherwise that bottom clearance strip shows the
+         Watch & Learn view's own background color instead of continuing
+         seamlessly to the fixed bottom bar. -->
+    <div
+      class="pb-24"
+      style={isInstitution && campusView === 'campus'
+        ? `background: #05140b; ${campusTexture}`
+        : ''}
+    >
+    {#if isInstitution && campusView === 'campus'}
+      <!-- ── Campus view — dark green/gold "dashboard" palette, only ever
+           rendered for institution sites (NoticeBoard/CampusEventsStrip/
+           ExamTimetable/CampusResources match). -->
+      <div class="px-4 pt-5 pb-6">
+        <p class="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] mb-1" style="color: #c29d53;">
+          <span class="w-1.5 h-1.5 rounded-full" style="background: #c29d53; animation: cart-ready-ping 1.8s ease-in-out infinite;"></span>
+          Campus Hub
+        </p>
+        <h1 class="text-2xl font-bold mb-4" style="color: #f3f4f6; font-family: 'Playfair Display', serif;">
+          {siteInfo?.name ?? 'Your Campus'}
+        </h1>
+        <div class="campus-search flex items-center gap-2 rounded-lg px-3.5 py-2.5 max-w-md mx-auto" style="background: #0a1b11; border: 1px solid #163a23;">
+          <Search size={13} color="#6b7280" class="shrink-0" />
+          <input
+            bind:value={campusQuery}
+            type="text"
+            placeholder="Search Campus…"
+            class="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder-[#6b7280]"
+            style="color: #e5e7eb;"
+          />
+          {#if campusQuery}
+            <button onclick={() => (campusQuery = '')} aria-label="Clear search" class="shrink-0">
+              <X size={13} color="#9ca3af" />
+            </button>
+          {/if}
+        </div>
+      </div>
+
+      <div class="px-4 pb-6 flex flex-col gap-6">
+        <!-- Quick Links + Notice Board, interleaved into one row: Notice
+             Board sits centered between the first two resource tiles (the
+             common case), matching the reference design; any further
+             resources just continue wrapping in the grid below. -->
+        {#if filteredCampusResources.length > 0 || filteredCampusNotices.length > 0}
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+            {#each filteredCampusResources as res, i (res.id)}
+              <div class="flex flex-col">
+                {#if i === 0}
+                  <h2 class="text-xs font-semibold uppercase tracking-wider mb-2 pl-1" style="color: #9ca3af;">Quick links</h2>
+                {:else}
+                  <div class="hidden md:block h-6"></div>
+                {/if}
+                <CampusResources post={res} />
+              </div>
+              {#if i === 0 && filteredCampusNotices.length > 0}
+                <NoticeBoard posts={filteredCampusNotices} />
+              {/if}
+            {/each}
+            {#if filteredCampusResources.length === 0 && filteredCampusNotices.length > 0}
+              <NoticeBoard posts={filteredCampusNotices} />
+            {/if}
+          </div>
+        {/if}
+
+        <!-- Exam Timetable + Campus Events, side by side and stretched to
+             match each other's height (grid's default align-items:stretch
+             — no items-start override here — plus h-full on each column
+             and its component, so a single short event card doesn't look
+             stunted next to the timetable trigger). -->
+        {#if filteredCampusTimetable.length > 0 || filteredUpcomingEvents.length > 0}
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {#if filteredCampusTimetable.length > 0}
+              <div class="flex flex-col h-full">
+                <h2 class="text-xs font-semibold uppercase tracking-wider mb-2 pl-1" style="color: #9ca3af;">Exam timetable</h2>
+                <ExamTimetable posts={filteredCampusTimetable} />
+              </div>
+            {/if}
+            {#if filteredUpcomingEvents.length > 0}
+              <div class="flex flex-col h-full">
+                <h2 class="text-xs font-semibold uppercase tracking-wider mb-2 pl-1" style="color: #9ca3af;">Campus events</h2>
+                <CampusEventsStrip posts={filteredUpcomingEvents} />
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        {#if filteredPastEvents.length > 0}
+          <!-- -mx-4 cancels this container's own px-4 so the horizontal
+               scroll strip bleeds edge-to-edge like the Watch tab's News &
+               Stories, instead of sitting padded/boxed-in like the grid
+               sections above. -->
+          <div class="-mx-4">
+            <PastEvents posts={filteredPastEvents} />
+          </div>
+        {/if}
+
+        {#if !campusHasAnyResults}
+          <div class="pt-6 pb-4 text-center">
+            <p class="text-sm" style="color: #6b7280;">
+              {campusQuery ? `Nothing matches "${campusQuery}".` : 'Nothing posted here yet — check back soon.'}
+            </p>
+          </div>
+        {/if}
+      </div>
+    {/if}
+    {#if !isInstitution || campusView === 'watch'}
       <!-- Hero section -->
       {#if featured}
         <div class="px-4 pt-4 pb-6" style="background: #1D3C2A;">
@@ -1160,7 +1393,7 @@
           <div class="pt-5 pb-2">
             <div class="flex items-center justify-between px-4 mb-3">
               <h3 class="text-sm font-bold" style="color: #1D3C2A;">What's new around?</h3>
-              <span class="text-[11px] font-bold" style="color: #C45C38;">See all</span>
+              <button onclick={() => (expandedSection = 'whats_new')} class="text-[11px] font-bold active:opacity-60" style="color: #C45C38;">See all</button>
             </div>
             <div class="flex gap-3 px-4 overflow-x-auto pb-2 no-scrollbar">
               {#each newItems as item (item.id)}
@@ -1176,6 +1409,7 @@
           <div class="pt-3 pb-2">
             <div class="flex items-center justify-between px-4 mb-3">
               <h3 class="text-sm font-bold" style="color: #1D3C2A;">Quick surveys</h3>
+              <button onclick={() => (expandedSection = 'survey')} class="text-[11px] font-bold active:opacity-60" style="color: #C45C38;">See all</button>
             </div>
             <div class="flex gap-3 px-4 overflow-x-auto pb-2 no-scrollbar">
               {#each surveys as survey (survey.id)}
@@ -1190,7 +1424,7 @@
           <div class="pt-2 pb-2">
             <div class="flex items-center justify-between px-4 mb-3">
               <h3 class="text-sm font-bold" style="color: #1D3C2A;">News & Stories</h3>
-              <span class="text-[11px] font-bold" style="color: #C45C38;">See all</span>
+              <button onclick={() => (expandedSection = 'news')} class="text-[11px] font-bold active:opacity-60" style="color: #C45C38;">See all</button>
             </div>
             <div class="flex gap-3 px-4 overflow-x-auto pb-2 no-scrollbar">
               {#each articles as item (item.id)}
@@ -1205,7 +1439,7 @@
           <div class="pt-2 pb-6">
             <div class="flex items-center justify-between px-4 mb-3">
               <h3 class="text-sm font-bold" style="color: #1D3C2A;">Watch & Earn</h3>
-              <span class="text-[11px] font-bold" style="color: #C45C38;">See all</span>
+              <button onclick={() => (expandedSection = 'watch_earn')} class="text-[11px] font-bold active:opacity-60" style="color: #C45C38;">See all</button>
             </div>
             <div class="flex gap-3 px-4 overflow-x-auto pb-2 no-scrollbar">
               {#each videos as item (item.id)}
@@ -1215,7 +1449,58 @@
           </div>
         {/if}
       </div>
+    {/if}
     </div>
+
+    {#if expandedSection}
+      {@const meta = SECTION_META[expandedSection]}
+      {@const items = meta.items()}
+      <!-- Shared "See all" overview for whichever section was opened — a
+           non-scrolling wrap of the same fixed-size cards the horizontal
+           strip already uses (rather than a responsive grid, since
+           TLContentCard's width/height are always fixed px, not
+           percentage-based), so every item is visible at once instead of
+           needing to scroll sideways to find one. -->
+      <div
+        class="fixed inset-0 z-[100] flex items-end sm:items-center justify-center"
+        style="background: rgba(0,0,0,0.65);"
+        onclick={() => (expandedSection = null)}
+        role="presentation"
+      >
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="earned-modal w-full sm:max-w-lg rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col"
+          style="background: #E8D4B0; max-height: 85vh;"
+          onclick={(e) => e.stopPropagation()}
+        >
+          <div class="flex items-center justify-between px-5 pt-5 pb-3 shrink-0" style="border-bottom: 1px solid rgba(29,60,42,0.1);">
+            <h3 class="text-base font-bold" style="color: #1D3C2A; font-family: 'Playfair Display', serif;">{meta.title}</h3>
+            <button
+              onclick={() => (expandedSection = null)}
+              aria-label="Close"
+              class="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+              style="background: rgba(29,60,42,0.08);"
+            >
+              <X size={14} color="#1D3C2A" />
+            </button>
+          </div>
+          <div class="px-5 py-4 overflow-y-auto flex flex-wrap gap-3 justify-center sm:justify-start">
+            {#each items as item (item.id)}
+              <TLContentCard
+                {item}
+                {completedIds}
+                onStart={(i) => {
+                  expandedSection = null;
+                  startContent(i);
+                }}
+                width={meta.width}
+                height={meta.height}
+              />
+            {/each}
+          </div>
+        </div>
+      </div>
+    {/if}
 
     <!-- Bottom bar — fixed to the viewport (the page scrolls under it now)
          so Connect Now stays reachable no matter how far the feed is
@@ -1506,6 +1791,12 @@
 {/if}
 
 <style>
+  /* Campus tab's search bar — gold border on focus, matching the rest of
+     the Campus dashboard's accent. */
+  .campus-search:focus-within {
+    border-color: #c29d53 !important;
+  }
+
   /* Carousel transition between survey questions — {#key surveyIndex}
      remounts this element on every question change, so the animation
      replays each time. */

@@ -3,7 +3,8 @@
   import {
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
     ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
-    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft, Bitcoin, Trash2
+    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft, Bitcoin, Trash2,
+    Megaphone, Pin, Calendar, GraduationCap, ClipboardCheck, Link2
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import MultiLineChartMini from '$lib/components/MultiLineChartMini.svelte';
@@ -15,7 +16,8 @@
     adminUploadContentFile, adminGetSettings, adminUpdateSettings, adminGetAnalytics, adminGetContentAnalytics,
     adminGetPurchasesBySite, adminGetPurchasesByPackage,
     adminGetSites, adminCreateSite, adminUpdateSite, adminDeleteSite, adminGetUnifiSiteOptions,
-    adminGetPackages, adminUpdatePackage
+    adminGetPackages, adminUpdatePackage,
+    adminGetCampusPosts, adminCreateCampusPost, adminUpdateCampusPost, adminDeleteCampusPost, adminUploadCampusAttachment
   } from '$lib/api.js';
 
   let { token, username, onLogout } = $props();
@@ -25,9 +27,44 @@
   // drawer toggled by the hamburger button on narrow ones — see the
   // `md:` variants in the markup below.
   let sidebarOpen = $state(false);
+  // Icon-only mode for wide screens — a separate concern from sidebarOpen
+  // (the mobile off-canvas drawer), only meaningful at md+ where the
+  // sidebar is always visible; the width/label-hiding classes below are all
+  // `md:`-scoped so this has no effect on the mobile drawer, which always
+  // shows full labels. Persisted so the choice survives a reload.
+  let sidebarCollapsed = $state(
+    typeof localStorage !== 'undefined' && localStorage.getItem('ungana_admin_sidebar_collapsed') === '1'
+  );
+  function toggleSidebarCollapsed() {
+    sidebarCollapsed = !sidebarCollapsed;
+    try {
+      localStorage.setItem('ungana_admin_sidebar_collapsed', sidebarCollapsed ? '1' : '0');
+    } catch {
+      // localStorage unavailable — the choice just won't persist across reloads
+    }
+  }
+
+  // Hover tooltip for collapsed nav icons — rendered as a top-level `fixed`
+  // element (see the bottom of the markup) rather than nested inside the
+  // sidebar, because the outer shell's `overflow: hidden` (see the aside's
+  // own comment) would otherwise clip anything that visually escapes the
+  // collapsed 76px column.
+  let hoveredTabId = $state(null);
+  let tooltipPos = $state({ top: 0, left: 0 });
+  function showTooltip(e, id) {
+    if (!sidebarCollapsed) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    tooltipPos = { top: rect.top + rect.height / 2, left: rect.right + 10 };
+    hoveredTabId = id;
+  }
+  function hideTooltip() {
+    hoveredTabId = null;
+  }
+
   const TABS = [
     { id: 'analytics', label: 'Analytics', Icon: BarChart3 },
     { id: 'content', label: 'Content', Icon: FileText },
+    { id: 'campus', label: 'Campus', Icon: Megaphone },
     { id: 'activators', label: 'Activators', Icon: Users },
     { id: 'coordinators', label: 'Coordinators', Icon: ShieldCheck },
     { id: 'sites', label: 'Sites', Icon: Radio },
@@ -59,17 +96,44 @@
   ];
   const VIEW_FREQUENCY_LABEL = Object.fromEntries(VIEW_FREQUENCIES.map((f) => [f.id, f.label]));
 
+  // Campus posts (notices/releases/events/timetable/resources — institution sites only).
+  const CAMPUS_TYPES = [
+    { id: 'notice', label: 'Notice' },
+    { id: 'release', label: 'Release' },
+    { id: 'event', label: 'Event' },
+    { id: 'timetable', label: 'Timetable' },
+    { id: 'resource', label: 'Resource' }
+  ];
+  const CAMPUS_TYPE_ICON = { notice: Megaphone, release: FileText, event: Calendar, timetable: ClipboardCheck, resource: Link2 };
+  // Which fields the campus post form shows, per type — 'timetable' reuses
+  // the same start/end/location fields an event does (an exam slot is
+  // structurally the same shape), 'resource' is just title/category/body/
+  // attachment (a link tile), and only notice/release carry a priority.
+  const CAMPUS_TYPES_WITH_SCHEDULE = ['event', 'timetable'];
+  const CAMPUS_TYPES_WITH_PRIORITY = ['notice', 'release'];
+  const CAMPUS_PRIORITIES = [
+    { id: 'normal', label: 'Normal' },
+    { id: 'important', label: 'Important' },
+    { id: 'urgent', label: 'Urgent' }
+  ];
+  const CAMPUS_PRIORITY_COLOR = { normal: '#3C6A4A', important: '#CC8830', urgent: '#C45C38' };
+
   let contentItems = $state([]);
   let activators = $state([]);
   let coordinators = $state([]);
   let sites = $state([]);
   let packages = $state([]);
+  let campusPosts = $state([]);
   let loading = $state(true);
 
   async function loadContent() {
     const r = await adminGetContent(token);
     if (r.ok) contentItems = r.data.items;
     return r;
+  }
+  async function loadCampusPosts() {
+    const r = await adminGetCampusPosts(token);
+    if (r.ok) campusPosts = r.data.posts;
   }
   async function loadActivators() {
     const r = await adminGetActivators(token);
@@ -238,7 +302,8 @@
       loadSites(),
       loadPackages(),
       loadSettings(),
-      loadAnalytics()
+      loadAnalytics(),
+      loadCampusPosts()
     ]);
 
     // Reconciles a dashboard restored from a persisted session (see
@@ -405,6 +470,159 @@
 
     cancelEditContent();
     await loadContent();
+  }
+
+  // ── Campus posts form (notices/releases/events) ─────────────────────────
+  // One shared draft + modal for both create and edit (editingCampusId ===
+  // null means creating) — simpler than content's fully separate create/
+  // edit state, and fine here since a campus post has far fewer fields.
+  function freshCampusDraft() {
+    return {
+      siteId: sites[0]?.id ?? '',
+      type: 'notice',
+      title: '',
+      body: '',
+      category: '',
+      priority: 'normal',
+      attachmentUrl: '',
+      eventStartsAt: '',
+      eventEndsAt: '',
+      location: '',
+      isPinned: false,
+      images: []
+    };
+  }
+  let showCampusForm = $state(false);
+  let editingCampusId = $state(null);
+  let campusDraft = $state(freshCampusDraft());
+  let campusFormError = $state('');
+  let campusSaving = $state(false);
+  let campusAttachmentUploading = $state(false);
+  let campusGalleryUploading = $state(false);
+
+  function toDatetimeLocal(iso) {
+    const d = new Date(iso);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function campusDraftToBody(draft) {
+    const hasSchedule = CAMPUS_TYPES_WITH_SCHEDULE.includes(draft.type);
+    return {
+      siteId: draft.siteId,
+      type: draft.type,
+      title: draft.title.trim(),
+      body: draft.body.trim() || undefined,
+      category: draft.category.trim() || undefined,
+      priority: draft.priority,
+      attachmentUrl: draft.attachmentUrl.trim() || undefined,
+      eventStartsAt: hasSchedule && draft.eventStartsAt ? new Date(draft.eventStartsAt).toISOString() : undefined,
+      eventEndsAt: hasSchedule && draft.eventEndsAt ? new Date(draft.eventEndsAt).toISOString() : undefined,
+      location: hasSchedule ? draft.location.trim() || undefined : undefined,
+      isPinned: draft.isPinned,
+      images: draft.type === 'event' ? draft.images : []
+    };
+  }
+
+  function openCampusForm() {
+    editingCampusId = null;
+    campusFormError = '';
+    campusDraft = freshCampusDraft();
+    showCampusForm = true;
+  }
+
+  function startEditCampusPost(post) {
+    editingCampusId = post.id;
+    campusFormError = '';
+    campusDraft = {
+      siteId: post.site_id,
+      type: post.type,
+      title: post.title,
+      body: post.body ?? '',
+      category: post.category ?? '',
+      priority: post.priority,
+      attachmentUrl: post.attachment_url ?? '',
+      eventStartsAt: post.event_starts_at ? toDatetimeLocal(post.event_starts_at) : '',
+      eventEndsAt: post.event_ends_at ? toDatetimeLocal(post.event_ends_at) : '',
+      location: post.location ?? '',
+      isPinned: post.is_pinned,
+      images: Array.isArray(post.images) ? post.images : []
+    };
+    showCampusForm = true;
+  }
+
+  async function submitCampusPost() {
+    if (!campusDraft.siteId || !campusDraft.title.trim()) {
+      campusFormError = 'Site and title are required';
+      return;
+    }
+    campusFormError = '';
+    campusSaving = true;
+
+    const body = campusDraftToBody(campusDraft);
+    const result = editingCampusId
+      ? await adminUpdateCampusPost(token, editingCampusId, body)
+      : await adminCreateCampusPost(token, body);
+    campusSaving = false;
+
+    if (!result.ok || !result.data?.success) {
+      campusFormError = result.data?.message || 'Could not save — check your connection';
+      return;
+    }
+
+    showCampusForm = false;
+    editingCampusId = null;
+    campusDraft = freshCampusDraft();
+    await loadCampusPosts();
+  }
+
+  async function toggleCampusActive(post) {
+    await adminUpdateCampusPost(token, post.id, { isActive: !post.is_active });
+    await loadCampusPosts();
+  }
+  async function toggleCampusPinned(post) {
+    await adminUpdateCampusPost(token, post.id, { isPinned: !post.is_pinned });
+    await loadCampusPosts();
+  }
+
+  async function handleCampusAttachmentUpload(e) {
+    const file = e.currentTarget.files?.[0];
+    e.currentTarget.value = '';
+    if (!file) return;
+
+    campusAttachmentUploading = true;
+    const result = await adminUploadCampusAttachment(token, file);
+    campusAttachmentUploading = false;
+
+    if (!result.ok || !result.data?.url) {
+      campusFormError = result.data?.message || 'Upload failed — check your connection';
+      return;
+    }
+    campusDraft.attachmentUrl = result.data.url;
+  }
+
+  // Gallery photos for the Past Events detail carousel — uploaded one at a
+  // time through the same single-file endpoint attachmentUrl uses (there's
+  // no multi-file upload route), sequentially so campusFormError reflects
+  // whichever file actually failed rather than racing several at once.
+  async function handleCampusGalleryUpload(e) {
+    const files = Array.from(e.currentTarget.files ?? []);
+    e.currentTarget.value = '';
+    if (files.length === 0) return;
+
+    campusGalleryUploading = true;
+    for (const file of files) {
+      const result = await adminUploadCampusAttachment(token, file);
+      if (!result.ok || !result.data?.url) {
+        campusFormError = result.data?.message || 'Upload failed — check your connection';
+        continue;
+      }
+      campusDraft.images = [...campusDraft.images, result.data.url];
+    }
+    campusGalleryUploading = false;
+  }
+  function removeCampusGalleryImage(i) {
+    campusDraft.images = campusDraft.images.filter((_, idx) => idx !== i);
   }
 
   // ── Activator form ───────────────────────────────────────────────────────
@@ -601,8 +819,26 @@
   ];
   const SITE_MODE_LABEL = Object.fromEntries(SITE_MODES.map((m) => [m.id, m.label]));
 
+  // Institution sites always need at least the earn-access option available
+  // to students, so "Pay only" is never a legal mode for one — filtered out
+  // of the picker rather than just relying on the backend's rejection (see
+  // PATCH /sites/:id) so the admin never sees a mode they can't actually
+  // save.
+  function availableSiteModes(vertical) {
+    return vertical === 'institution' ? SITE_MODES.filter((m) => m.id !== 'pay_only') : SITE_MODES;
+  }
+
+  // Which frontend experience this site renders — 'institution' additionally
+  // surfaces the Campus tab's Notice Board/Events on that site's Watch &
+  // Learn feed (see TimelineScreen.svelte). Purely additive; 'general' is
+  // today's behaviour, unchanged.
+  const SITE_VERTICALS = [
+    { id: 'general', label: 'General' },
+    { id: 'institution', label: 'Institution' }
+  ];
+
   function freshSiteDraft() {
-    return { id: '', name: '', mode: 'both', btcEnabled: true };
+    return { id: '', name: '', mode: 'both', btcEnabled: true, vertical: 'general' };
   }
   let showSiteForm = $state(false);
   let siteDraft = $state(freshSiteDraft());
@@ -640,7 +876,8 @@
       id: siteDraft.id.trim(),
       name: siteDraft.name.trim(),
       mode: siteDraft.mode,
-      btcEnabled: siteDraft.btcEnabled
+      btcEnabled: siteDraft.btcEnabled,
+      vertical: siteDraft.vertical
     });
     siteSaving = false;
 
@@ -661,6 +898,17 @@
 
   async function setSiteMode(s, mode) {
     await adminUpdateSite(token, s.id, { mode });
+    await loadSites();
+  }
+
+  async function setSiteVertical(s, vertical) {
+    // Switching an already pay_only site to institution would otherwise be
+    // rejected by the backend (see PATCH /sites/:id) — fold the same "Pay +
+    // Earn" fallback the create form's mode picker defaults to into this
+    // one request instead of leaving the admin stuck unable to make the
+    // switch at all.
+    const fields = vertical === 'institution' && s.mode === 'pay_only' ? { vertical, mode: 'both' } : { vertical };
+    await adminUpdateSite(token, s.id, fields);
     await loadSites();
   }
 
@@ -803,6 +1051,40 @@
   </div>
 {/snippet}
 
+{#snippet campusGalleryField(images, onAdd, onRemove, uploading)}
+  <div>
+    <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Gallery photos (optional — shown in the event's photo carousel)</p>
+    <div class="flex flex-wrap gap-2">
+      {#each images as url, i (url)}
+        <div class="relative w-16 h-16 rounded-lg overflow-hidden shrink-0" style="border: 1px solid rgba(255,255,255,0.15);">
+          <img src={url} alt="" class="w-full h-full object-cover" />
+          <button
+            type="button"
+            onclick={() => onRemove(i)}
+            aria-label="Remove photo"
+            class="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
+            style="background: rgba(0,0,0,0.6);"
+          >
+            <X size={9} color="#fff" />
+          </button>
+        </div>
+      {/each}
+      <label
+        class="w-16 h-16 rounded-lg flex flex-col items-center justify-center gap-0.5 cursor-pointer shrink-0"
+        style="background: rgba(255,255,255,0.1); border: 1px dashed rgba(255,255,255,0.25); color: {uploading ? '#C45C38' : '#C4DAC0'};"
+      >
+        {#if uploading}
+          <div class="w-3.5 h-3.5 rounded-full border-2 border-current border-t-transparent animate-spin"></div>
+        {:else}
+          <Upload size={13} />
+          <span class="text-[8px] font-semibold">Add</span>
+        {/if}
+        <input type="file" accept="image/*" multiple onchange={onAdd} disabled={uploading} class="hidden" />
+      </label>
+    </div>
+  </div>
+{/snippet}
+
 {#snippet sectionPicker(value, onSelect)}
   <div>
     <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Landing feed section</p>
@@ -879,6 +1161,28 @@
       </div>
     </div>
   {/if}
+{/snippet}
+
+{#snippet campusSitePicker(draft)}
+  <div>
+    <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Site</p>
+    {#if sites.length === 0}
+      <p class="text-xs" style="color: #96B496;">Add a site first (Sites tab) — a campus post belongs to exactly one site.</p>
+    {:else}
+      <div class="flex gap-1.5 flex-wrap">
+        {#each sites as s (s.id)}
+          <button
+            type="button"
+            onclick={() => (draft.siteId = s.id)}
+            class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+            style="background: {draft.siteId === s.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {draft.siteId === s.id ? '#fff' : '#C4DAC0'};"
+          >
+            {s.name}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
 {/snippet}
 
 {#snippet articleBodyField(draft, oninput)}
@@ -982,22 +1286,31 @@
 
   <!-- Sidebar — fixed off-canvas drawer on mobile (toggled by the hamburger
        button in the top bar below), always-visible fixed-height column on
-       md+. The outer shell is viewport-locked (height: 100dvh; overflow:
-       hidden) and only the main content column scrolls, so this never
-       moves or leaves a gap below the sign-out button no matter how tall
-       the active tab's content gets. -->
+       md+ that can also be collapsed to icons-only there (sidebarCollapsed
+       — every class driving that is `md:`-scoped, so it never affects the
+       mobile drawer). The outer shell is viewport-locked (height: 100dvh;
+       overflow: hidden) and only the main content column scrolls, so this
+       never moves or leaves a gap below the sign-out button no matter how
+       tall the active tab's content gets. -->
   <aside
-    class="fixed md:relative top-0 left-0 h-dvh w-64 z-50 flex flex-col shrink-0 transition-transform duration-300 ease-out {sidebarOpen
+    class="fixed md:relative top-0 left-0 h-dvh w-64 {sidebarCollapsed
+      ? 'md:w-[76px]'
+      : ''} z-50 flex flex-col shrink-0 transition-all duration-300 ease-out {sidebarOpen
       ? 'translate-x-0'
       : '-translate-x-full'} md:translate-x-0"
     style="background: linear-gradient(180deg, #1D3C2A 0%, #16311F 60%, #122A1A 100%); box-shadow: {sidebarOpen ? '8px 0 24px rgba(0,0,0,0.3)' : 'none'};"
   >
-    <div class="px-5 pt-6 pb-5 flex items-center justify-between shrink-0" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
+    <div
+      class="px-5 pt-6 pb-5 flex items-center justify-between shrink-0 {sidebarCollapsed
+        ? 'md:flex-col md:justify-start md:gap-3 md:px-2'
+        : ''}"
+      style="border-bottom: 1px solid rgba(255,255,255,0.08);"
+    >
       <div class="flex items-center gap-2.5 min-w-0">
         <div class="w-10 h-10 rounded-2xl flex items-center justify-center shadow-md shrink-0" style="background: linear-gradient(135deg, rgba(196,92,56,0.4), rgba(204,136,48,0.3)); border: 1px solid rgba(196,92,56,0.35);">
           <ShieldCheck size={18} color="#C45C38" />
         </div>
-        <div class="min-w-0">
+        <div class="min-w-0 {sidebarCollapsed ? 'md:hidden' : ''}">
           <div class="flex items-center gap-1.5">
             <p class="text-[9px] text-[#96B496] font-semibold uppercase tracking-widest">Admin</p>
             <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: #4E8050; box-shadow: 0 0 6px #4E8050;"></span>
@@ -1008,6 +1321,16 @@
       <button onclick={() => (sidebarOpen = false)} class="w-8 h-8 rounded-full flex items-center justify-center shrink-0 md:hidden" style="background: rgba(255,255,255,0.1);">
         <X size={15} color="#C4DAC0" />
       </button>
+      <!-- Collapse toggle — desktop only; the mobile drawer always shows
+           full labels, so there's nothing to collapse there. -->
+      <button
+        onclick={toggleSidebarCollapsed}
+        aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        class="hidden md:flex w-7 h-7 rounded-full items-center justify-center shrink-0"
+        style="background: rgba(255,255,255,0.1);"
+      >
+        <ChevronLeft size={14} color="#C4DAC0" style="transform: rotate({sidebarCollapsed ? 180 : 0}deg); transition: transform 0.2s;" />
+      </button>
     </div>
 
     <nav class="flex-1 px-3 py-4 flex flex-col gap-1 overflow-y-auto">
@@ -1015,19 +1338,27 @@
         {@const Icon = t.Icon}
         <button
           onclick={() => { tab = t.id; sidebarOpen = false; }}
-          class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left transition-all"
+          onmouseenter={(e) => showTooltip(e, t.id)}
+          onmouseleave={hideTooltip}
+          class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-left transition-all {sidebarCollapsed ? 'md:justify-center md:px-0' : ''}"
           style="background: {tab === t.id ? 'linear-gradient(135deg, rgba(196,92,56,0.28), rgba(204,136,48,0.16))' : 'transparent'}; border: 1px solid {tab === t.id ? 'rgba(196,92,56,0.35)' : 'transparent'};"
         >
           <Icon size={16} color={tab === t.id ? '#C45C38' : '#C4DAC0'} />
-          <span class="text-sm font-semibold" style="color: {tab === t.id ? '#E8D4B0' : '#C4DAC0'};">{t.label}</span>
+          <span class="text-sm font-semibold {sidebarCollapsed ? 'md:hidden' : ''}" style="color: {tab === t.id ? '#E8D4B0' : '#C4DAC0'};">{t.label}</span>
         </button>
       {/each}
     </nav>
 
     <div class="p-3 shrink-0" style="border-top: 1px solid rgba(255,255,255,0.08);">
-      <button onclick={onLogout} class="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-all active:scale-[0.98]" style="background: rgba(184,80,56,0.12);">
+      <button
+        onclick={onLogout}
+        onmouseenter={(e) => showTooltip(e, 'signout')}
+        onmouseleave={hideTooltip}
+        class="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-all active:scale-[0.98] {sidebarCollapsed ? 'md:justify-center md:px-0' : ''}"
+        style="background: rgba(184,80,56,0.12);"
+      >
         <LogOut size={15} color="#E08A6A" />
-        <span class="text-sm font-semibold" style="color: #E08A6A;">Sign out</span>
+        <span class="text-sm font-semibold {sidebarCollapsed ? 'md:hidden' : ''}" style="color: #E08A6A;">Sign out</span>
       </button>
     </div>
   </aside>
@@ -1243,6 +1574,162 @@
           </button>
         </AdminModal>
       {/if}
+    {:else if tab === 'campus'}
+      <button
+        onclick={openCampusForm}
+        class="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-bold text-sm"
+        style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
+      >
+        <Plus size={15} /> Add campus post
+      </button>
+
+      {#if showCampusForm}
+        <AdminModal title={editingCampusId ? 'Edit campus post' : 'Add campus post'} onClose={() => (showCampusForm = false)}>
+          {@render campusSitePicker(campusDraft)}
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Type</p>
+            <div class="flex gap-2">
+              {#each CAMPUS_TYPES as t (t.id)}
+                <button
+                  type="button"
+                  onclick={() => (campusDraft.type = t.id)}
+                  class="flex-1 py-2 rounded-xl text-[11px] font-semibold"
+                  style="background: {campusDraft.type === t.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {campusDraft.type === t.id ? '#fff' : '#C4DAC0'};"
+                >
+                  {t.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+          {@render inputField('Title', campusDraft.title, (e) => (campusDraft.title = e.currentTarget.value))}
+          {@render inputField('Category (optional)', campusDraft.category, (e) => (campusDraft.category = e.currentTarget.value), { placeholder: 'e.g. Exams, Fees, Library' })}
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Body</p>
+            <textarea
+              value={campusDraft.body}
+              oninput={(e) => (campusDraft.body = e.currentTarget.value)}
+              rows="3"
+              placeholder="Details…"
+              class="w-full bg-transparent px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none resize-none"
+              style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
+            ></textarea>
+          </div>
+          {#if CAMPUS_TYPES_WITH_PRIORITY.includes(campusDraft.type)}
+            <div>
+              <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Priority</p>
+              <div class="flex gap-1.5 flex-wrap">
+                {#each CAMPUS_PRIORITIES as p (p.id)}
+                  <button
+                    type="button"
+                    onclick={() => (campusDraft.priority = p.id)}
+                    class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                    style="background: {campusDraft.priority === p.id ? CAMPUS_PRIORITY_COLOR[p.id] : 'rgba(255,255,255,0.1)'}; color: {campusDraft.priority === p.id ? '#fff' : '#C4DAC0'};"
+                  >
+                    {p.label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {:else if CAMPUS_TYPES_WITH_SCHEDULE.includes(campusDraft.type)}
+            <div class="grid grid-cols-2 gap-3">
+              {@render inputField(campusDraft.type === 'timetable' ? 'Exam starts' : 'Starts', campusDraft.eventStartsAt, (e) => (campusDraft.eventStartsAt = e.currentTarget.value), { type: 'datetime-local' })}
+              {@render inputField('Ends (optional)', campusDraft.eventEndsAt, (e) => (campusDraft.eventEndsAt = e.currentTarget.value), { type: 'datetime-local' })}
+            </div>
+            {@render inputField(
+              campusDraft.type === 'timetable' ? 'Venue' : 'Location',
+              campusDraft.location,
+              (e) => (campusDraft.location = e.currentTarget.value),
+              { placeholder: campusDraft.type === 'timetable' ? 'e.g. Exam Hall B' : 'e.g. Main Auditorium' }
+            )}
+          {/if}
+          {@render fileOrUrlField(
+            campusDraft.type === 'resource' ? 'Link or file' : campusDraft.type === 'event' ? 'Cover photo (optional)' : 'Attachment (optional — image, PDF, or video)',
+            campusDraft.attachmentUrl,
+            (e) => (campusDraft.attachmentUrl = e.currentTarget.value),
+            campusAttachmentUploading,
+            handleCampusAttachmentUpload,
+            'image/*,video/*,application/pdf'
+          )}
+          {#if campusDraft.type === 'event'}
+            {@render campusGalleryField(campusDraft.images, handleCampusGalleryUpload, removeCampusGalleryImage, campusGalleryUploading)}
+          {/if}
+          <div>
+            <button
+              type="button"
+              onclick={() => (campusDraft.isPinned = !campusDraft.isPinned)}
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold"
+              style="background: {campusDraft.isPinned ? '#CC8830' : 'rgba(255,255,255,0.1)'}; color: {campusDraft.isPinned ? '#fff' : '#C4DAC0'};"
+            >
+              <Pin size={12} />
+              {campusDraft.isPinned ? 'Pinned' : 'Pin to top'}
+            </button>
+          </div>
+
+          {#if campusFormError}
+            <p class="text-xs text-[#E08A6A]">{campusFormError}</p>
+          {/if}
+
+          <button
+            onclick={submitCampusPost}
+            disabled={campusSaving}
+            class="w-full py-3 rounded-2xl font-bold text-sm text-white"
+            style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {campusSaving ? 0.7 : 1};"
+          >
+            {campusSaving ? 'Saving…' : editingCampusId ? 'Save changes' : 'Create campus post'}
+          </button>
+        </AdminModal>
+      {/if}
+
+      <p class="text-xs text-[#3C6A4A] font-semibold px-1">{campusPosts.length} posts</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
+      {#each campusPosts as post (post.id)}
+        {@const Icon = CAMPUS_TYPE_ICON[post.type]}
+        {@const color = CAMPUS_PRIORITY_COLOR[post.priority] ?? CAMPUS_PRIORITY_COLOR.normal}
+        {@const postSite = sites.find((s) => s.id === post.site_id)}
+        <div class="rounded-2xl overflow-hidden shadow-sm" style="background: #2E5A3E; opacity: {post.is_active ? 1 : 0.5}; border-left: 3px solid {color};">
+          <div class="flex items-center gap-3 px-4 py-3.5">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: {color}30;">
+              <Icon size={16} color={color} />
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-semibold text-[#E8D4B0] truncate">{post.title}</p>
+              <p class="text-[10px] text-[#AECAAE]">
+                <span class="font-semibold" style="color: {color};">{CAMPUS_TYPES.find((t) => t.id === post.type)?.label ?? post.type}</span>
+                {#if postSite} · {postSite.name}{/if}
+                {#if post.category} · {post.category}{/if}
+                {#if post.is_pinned} · Pinned{/if}
+              </p>
+            </div>
+            <div class="flex flex-col gap-1.5 shrink-0 items-end">
+              <button
+                onclick={() => startEditCampusPost(post)}
+                class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full"
+                style="background: rgba(255,255,255,0.12); color: #C4DAC0;"
+              >
+                <Edit3 size={10} /> Edit
+              </button>
+              <div class="flex gap-1.5">
+                <button
+                  onclick={() => toggleCampusPinned(post)}
+                  aria-label="Toggle pinned"
+                  class="flex items-center gap-1 text-[10px] font-bold px-2 py-1.5 rounded-full"
+                  style="background: {post.is_pinned ? 'rgba(204,136,48,0.30)' : 'rgba(255,255,255,0.1)'}; color: {post.is_pinned ? '#CC8830' : '#C4DAC0'};"
+                >
+                  <Pin size={10} />
+                </button>
+                <button
+                  onclick={() => toggleCampusActive(post)}
+                  class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full"
+                  style="background: {post.is_active ? 'rgba(78,128,80,0.30)' : 'rgba(192,97,74,0.20)'}; color: {post.is_active ? '#4E8050' : '#B85038'};"
+                >
+                  {#if post.is_active}<Pause size={10} /> Active{:else}<Play size={10} /> Off{/if}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      {/each}
+      </div>
     {:else if tab === 'activators'}
       <button
         onclick={() => {
@@ -1680,11 +2167,23 @@
           </div>
 
           {#if analytics.earned.contentOverview.length > 0}
-            <div class="rounded-2xl overflow-hidden shadow-md" style="background: #2E5A3E;">
-              <div class="px-4 pt-3.5 pb-2">
-                <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Content Overview</p>
-                <p class="text-[10px] text-[#96B496]">Tap an item for interaction details</p>
+            <!-- Capped height + internal scroll — with a lot of content
+                 items this list used to grow unbounded, stretching this
+                 card (and the grid row it shares with the short "Reward
+                 time" card next to it) far past a reasonable size. The
+                 fade mask at the bottom hints there's more to scroll to
+                 without needing a visible "N more" affordance. -->
+            <div class="rounded-2xl overflow-hidden shadow-md flex flex-col" style="background: #2E5A3E; max-height: 340px;">
+              <div class="px-4 pt-3.5 pb-2 flex items-center justify-between gap-2 shrink-0">
+                <div>
+                  <p class="text-xs font-bold text-[#C4DAC0] uppercase tracking-wider">Content Overview</p>
+                  <p class="text-[10px] text-[#96B496]">Tap an item for interaction details</p>
+                </div>
+                <span class="text-[10px] font-bold px-2 py-1 rounded-full shrink-0" style="background: rgba(255,255,255,0.1); color: #96B496;">
+                  {analytics.earned.contentOverview.length}
+                </span>
               </div>
+              <div class="content-overview-scroll flex-1 min-h-0 overflow-y-auto">
               {#each analytics.earned.contentOverview as c, i (c.id)}
                 {@const impressionsPct = Math.round((c.impressions / maxContentImpressions) * 100)}
                 {@const completionRate = c.impressions > 0 ? c.completions / c.impressions : 0}
@@ -1788,6 +2287,7 @@
                   </div>
                 {/if}
               {/each}
+              </div>
             </div>
           {/if}
         </div>
@@ -1929,7 +2429,7 @@
           <div>
             <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Mode</p>
             <div class="flex gap-1.5 flex-wrap">
-              {#each SITE_MODES as m (m.id)}
+              {#each availableSiteModes(siteDraft.vertical) as m (m.id)}
                 <button
                   type="button"
                   onclick={() => (siteDraft.mode = m.id)}
@@ -1937,6 +2437,25 @@
                   style="background: {siteDraft.mode === m.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {siteDraft.mode === m.id ? '#fff' : '#C4DAC0'};"
                 >
                   {m.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Type</p>
+            <div class="flex gap-1.5 flex-wrap">
+              {#each SITE_VERTICALS as v (v.id)}
+                <button
+                  type="button"
+                  onclick={() => {
+                    siteDraft.vertical = v.id;
+                    if (v.id === 'institution' && siteDraft.mode === 'pay_only') siteDraft.mode = 'both';
+                  }}
+                  class="flex items-center gap-1 px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                  style="background: {siteDraft.vertical === v.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {siteDraft.vertical === v.id ? '#fff' : '#C4DAC0'};"
+                >
+                  {#if v.id === 'institution'}<GraduationCap size={12} />{/if}
+                  {v.label}
                 </button>
               {/each}
             </div>
@@ -1981,7 +2500,10 @@
               <Radio size={16} color="#C45C38" />
             </div>
             <div class="flex-1 min-w-0">
-              <p class="text-sm font-semibold text-[#E8D4B0] truncate">{s.name}</p>
+              <p class="text-sm font-semibold text-[#E8D4B0] truncate flex items-center gap-1.5">
+                {s.name}
+                {#if s.vertical === 'institution'}<GraduationCap size={11} color="#CC8830" />{/if}
+              </p>
               <p class="text-[10px] text-[#AECAAE]">id: {s.id}</p>
             </div>
             <button
@@ -1994,7 +2516,7 @@
           </div>
           <div class="flex items-center justify-between gap-2">
             <div class="flex gap-1.5 flex-wrap">
-              {#each SITE_MODES as m (m.id)}
+              {#each availableSiteModes(s.vertical) as m (m.id)}
                 <button
                   type="button"
                   onclick={() => setSiteMode(s, m.id)}
@@ -2025,6 +2547,20 @@
               <Bitcoin size={11} />
               {s.btc_enabled ? 'Enabled' : 'Disabled'}
             </button>
+          </div>
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <span class="text-[10px] text-[#96B496]">Type</span>
+            {#each SITE_VERTICALS as v (v.id)}
+              <button
+                type="button"
+                onclick={() => setSiteVertical(s, v.id)}
+                class="flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold"
+                style="background: {s.vertical === v.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {s.vertical === v.id ? '#fff' : '#C4DAC0'};"
+              >
+                {#if v.id === 'institution'}<GraduationCap size={11} />{/if}
+                {v.label}
+              </button>
+            {/each}
           </div>
         </div>
       {/each}
@@ -2129,3 +2665,37 @@
   </div>
   </div>
 </div>
+
+{#if hoveredTabId}
+  <!-- Top-level (outside the sidebar/outer-shell overflow:hidden) so it can
+       float past the collapsed 76px column into the main content area —
+       see the `sidebarCollapsed`/`showTooltip` comments above. -->
+  <div
+    class="fixed z-[100] px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+    style="top: {tooltipPos.top}px; left: {tooltipPos.left}px; transform: translateY(-50%); background: #1D3C2A; color: #E8D4B0; box-shadow: 0 4px 12px rgba(0,0,0,0.35); white-space: nowrap; pointer-events: none;"
+  >
+    {hoveredTabId === 'signout' ? 'Sign out' : TABS.find((t) => t.id === hoveredTabId)?.label}
+  </div>
+{/if}
+
+<style>
+  /* Thin visible scrollbar for the capped-height Content Overview list —
+     unlike the client-facing horizontal strips elsewhere (which hide their
+     scrollbar via .no-scrollbar since swipe alone is the affordance), this
+     is desktop admin UI where a visible scrollbar is the expected signal
+     that a list keeps going. */
+  .content-overview-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+  }
+  .content-overview-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .content-overview-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .content-overview-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 999px;
+  }
+</style>

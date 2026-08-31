@@ -1,11 +1,11 @@
 <script>
   import { onMount } from 'svelte';
-  import { ChevronRight, Clock, CheckCircle2, Zap, UserCheck, ShieldCheck } from '@lucide/svelte';
+  import { ChevronRight, Clock, CheckCircle2, Zap, UserCheck, ShieldCheck, Pin, X, GraduationCap } from '@lucide/svelte';
   import ScreenBg from '$lib/components/ScreenBg.svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import ActivatorDropdown from '$lib/components/ActivatorDropdown.svelte';
   import { PACKAGES, ACTIVATORS } from '$lib/data.js';
-  import { getPackages, getActivatorForMac, getSite } from '$lib/api.js';
+  import { getPackages, getActivatorForMac, getSite, getCampusPosts } from '$lib/api.js';
   import { getClientMac, getSiteId } from '$lib/device.js';
 
   let { mode = 'simulation', onSelect, onActivatorLogin, onCoordinatorLogin, onAdminLogin, onEarnAccess } = $props();
@@ -36,6 +36,30 @@
   // shows, so a stale/optimistic 'both' here can never actually let a
   // restricted site's purchase or claim through).
   let siteMode = $state(null);
+  // Full site row (not just mode) — used to personalize the header for an
+  // institution site, same convention TimelineScreen already uses.
+  let siteInfo = $state(null);
+  const isInstitution = $derived(siteInfo?.vertical === 'institution');
+
+  // Institution sites only: a small dismissible banner surfacing urgent/
+  // pinned Notice Board items before a student even opens "Earn Free Access"
+  // (see TimelineScreen.svelte's NoticeBoard). Dismissal is remembered
+  // per-post-id in localStorage, same 'ungana_*' prefix convention as
+  // device.js, so it doesn't reappear on every visit once seen.
+  const DISMISSED_NOTICES_KEY = 'ungana_dismissed_notices';
+  let urgentNotices = $state([]);
+  let noticeBannerDismissed = $state(false);
+
+  function dismissNoticeBanner() {
+    noticeBannerDismissed = true;
+    try {
+      const prior = JSON.parse(localStorage.getItem(DISMISSED_NOTICES_KEY) || '[]');
+      const ids = new Set([...prior, ...urgentNotices.map((n) => n.id)]);
+      localStorage.setItem(DISMISSED_NOTICES_KEY, JSON.stringify([...ids]));
+    } catch {
+      // localStorage unavailable — the banner just won't remember the dismissal, no functional loss
+    }
+  }
 
   onMount(async () => {
     const siteId = getSiteId();
@@ -47,7 +71,20 @@
     ]);
 
     if (siteId) {
-      siteMode = siteResult?.ok && siteResult.data?.site?.mode ? siteResult.data.site.mode : 'both';
+      siteInfo = siteResult?.ok ? siteResult.data?.site ?? null : null;
+      siteMode = siteInfo?.mode ?? 'both';
+
+      if (siteInfo?.vertical === 'institution') {
+        const postsResult = await getCampusPosts(siteId);
+        const posts = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
+        let dismissedIds = [];
+        try {
+          dismissedIds = JSON.parse(localStorage.getItem(DISMISSED_NOTICES_KEY) || '[]');
+        } catch {
+          // corrupt/unavailable — treat as nothing dismissed yet
+        }
+        urgentNotices = posts.filter((p) => (p.is_pinned || p.priority === 'urgent') && !dismissedIds.includes(p.id));
+      }
     }
 
     if (!packagesResult.ok || !packagesResult.data?.packages) return;
@@ -89,14 +126,85 @@
 </script>
 
 <ScreenBg>
-  <div class="flex flex-col items-center pt-5 pb-6">
-    <UnganaLogoMark height={50} />
-    <h1 class="text-2xl font-bold text-[#1D3C2A] mt-3" style="font-family: 'Playfair Display', serif;">Ungana</h1>
-    <p class="text-xs font-medium mt-0.5" style="color: #2E5A3E;">Free internet, great content</p>
+<!-- Responsive column: full-bleed on a phone captive-portal viewport,
+     centered at a sane reading width everywhere wider (tablet/desktop) —
+     ScreenBg's own gradient background still spans the full viewport. -->
+<div class="w-full max-w-md mx-auto flex flex-col">
+  <div class="relative flex flex-col items-center pt-8 pb-6 fade-in-up">
+    <!-- Soft decorative glow behind the logo — plain radial-gradient, no
+         backdrop-filter (older captive-portal WebViews can't be trusted to
+         support it), so this stays cheap and universally compatible. -->
+    <div
+      class="pointer-events-none absolute"
+      style="top: -40px; width: 220px; height: 220px; border-radius: 9999px; background: radial-gradient(circle, rgba(196,92,56,0.16) 0%, transparent 70%);"
+    ></div>
+    <UnganaLogoMark height={52} />
+    <h1 class="text-2xl font-bold text-[#1D3C2A] mt-3 text-center" style="font-family: 'Playfair Display', serif;">
+      {isInstitution && siteInfo?.name ? siteInfo.name : 'Ungana'}
+    </h1>
+    <p class="text-xs font-medium mt-0.5" style="color: #2E5A3E;">
+      {isInstitution ? 'Campus WiFi & digital resources' : 'Free internet, great content'}
+    </p>
+    {#if isInstitution}
+      <span
+        class="mt-2.5 inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full"
+        style="background: rgba(46,90,62,0.12); color: #2E5A3E; border: 1px solid rgba(46,90,62,0.25);"
+      >
+        <GraduationCap size={11} /> Institution Network
+      </span>
+    {/if}
   </div>
 
-  <!-- Activator section -->
-  <div class="mb-5">
+  {#if urgentNotices.length > 0 && !noticeBannerDismissed}
+    <!-- Institution-only, so hardcoded rather than conditional — this
+         banner only ever shows on institution sites. Same terracotta accent
+         as the rest of the app's attention/CTA elements. -->
+    <button
+      onclick={onEarnAccess}
+      class="w-full flex items-center gap-2.5 px-4 py-3 rounded-2xl mb-5 text-left active:scale-[0.98] transition-transform fade-in-up"
+      style="background: rgba(196,92,56,0.12); border: 1px solid rgba(196,92,56,0.3); animation-delay: 0.05s;"
+    >
+      <Pin size={14} color="#C45C38" fill="#C45C38" class="shrink-0" />
+      <span class="flex-1 text-xs font-semibold" style="color: #1D3C2A;">
+        {urgentNotices.length} campus notice{urgentNotices.length > 1 ? 's' : ''} need your attention
+      </span>
+      <span
+        role="button"
+        tabindex="0"
+        onclick={(e) => {
+          e.stopPropagation();
+          dismissNoticeBanner();
+        }}
+        onkeydown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            e.stopPropagation();
+            dismissNoticeBanner();
+          }
+        }}
+        aria-label="Dismiss"
+        class="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
+        style="background: rgba(29,60,42,0.08);"
+      >
+        <X size={12} color="#2E5A3E" />
+      </span>
+    </button>
+  {/if}
+
+  <!-- Activator section — an elevated "surface" card (same forest-green
+       tint as the rest of the app's subtle surfaces, not a white/cream
+       fill) rather than sitting bare on the page background, so the form
+       reads as its own module. `position: relative` + an explicit z-index
+       is required here: `.fade-in-up` animates `transform`, and any
+       transformed element creates its own stacking context — without this,
+       that trapped the open ActivatorDropdown panel's z-50 so it only won
+       against siblings *inside* this card, and the "Choose your plan"
+       section right below (a later flex sibling, painted after this one)
+       covered the open dropdown instead of the dropdown floating above it. -->
+  <div
+    class="mb-5 rounded-3xl px-4 pt-4 pb-4 fade-in-up"
+    style="background: rgba(46,90,62,0.08); border: 1px solid rgba(29,60,42,0.08); animation-delay: 0.1s; position: relative; z-index: 30;"
+  >
     <div class="flex items-center gap-2 mb-2">
       <h2 class="text-sm font-bold text-[#1D3C2A]">Your Activator</h2>
       <span
@@ -146,13 +254,13 @@
   {/if}
 
   {#if siteMode && siteMode !== 'earn_only'}
-  <div class="mb-4">
+  <div class="mb-4 fade-in-up" style="animation-delay: 0.15s;">
     <h2 class="text-lg font-bold text-[#1D3C2A]" style="font-family: 'Playfair Display', serif;">Choose your plan</h2>
     <p class="text-xs mt-0.5" style="color: #2E5A3E;">Select how long you want access</p>
   </div>
 
   <div class="flex flex-col gap-3 mb-5">
-    {#each packages as pkg (pkg.id)}
+    {#each packages as pkg, i (pkg.id)}
       {@const Icon = pkg.icon}
       {@const isSelected = selected === pkg.id}
       <div
@@ -165,10 +273,10 @@
             selected = pkg.id;
           }
         }}
-        class="w-full text-left rounded-3xl transition-all duration-200 active:scale-[0.98] cursor-pointer"
+        class="w-full text-left rounded-3xl transition-all duration-200 active:scale-[0.98] cursor-pointer fade-in-up"
         style="background: {isSelected ? '#2E5A3E' : 'rgba(46,90,62,0.08)'}; border: {isSelected
           ? '2px solid #C45C38'
-          : '2px solid transparent'}; box-shadow: {isSelected ? '0 8px 28px rgba(196,92,56,0.18)' : 'none'};"
+          : '2px solid transparent'}; box-shadow: {isSelected ? '0 8px 28px rgba(196,92,56,0.18)' : 'none'}; animation-delay: {0.18 + i * 0.05}s;"
       >
         <div class="flex items-center gap-4 px-5 py-4">
           <div
@@ -248,9 +356,15 @@
        button — that version read as a minor/skippable link and was easy to
        scroll past. The glow wrapper nudges attention toward it without a
        constant distracting pulse (see .earn-glow-wrap below). -->
-  <div class="earn-glow-wrap w-full mb-2">
+  <div class="earn-glow-wrap w-full mb-2 fade-in-up" style="animation-delay: 0.3s;">
     <button
-      onclick={onEarnAccess}
+      onclick={() => {
+        if (!activator) {
+          activatorError = true;
+          return;
+        }
+        onEarnAccess();
+      }}
       class="w-full text-left rounded-3xl overflow-hidden transition-all active:scale-[0.98]"
       style="background: linear-gradient(135deg, #C45C38, #E0983F); box-shadow: 0 8px 24px rgba(196,92,56,0.3);"
     >
@@ -271,40 +385,62 @@
   </div>
   {/if}
 
-  <div class="flex flex-col items-center gap-1.5 mt-2">
-    <p class="text-[10px]" style="color: #9AB498;">swap.ungana.app</p>
-    <div class="flex items-center gap-3">
+  <div class="flex flex-col items-center gap-2.5 mt-3 fade-in-up" style="animation-delay: 0.35s;">
+    <div
+      class="flex items-center rounded-full overflow-hidden"
+      style="background: rgba(46,90,62,0.08); border: 1px solid rgba(29,60,42,0.08);"
+    >
       <button
         onclick={onActivatorLogin}
-        class="flex items-center gap-1.5 text-[11px] font-semibold transition-opacity active:opacity-60"
+        class="flex items-center gap-1.5 text-[11px] font-semibold px-3.5 py-2 transition-opacity active:opacity-60"
         style="color: #2E5A3E;"
       >
         <UserCheck size={12} />
-        Activator Portal
+        Activator
       </button>
-      <span class="text-[#C4A870]">·</span>
+      <span class="w-px h-3.5" style="background: rgba(29,60,42,0.12);"></span>
       <button
         onclick={onCoordinatorLogin}
-        class="flex items-center gap-1.5 text-[11px] font-semibold transition-opacity active:opacity-60"
-        style="color: #96B496;"
+        class="flex items-center gap-1.5 text-[11px] font-semibold px-3.5 py-2 transition-opacity active:opacity-60"
+        style="color: #3C6A4A;"
       >
         <ShieldCheck size={12} />
         Coordinator
       </button>
-      <span class="text-[#C4A870]">·</span>
+      <span class="w-px h-3.5" style="background: rgba(29,60,42,0.12);"></span>
       <button
         onclick={onAdminLogin}
-        class="flex items-center gap-1.5 text-[11px] font-semibold transition-opacity active:opacity-60"
-        style="color: #96B496;"
+        class="flex items-center gap-1.5 text-[11px] font-semibold px-3.5 py-2 transition-opacity active:opacity-60"
+        style="color: #3C6A4A;"
       >
         <ShieldCheck size={12} />
         Admin
       </button>
     </div>
+    <p class="text-[10px]" style="color: #9AB498;">swap.ungana.app</p>
   </div>
+</div>
 </ScreenBg>
 
 <style>
+  /* Staggered entrance for each top-level section (see the animation-delay
+     inline on each) — a subtle "content settling in" feel on first paint,
+     not repeated on every re-render since it's a plain CSS animation tied
+     to element mount, not a reactive transition. */
+  .fade-in-up {
+    animation: package-fade-in-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes package-fade-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
   /* A slow, subtle glow ring rather than a constant scale pulse — this
      button sits right below the primary paid-plan CTAs, so it needs to
      register as "there's a free option too" without competing with them

@@ -16,7 +16,10 @@ sitesRouter.get("/:id", async (req, res) => {
   try {
     const site = await getSite(req.params.id);
     if (!site) return res.status(404).json({ success: false, message: "Unknown site" });
-    res.json({ success: true, site: { id: site.id, name: site.name, mode: site.mode, btcEnabled: site.btc_enabled } });
+    res.json({
+      success: true,
+      site: { id: site.id, name: site.name, mode: site.mode, btcEnabled: site.btc_enabled, vertical: site.vertical },
+    });
   } catch (error) {
     console.error("❌ Site fetch error:", error.message);
     res.status(500).json({ success: false, message: error.message });

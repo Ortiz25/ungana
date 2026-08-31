@@ -125,6 +125,12 @@ export function getContent(site) {
   return request(site ? `/content?site=${encodeURIComponent(site)}` : '/content');
 }
 
+/** GET /api/campus/posts?site=X&type=notice|release|event — Notice Board/Campus Events feed for an institution site. `type` is optional. */
+export function getCampusPosts(site, type) {
+  const params = new URLSearchParams({ site, ...(type ? { type } : {}) });
+  return request(`/campus/posts?${params}`);
+}
+
 /** GET /api/content/completions?mac=X&site=Y — items this device has already finished, for UI restore after reload. */
 export function getContentCompletions(mac, site) {
   const params = new URLSearchParams({ mac, ...(site ? { site } : {}) });
@@ -279,9 +285,20 @@ function authed(token) {
   return { headers: { Authorization: `Bearer ${token}` } };
 }
 
-/** POST /api/admin/login — Body: { username, password } */
+/**
+ * POST /api/admin/login — Body: { username, password }. Longer timeout
+ * than the default: the backend verifies the password with bcryptjs
+ * (pure-JS bcrypt, no native bindings), which routinely takes several
+ * seconds per compare — well past the standard 5s, which was aborting the
+ * request client-side right before the backend responded and surfacing a
+ * spurious "check your connection" error even on correct credentials.
+ */
 export function adminLogin(username, password) {
-  return request('/admin/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+  return request('/admin/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+    timeoutMs: 15000
+  });
 }
 
 /** GET /api/admin/content — every item, including deactivated ones. */
@@ -317,6 +334,37 @@ export async function adminUploadContentFile(token, file) {
   // response comes back (see optimizeUploadedVideo), which can take
   // noticeably longer than a plain file save for a multi-minute clip.
   const result = await request('/admin/content/upload', { method: 'POST', body: formData, timeoutMs: 240000, ...authed(token) });
+  if (result.ok && result.data?.url) {
+    return { ...result, data: { ...result.data, url: `${BACKEND_ORIGIN}${result.data.url}` } };
+  }
+  return result;
+}
+
+/** GET /api/admin/campus-posts?site=<id> — every post, including deactivated ones. `site` is optional. */
+export function adminGetCampusPosts(token, site) {
+  return request(`/admin/campus-posts${site ? `?site=${encodeURIComponent(site)}` : ''}`, authed(token));
+}
+
+/** POST /api/admin/campus-posts — Body matches services/campusPosts.js createCampusPost fields. */
+export function adminCreateCampusPost(token, body) {
+  return request('/admin/campus-posts', { method: 'POST', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** PATCH /api/admin/campus-posts/:id — partial update. */
+export function adminUpdateCampusPost(token, id, body) {
+  return request(`/admin/campus-posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** DELETE /api/admin/campus-posts/:id — deactivates (soft-delete). */
+export function adminDeleteCampusPost(token, id) {
+  return request(`/admin/campus-posts/${encodeURIComponent(id)}`, { method: 'DELETE', ...authed(token) });
+}
+
+/** POST /api/admin/campus-posts/upload — uploads an image/video/PDF attachment; same shape as adminUploadContentFile. */
+export async function adminUploadCampusAttachment(token, file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const result = await request('/admin/campus-posts/upload', { method: 'POST', body: formData, timeoutMs: 240000, ...authed(token) });
   if (result.ok && result.data?.url) {
     return { ...result, data: { ...result.data, url: `${BACKEND_ORIGIN}${result.data.url}` } };
   }

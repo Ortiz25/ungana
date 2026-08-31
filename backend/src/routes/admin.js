@@ -7,12 +7,18 @@ import {
   updateContentItem,
   deactivateContentItem,
 } from "../services/content.js";
+import {
+  adminListPosts,
+  createCampusPost,
+  updateCampusPost,
+  deactivateCampusPost,
+} from "../services/campusPosts.js";
 import { createActivator, adminListActivators, updateActivator } from "../services/activators.js";
 import { createCoordinator, adminListCoordinators, updateCoordinator } from "../services/coordinators.js";
 import { uploadContentFile, optimizeUploadedVideo } from "../services/uploads.js";
 import { adminGetSettings, setEarnConnectThresholdSecs, setDefaultActivatorCommissionRate, setNotificationRetentionDays } from "../services/settings.js";
 import { getAdminAnalytics, getContentItemAnalytics, getPurchasesBySiteSeries, getPurchasesByPackageSeries } from "../services/analytics.js";
-import { adminListSites, createSite, updateSite, deleteSite, listUnifiSiteOptions } from "../services/sites.js";
+import { adminListSites, getSite, createSite, updateSite, deleteSite, listUnifiSiteOptions } from "../services/sites.js";
 import { adminListPackages, updatePackage } from "../services/catalog.js";
 import { testMinmoConnection } from "../services/payments/minmo.js";
 
@@ -128,6 +134,90 @@ adminRouter.delete("/content/:id", async (req, res) => {
  * longer than a plain file save for a multi-minute clip.
  */
 adminRouter.post("/content/upload", (req, res) => {
+  uploadContentFile(req, res, async (err) => {
+    if (err) return res.status(400).json({ success: false, message: err.message });
+    if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
+    const filename = await optimizeUploadedVideo(req.file);
+    res.json({ success: true, url: `/uploads/${filename}` });
+  });
+});
+
+// ── Campus posts (notices, releases, events — institution sites) ─────────
+
+/** GET /api/admin/campus-posts?site=<id> — every post, including deactivated ones; site is optional (omit to see every site's posts). */
+adminRouter.get("/campus-posts", async (req, res) => {
+  try {
+    const posts = await adminListPosts(req.query.site || null);
+    res.json({ posts });
+  } catch (error) {
+    console.error("❌ Admin campus posts list error:", error.message);
+    res.status(500).json({ posts: [], message: error.message });
+  }
+});
+
+const CAMPUS_POST_TYPES = ["notice", "release", "event", "timetable", "resource"];
+const CAMPUS_POST_PRIORITIES = ["normal", "important", "urgent"];
+
+/**
+ * POST /api/admin/campus-posts
+ * Body: { siteId, type, title, body?, category?, priority?, attachmentUrl?,
+ *         eventStartsAt?, eventEndsAt?, location?, isPinned?, sortOrder? }
+ * `eventStartsAt`/`eventEndsAt`/`location` only matter for type='event'.
+ */
+adminRouter.post("/campus-posts", async (req, res) => {
+  const { siteId, type, title, priority } = req.body;
+  if (!siteId || !type || !title) {
+    return res.status(400).json({ success: false, message: "siteId, type, and title are required" });
+  }
+  if (!CAMPUS_POST_TYPES.includes(type)) {
+    return res.status(400).json({ success: false, message: `type must be one of ${CAMPUS_POST_TYPES.join(", ")}` });
+  }
+  if (priority !== undefined && !CAMPUS_POST_PRIORITIES.includes(priority)) {
+    return res.status(400).json({ success: false, message: `priority must be one of ${CAMPUS_POST_PRIORITIES.join(", ")}` });
+  }
+
+  try {
+    const post = await createCampusPost(req.body);
+    res.json({ success: true, post });
+  } catch (error) {
+    console.error("❌ Admin campus post create error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** PATCH /api/admin/campus-posts/:id — partial update; any field from the create body, plus isActive. */
+adminRouter.patch("/campus-posts/:id", async (req, res) => {
+  if (req.body.type !== undefined && !CAMPUS_POST_TYPES.includes(req.body.type)) {
+    return res.status(400).json({ success: false, message: `type must be one of ${CAMPUS_POST_TYPES.join(", ")}` });
+  }
+  if (req.body.priority !== undefined && !CAMPUS_POST_PRIORITIES.includes(req.body.priority)) {
+    return res.status(400).json({ success: false, message: `priority must be one of ${CAMPUS_POST_PRIORITIES.join(", ")}` });
+  }
+
+  try {
+    const post = await updateCampusPost(req.params.id, req.body);
+    if (!post) return res.status(404).json({ success: false, message: "Campus post not found" });
+    res.json({ success: true, post });
+  } catch (error) {
+    console.error("❌ Admin campus post update error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** DELETE /api/admin/campus-posts/:id — deactivates rather than hard-deletes (see services/campusPosts.js). */
+adminRouter.delete("/campus-posts/:id", async (req, res) => {
+  try {
+    const post = await deactivateCampusPost(req.params.id);
+    if (!post) return res.status(404).json({ success: false, message: "Campus post not found" });
+    res.json({ success: true, post });
+  } catch (error) {
+    console.error("❌ Admin campus post deactivate error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** POST /api/admin/campus-posts/upload — multipart, field name "file". Same pipeline as /content/upload (images/video); PDFs are also accepted for release attachments. */
+adminRouter.post("/campus-posts/upload", (req, res) => {
   uploadContentFile(req, res, async (err) => {
     if (err) return res.status(400).json({ success: false, message: err.message });
     if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
@@ -257,15 +347,25 @@ adminRouter.get("/sites/unifi-options", async (_req, res) => {
 });
 
 const SITE_MODES = ["pay_only", "earn_only", "both"];
+const SITE_VERTICALS = ["general", "institution"];
 
-/** POST /api/admin/sites — Body: { id, name, mode?, btcEnabled? }. `id` must match the UniFi site's own short id (see schema.sql's comment on sites.id). */
+/** POST /api/admin/sites — Body: { id, name, mode?, btcEnabled?, vertical? }. `id` must match the UniFi site's own short id (see schema.sql's comment on sites.id). */
 adminRouter.post("/sites", async (req, res) => {
-  const { id, name, mode } = req.body;
+  const { id, name, mode, vertical } = req.body;
   if (!id || !name) {
     return res.status(400).json({ success: false, message: "id and name are required" });
   }
   if (mode !== undefined && !SITE_MODES.includes(mode)) {
     return res.status(400).json({ success: false, message: `mode must be one of ${SITE_MODES.join(", ")}` });
+  }
+  if (vertical !== undefined && !SITE_VERTICALS.includes(vertical)) {
+    return res.status(400).json({ success: false, message: `vertical must be one of ${SITE_VERTICALS.join(", ")}` });
+  }
+  // Institution sites always need at least the earn-access option available
+  // to students — mode/vertical default to "both"/"general" (see
+  // createSite), matching those defaults here.
+  if ((vertical ?? "general") === "institution" && (mode ?? "both") === "pay_only") {
+    return res.status(400).json({ success: false, message: "Institution sites can't be pay-only — students need at least the earn-access option." });
   }
 
   try {
@@ -280,13 +380,28 @@ adminRouter.post("/sites", async (req, res) => {
   }
 });
 
-/** PATCH /api/admin/sites/:id — partial update: name, mode, status, btcEnabled. */
+/** PATCH /api/admin/sites/:id — partial update: name, mode, status, btcEnabled, vertical. */
 adminRouter.patch("/sites/:id", async (req, res) => {
   if (req.body.mode !== undefined && !SITE_MODES.includes(req.body.mode)) {
     return res.status(400).json({ success: false, message: `mode must be one of ${SITE_MODES.join(", ")}` });
   }
+  if (req.body.vertical !== undefined && !SITE_VERTICALS.includes(req.body.vertical)) {
+    return res.status(400).json({ success: false, message: `vertical must be one of ${SITE_VERTICALS.join(", ")}` });
+  }
 
   try {
+    // A PATCH is a partial update — either field alone (switching vertical
+    // to institution on an already-pay_only site, or switching an
+    // institution site's mode to pay_only) must be checked against the
+    // OTHER field's current value, not just what's in this request body.
+    const current = await getSite(req.params.id);
+    if (!current) return res.status(404).json({ success: false, message: "Site not found" });
+    const effectiveVertical = req.body.vertical ?? current.vertical;
+    const effectiveMode = req.body.mode ?? current.mode;
+    if (effectiveVertical === "institution" && effectiveMode === "pay_only") {
+      return res.status(400).json({ success: false, message: "Institution sites can't be pay-only — students need at least the earn-access option." });
+    }
+
     const site = await updateSite(req.params.id, req.body);
     if (!site) return res.status(404).json({ success: false, message: "Site not found" });
     res.json({ success: true, site });

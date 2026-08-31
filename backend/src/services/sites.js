@@ -14,10 +14,10 @@ export async function getSite(id) {
   return rows[0] || null;
 }
 
-export async function createSite({ id, name, mode = "both", btcEnabled = true }) {
+export async function createSite({ id, name, mode = "both", btcEnabled = true, vertical = "general" }) {
   const { rows } = await query(
-    `INSERT INTO sites (id, name, mode, btc_enabled) VALUES ($1, $2, $3, $4) RETURNING *`,
-    [id, name, mode, btcEnabled]
+    `INSERT INTO sites (id, name, mode, btc_enabled, vertical) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    [id, name, mode, btcEnabled, vertical]
   );
   return rows[0];
 }
@@ -27,6 +27,7 @@ const SITE_FIELD_COLUMNS = {
   mode: "mode",
   status: "status",
   btcEnabled: "btc_enabled",
+  vertical: "vertical",
 };
 
 /** Partial update — only fields present in `fields` are touched. Returns null if the id doesn't exist. */

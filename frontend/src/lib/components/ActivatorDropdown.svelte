@@ -124,7 +124,7 @@
       </div>
 
       <!-- List -->
-      <div style="max-height: 220px; overflow-y: auto;">
+      <div class="no-scrollbar" style="max-height: 220px; overflow-y: auto;">
         {#if filtered.length === 0}
           <p class="text-xs text-[#AECAAE] text-center py-6">No activators found</p>
         {:else}

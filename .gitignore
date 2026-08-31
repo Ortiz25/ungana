@@ -2,3 +2,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Reference demo only (from Minmo) — not part of the app, has its own
+# node_modules/.env, never meant to be committed here.
+/sdk-pay-demo/

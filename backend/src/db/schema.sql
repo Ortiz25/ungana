@@ -44,6 +44,15 @@ CREATE TABLE IF NOT EXISTS sites (
 -- behaviour (BTC always offered) unless an admin explicitly turns it off.
 ALTER TABLE sites ADD COLUMN IF NOT EXISTS btc_enabled BOOLEAN NOT NULL DEFAULT true;
 
+-- Which experience this site's frontend renders. 'general' (default) is
+-- today's behaviour, unchanged. 'institution' additionally surfaces the
+-- Notice Board / Campus Events sections (see campus_posts below) for a
+-- college/university deployment — purely additive on top of Watch & Learn,
+-- gated per-site so existing non-institution sites are never affected.
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS vertical TEXT NOT NULL DEFAULT 'general';
+ALTER TABLE sites DROP CONSTRAINT IF EXISTS sites_vertical_check;
+ALTER TABLE sites ADD CONSTRAINT sites_vertical_check CHECK (vertical IN ('general', 'institution'));
+
 DROP TRIGGER IF EXISTS sites_set_updated_at ON sites;
 CREATE TRIGGER sites_set_updated_at
   BEFORE UPDATE ON sites
@@ -491,6 +500,61 @@ ALTER TABLE content_completions ADD CONSTRAINT content_completions_claimed_secs_
 
 CREATE INDEX IF NOT EXISTS idx_content_completions_client ON content_completions(client_id);
 CREATE INDEX IF NOT EXISTS idx_content_completions_unclaimed ON content_completions(client_id) WHERE claimed = false;
+
+-- ── Campus posts (institution sites only) ───────────────────────────────
+-- Notices, official academic/admin releases (exam results, fee deadlines,
+-- circulars — often with an attached document), campus events, exam
+-- timetable entries, and quick-link resources (library, helpdesk, academic
+-- calendar, etc.) for a site with sites.vertical = 'institution'. One table
+-- + a `type` discriminator, same pattern as content_items — but unlike
+-- content_items (visible everywhere unless scoped via a join table), a
+-- campus post always belongs to exactly one site: this content is
+-- inherently site-specific. 'timetable' reuses the event_starts_at/location
+-- columns (an exam slot is structurally a title + time + venue, same as an
+-- event); 'resource' is a static link/contact tile and only really uses
+-- title/body/category/attachment_url (a URL or uploaded document).
+CREATE TABLE IF NOT EXISTS campus_posts (
+  id               SERIAL PRIMARY KEY,
+  site_id          TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  type             TEXT NOT NULL CHECK (type IN ('notice', 'release', 'event', 'timetable', 'resource')),
+  title            TEXT NOT NULL,
+  body             TEXT,
+  category         TEXT,                          -- e.g. 'Exams', 'Fees', 'Library', 'Sports'
+  priority         TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('normal', 'important', 'urgent')),
+  attachment_url   TEXT,                           -- PDF/doc/image via the existing uploads pipeline
+  event_starts_at  TIMESTAMPTZ,                    -- type = 'event' or 'timetable' only
+  event_ends_at    TIMESTAMPTZ,
+  location         TEXT,                           -- type = 'event' or 'timetable' only (exam venue)
+  is_pinned        BOOLEAN NOT NULL DEFAULT false,
+  is_active        BOOLEAN NOT NULL DEFAULT true,
+  sort_order       INTEGER NOT NULL DEFAULT 0,
+  published_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Idempotent widening for a DB that already had campus_posts before
+-- 'timetable'/'resource' existed — CREATE TABLE IF NOT EXISTS above is a
+-- no-op there, so the inline CHECK needs re-applying under its
+-- auto-generated name to actually take effect.
+ALTER TABLE campus_posts DROP CONSTRAINT IF EXISTS campus_posts_type_check;
+ALTER TABLE campus_posts ADD CONSTRAINT campus_posts_type_check
+  CHECK (type IN ('notice', 'release', 'event', 'timetable', 'resource'));
+
+DROP TRIGGER IF EXISTS campus_posts_set_updated_at ON campus_posts;
+CREATE TRIGGER campus_posts_set_updated_at
+  BEFORE UPDATE ON campus_posts
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_campus_posts_site_active ON campus_posts(site_id, is_active, type);
+
+-- Gallery photos for a 'event' post's Past Events detail carousel —
+-- attachment_url stays the single cover image used in the compact card;
+-- this holds the additional photos shown once opened. A plain JSON array of
+-- URLs (via the same uploads pipeline as attachment_url) rather than a
+-- join table — there's no need to query/filter individual images, only
+-- ever read/written as a whole alongside their post.
+ALTER TABLE campus_posts ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 -- ── Escalations ──────────────────────────────────────────────────────────
 -- Issues a coordinator raises — either self-reported (e.g. a network
