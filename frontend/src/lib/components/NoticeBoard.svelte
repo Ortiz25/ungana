@@ -1,20 +1,42 @@
 <script>
   // Institution-only Notice Board — notices + official releases (exam
   // results, fee deadlines, circulars) for a site with vertical =
-  // 'institution'. `posts` is already scoped/sorted by the backend
+  // 'institution'. `posts` (current, not-yet-expired) and `pastPosts`
+  // (expired — TimelineScreen splits on event_starts_at, an optional
+  // "relevant until" date; see its filteredCurrentNotices/
+  // filteredPastNotices) are both already scoped/sorted by the backend
   // (GET /api/campus/posts — pinned first, then newest; see
-  // services/campusPosts.js's listActivePosts). Shown as a featured,
-  // centered trigger card (with an overlapping pin icon) in the Campus
-  // feed's Quick Links row; tapping it opens a modal with the full
-  // scrollable, interactive list. Uses the Campus tab's dark green/gold
-  // palette throughout.
+  // services/campusPosts.js's listActivePosts). Shown as its own full-width
+  // banner section in the Campus feed (see TimelineScreen), not sharing a
+  // grid cell with Quick Links, with an explicit "View all" call-to-action
+  // and an urgent-count badge so a student's eye actually lands here first;
+  // tapping it opens a modal with the full scrollable, interactive list,
+  // with a Current/Past tab when there's anything to show on the Past side.
+  // Uses the Campus tab's dark green/gold palette throughout.
   import { onMount } from 'svelte';
-  import { Pin, FileText, Megaphone, ExternalLink, ChevronDown, X } from '@lucide/svelte';
+  import { Pin, FileText, Megaphone, ExternalLink, ChevronDown, ChevronRight, Search, X } from '@lucide/svelte';
 
-  let { posts = [] } = $props();
+  let { posts = [], pastPosts = [] } = $props();
 
   let modalOpen = $state(false);
   let expandedId = $state(null);
+  let activeTab = $state('current'); // 'all' | 'current' | 'past'
+  // 'all' concatenates rather than re-sorts — posts and pastPosts are each
+  // already pinned-first/newest-first from the backend, so current notices
+  // (the more actionable half) simply lead, with past ones trailing.
+  const visiblePosts = $derived(
+    activeTab === 'all' ? [...posts, ...pastPosts] : activeTab === 'current' ? posts : pastPosts
+  );
+
+  // Matches on title/category/body — same fields the top-level Campus
+  // search and Exam Timetable's own search already match on, so filtering
+  // behaves consistently everywhere in the Campus tab.
+  let query = $state('');
+  const filteredVisiblePosts = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return visiblePosts;
+    return visiblePosts.filter((p) => [p.title, p.category, p.body].some((f) => (f || '').toLowerCase().includes(q)));
+  });
 
   // static/pin.webp is a stock photo flattened onto a plain white square
   // (with a faint diagonal watermark baked into that white), not a real
@@ -75,6 +97,10 @@
   function openModal() {
     modalOpen = true;
     expandedId = null;
+    query = '';
+    // Land on whichever tab actually has something — e.g. a site with only
+    // expired notices right now shouldn't open onto an empty Current list.
+    activeTab = posts.length > 0 ? 'current' : 'past';
   }
   function closeModal() {
     modalOpen = false;
@@ -97,43 +123,59 @@
   // The top (pinned/newest) notice previews on the trigger card — posts is
   // already sorted pinned-first by the backend.
   const topPost = $derived(posts[0]);
+  const urgentCount = $derived(posts.filter((p) => p.priority === 'urgent').length);
 </script>
 
 <svelte:window onkeydown={modalOpen ? handleKeydown : undefined} />
 
-{#if posts.length > 0}
-  <div class="relative w-full">
-    <p class="text-xs font-semibold uppercase tracking-wider mb-4 text-center" style="color: #9ca3af;">Notice Board</p>
-    <div class="relative">
-      <!-- Real pushpin photo (frontend/static/pin.webp) rather than a
-           drawn icon/SVG, centered above the card like the earlier
-           hand-drawn pins. pinSrc is the flood-fill cutout built in
-           onMount (see script) — mix-blend-mode alone crushed the yellow
-           to near-black against this dark card, so this needs a real
-           cutout rather than a blend trick. -->
-      <img
-        src={pinSrc}
-        alt=""
-        aria-hidden="true"
-        class="absolute -top-5 left-1/2 z-20 -translate-x-1/2 pointer-events-none select-none"
-        style="width: 44px; height: auto; filter: drop-shadow(0 4px 5px rgba(0,0,0,0.45));"
-      />
-      <button
-        type="button"
-        onclick={openModal}
-        class="w-full text-center rounded-xl pt-8 px-5 pb-5 transition-all active:scale-[0.99] flex flex-col justify-center"
-        style="background: #0d2317; border: 1px solid #1c472e; box-shadow: 0 10px 30px rgba(0,0,0,0.35); min-height: 104px;"
-      >
-        <div class="flex items-center justify-center gap-1.5">
-          {#if topPost?.priority === 'urgent'}
-            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: #C45C38;"></span>
+{#if posts.length > 0 || pastPosts.length > 0}
+  <button
+    type="button"
+    onclick={openModal}
+    class="notice-banner w-full text-left rounded-2xl overflow-hidden relative transition-all active:scale-[0.99]"
+    style="background: linear-gradient(135deg, #123420, #0d2317 65%); border: 1px solid #1c472e; box-shadow: 0 10px 30px rgba(0,0,0,0.35);"
+  >
+    <!-- Soft gold glow in the corner rather than a literal pin illustration
+         dominating the card — reads as a dashboard banner, not a bulletin
+         board photo, while the pin graphic itself moves into the icon tile
+         below (still the flood-fill cutout built in onMount; see script). -->
+    <div class="absolute inset-0 pointer-events-none" style="background: radial-gradient(circle at 88% -20%, rgba(212,175,106,0.22), transparent 60%);"></div>
+    <div class="relative flex items-center gap-3.5 px-5 py-4">
+      <div class="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style="background: linear-gradient(135deg, #d4af6a, #8b6a35);">
+        <img
+          src={pinSrc}
+          alt=""
+          aria-hidden="true"
+          style="width: 20px; height: auto; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.4));"
+        />
+      </div>
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2 flex-wrap mb-1">
+          <p class="text-xs font-bold uppercase tracking-wider" style="color: #c29d53;">Notice Board</p>
+          {#if urgentCount > 0}
+            <span class="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" style="background: rgba(196,92,56,0.22); color: #E08A6A;">
+              {urgentCount} urgent
+            </span>
           {/if}
-          <h3 class="text-sm font-bold" style="color: #f3f4f6;">{posts.length} notice{posts.length === 1 ? '' : 's'}:</h3>
         </div>
-        <p class="text-xs mt-1" style="color: #9ca3af;">{topPost?.title}</p>
-      </button>
+        {#if posts.length > 0}
+          <p class="text-sm font-semibold leading-snug truncate" style="color: #f3f4f6;">{topPost?.title}</p>
+        {:else}
+          <p class="text-sm font-semibold leading-snug truncate" style="color: #9ca3af;">No current notices</p>
+        {/if}
+      </div>
+      <div class="flex flex-col items-end gap-1.5 shrink-0">
+        <span class="text-[10px] font-bold px-2.5 py-1.5 rounded-full flex items-center gap-1" style="background: rgba(194,157,83,0.18); color: #c29d53;">
+          View all <ChevronRight size={11} />
+        </span>
+        {#if posts.length > 0}
+          <span class="text-[10px]" style="color: #6b7280;">{posts.length} notice{posts.length === 1 ? '' : 's'}</span>
+        {:else}
+          <span class="text-[10px]" style="color: #6b7280;">{pastPosts.length} past</span>
+        {/if}
+      </div>
     </div>
-  </div>
+  </button>
 {/if}
 
 {#if modalOpen}
@@ -152,7 +194,7 @@
       <div class="flex items-center justify-between px-5 pt-5 pb-3 shrink-0" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
         <div>
           <p class="text-[10px] font-bold uppercase tracking-[0.2em]" style="color: #c29d53;">Notice Board</p>
-          <p class="text-[11px] mt-0.5" style="color: #9ca3af;">{posts.length} notice{posts.length === 1 ? '' : 's'}</p>
+          <p class="text-[11px] mt-0.5" style="color: #9ca3af;">{filteredVisiblePosts.length} of {visiblePosts.length} notices</p>
         </div>
         <button
           onclick={closeModal}
@@ -164,8 +206,64 @@
         </button>
       </div>
 
-      <div class="px-5 py-4 overflow-y-auto flex flex-col gap-2.5">
-        {#each posts as post (post.id)}
+      <!-- Always visible (not just once a notice has actually expired) so
+           the filter is a discoverable, standing part of the modal rather
+           than something that only appears once Past has content. -->
+      <div class="flex gap-2 px-5 pt-3 shrink-0">
+        <button
+          onclick={() => (activeTab = 'all')}
+          class="px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors"
+          style={activeTab === 'all'
+            ? 'background: #c29d53; color: #0b1e13;'
+            : 'background: #0a1b11; border: 1px solid #163a23; color: #9ca3af;'}
+        >
+          All ({posts.length + pastPosts.length})
+        </button>
+        <button
+          onclick={() => (activeTab = 'current')}
+          class="px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors"
+          style={activeTab === 'current'
+            ? 'background: #c29d53; color: #0b1e13;'
+            : 'background: #0a1b11; border: 1px solid #163a23; color: #9ca3af;'}
+        >
+          Current ({posts.length})
+        </button>
+        <button
+          onclick={() => (activeTab = 'past')}
+          class="px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors"
+          style={activeTab === 'past'
+            ? 'background: #c29d53; color: #0b1e13;'
+            : 'background: #0a1b11; border: 1px solid #163a23; color: #9ca3af;'}
+        >
+          Past ({pastPosts.length})
+        </button>
+      </div>
+
+      <div class="px-5 pt-3 pb-3 shrink-0">
+        <div class="flex items-center gap-2 rounded-lg px-3.5 py-2.5 search-box" style="background: #0a1b11; border: 1px solid #163a23;">
+          <Search size={14} color="#c29d53" class="shrink-0" />
+          <input
+            bind:value={query}
+            type="text"
+            placeholder="Search notices…"
+            class="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder-[#6b7280]"
+            style="color: #e5e7eb;"
+          />
+          {#if query}
+            <button onclick={() => (query = '')} aria-label="Clear search" class="shrink-0">
+              <X size={13} color="#9ca3af" />
+            </button>
+          {/if}
+        </div>
+      </div>
+
+      <div class="px-5 pb-4 overflow-y-auto flex flex-col gap-2.5">
+        {#if filteredVisiblePosts.length === 0}
+          <p class="text-sm text-center py-8" style="color: #9ca3af;">
+            {query ? `No notices match "${query}".` : activeTab === 'all' ? 'No notices yet.' : `No ${activeTab} notices.`}
+          </p>
+        {:else}
+        {#each filteredVisiblePosts as post (post.id)}
           {@const color = PRIORITY_COLOR[post.priority] ?? PRIORITY_COLOR.normal}
           {@const open = expandedId === post.id}
           <button
@@ -201,6 +299,13 @@
 
             {#if open}
               <div class="px-4 pb-4" style="padding-left: 3.25rem;">
+                {#if post.event_starts_at}
+                  <!-- Judged per-post rather than off activeTab — on the
+                       All tab, current and past notices sit side by side. -->
+                  <p class="text-[11px] mb-2" style="color: #9ca3af;">
+                    {new Date(post.event_starts_at) < new Date() ? 'Expired' : 'Relevant until'} {formatDate(post.event_starts_at)}
+                  </p>
+                {/if}
                 {#if post.body}
                   <p class="text-[12.5px] leading-relaxed mb-3" style="color: #d1d5db;">{post.body}</p>
                 {/if}
@@ -220,12 +325,19 @@
             {/if}
           </button>
         {/each}
+        {/if}
       </div>
     </div>
   </div>
 {/if}
 
 <style>
+  .notice-banner:hover {
+    border-color: #2a5c3a !important;
+  }
+  .search-box:focus-within {
+    border-color: #c29d53 !important;
+  }
   .modal-pop {
     animation: notice-modal-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
   }

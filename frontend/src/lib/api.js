@@ -131,6 +131,11 @@ export function getCampusPosts(site, type) {
   return request(`/campus/posts?${params}`);
 }
 
+/** POST /api/campus/posts/:id/click — fire-and-forget tap count for a Quick Links tile, analytics only. */
+export function recordCampusPostClick(id) {
+  return request(`/campus/posts/${encodeURIComponent(id)}/click`, { method: 'POST', body: JSON.stringify({}) });
+}
+
 /** GET /api/content/completions?mac=X&site=Y — items this device has already finished, for UI restore after reload. */
 export function getContentCompletions(mac, site) {
   const params = new URLSearchParams({ mac, ...(site ? { site } : {}) });

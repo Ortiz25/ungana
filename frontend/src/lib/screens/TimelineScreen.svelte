@@ -6,7 +6,7 @@
   import NoticeBoard from '$lib/components/NoticeBoard.svelte';
   import CampusEventsStrip from '$lib/components/CampusEventsStrip.svelte';
   import ExamTimetable from '$lib/components/ExamTimetable.svelte';
-  import CampusResources from '$lib/components/CampusResources.svelte';
+  import QuickLinksBoard from '$lib/components/QuickLinksBoard.svelte';
   import PastEvents from '$lib/components/PastEvents.svelte';
   import {
     TL_FEATURED,
@@ -57,6 +57,13 @@
   // above (that's just the id string read from the URL).
   let siteInfo = $state(null);
   const isInstitution = $derived(siteInfo?.vertical === 'institution');
+  // True once we know one way or the other whether this is an institution
+  // site — starts true when there's no site id at all (dev/local, nothing
+  // to resolve). Gates which half of the feed renders below so the general
+  // Watch & Earn view can't flash on screen by default while `isInstitution`
+  // is still sitting at its initial `false` during the getSite() round trip
+  // (see onMount).
+  let siteResolved = $state(!site);
   let campusNotices = $state([]);
   let campusEvents = $state([]);
   let campusTimetable = $state([]);
@@ -80,15 +87,50 @@
   // needing to open each section separately. Matches on the raw arrays
   // (pre-split by type) so a single query reaches everything.
   let campusQuery = $state('');
-  function matchesCampusQuery(post) {
+  // Category pill filter — 'all' plus whatever distinct, non-empty
+  // `category` values are actually present across the site's posts. There's
+  // no fixed taxonomy on campus_posts (admins type whatever they want), so
+  // the pills are derived from the *unfiltered* data rather than hardcoded,
+  // and only ever show categories real content exists for.
+  let campusCategory = $state('all');
+  const campusCategories = $derived.by(() => {
+    const seen = new Map(); // lowercase -> first-seen original casing, for a stable display label
+    for (const post of [...campusNotices, ...campusEvents, ...campusTimetable, ...campusResources]) {
+      const c = (post.category || '').trim();
+      if (c && !seen.has(c.toLowerCase())) seen.set(c.toLowerCase(), c);
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  });
+  function matchesCampusFilters(post) {
+    if (campusCategory !== 'all' && (post.category || '').toLowerCase() !== campusCategory.toLowerCase()) return false;
     const q = campusQuery.trim().toLowerCase();
     if (!q) return true;
     return [post.title, post.category, post.location, post.body].some((f) => (f || '').toLowerCase().includes(q));
   }
-  const filteredCampusNotices = $derived(campusNotices.filter(matchesCampusQuery));
-  const filteredCampusTimetable = $derived(campusTimetable.filter(matchesCampusQuery));
-  const filteredCampusEvents = $derived(campusEvents.filter(matchesCampusQuery));
-  const filteredCampusResources = $derived(campusResources.filter(matchesCampusQuery));
+  const filteredCampusNotices = $derived(campusNotices.filter(matchesCampusFilters));
+  // A notice's event_starts_at is optional and, when set, means "relevant
+  // until" rather than a scheduled time (see AdminDashboardScreen's
+  // campusDraftToBody) — an evergreen notice (no date at all) never counts
+  // as past. Split rather than dropped outright: past notices stay
+  // reachable through NoticeBoard's own "Past" tab (see its pastPosts
+  // prop), just out of the way of the current, actionable ones.
+  const filteredCurrentNotices = $derived(
+    filteredCampusNotices.filter((n) => !n.event_starts_at || new Date(n.event_starts_at) >= new Date())
+  );
+  const filteredPastNotices = $derived(
+    filteredCampusNotices.filter((n) => n.event_starts_at && new Date(n.event_starts_at) < new Date())
+  );
+  const filteredCampusTimetable = $derived(campusTimetable.filter(matchesCampusFilters));
+  const filteredCampusEvents = $derived(campusEvents.filter(matchesCampusFilters));
+  const filteredCampusResources = $derived(campusResources.filter(matchesCampusFilters));
+  // Exam Timetable only ever shows exams that haven't happened yet — a
+  // finished exam is no longer actionable for a student, and keeping it
+  // around would just dilute both the trigger card's "next exam" preview
+  // and the modal's (potentially long, see ExamTimetable.svelte) list.
+  // Same "ends_at falls back to starts_at" rule as the events split below.
+  const filteredUpcomingTimetable = $derived(
+    filteredCampusTimetable.filter((t) => new Date(t.event_ends_at ?? t.event_starts_at) >= new Date())
+  );
   // Split into upcoming (CampusEventsStrip, soonest-first — already the
   // backend's sort) vs past (PastEvents, most-recent-first — a browsable
   // highlights feed reads better newest-to-oldest than the reverse). An
@@ -103,11 +145,22 @@
       .sort((a, b) => new Date(b.event_starts_at) - new Date(a.event_starts_at))
   );
   const campusHasAnyResults = $derived(
-    filteredCampusNotices.length > 0 ||
-      filteredCampusTimetable.length > 0 ||
+    filteredCurrentNotices.length > 0 ||
+      filteredUpcomingTimetable.length > 0 ||
       filteredCampusEvents.length > 0 ||
       filteredCampusResources.length > 0
   );
+
+  // Time-of-day + username greeting for the Campus tab header, replacing
+  // the generic "Your Campus" so it reads like a personal dashboard rather
+  // than a static bulletin board. Falls back to just the time-based part
+  // when there's no username yet (device hasn't claimed/connected before —
+  // see getUsernameForMac in onMount).
+  function campusGreeting() {
+    const h = new Date().getHours();
+    const time = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+    return username ? `${time}, ${username}` : time;
+  }
 
   function formatEarnLabel(secs) {
     const h = Math.floor(secs / 3600);
@@ -277,10 +330,22 @@
   onMount(async () => {
     mac = getClientMac();
 
-    const result = await getContent(site);
-    if (result.ok && result.data?.items?.length) liveItems = result.data.items;
+    // Fired in parallel rather than the old sequential await-chain — that
+    // chain put getSite() last, behind three unrelated round trips, so
+    // `isInstitution` (and therefore which half of the feed renders) stayed
+    // wrong for the sum of all three before finally correcting itself. All
+    // still resolve to { ok: false } rather than throwing on failure (see
+    // api.js's request()), so Promise.all here can't reject.
+    const [contentResult, completionsResult, settingsResult, siteResult, usernameResult] = await Promise.all([
+      getContent(site),
+      getContentCompletions(mac, site),
+      getSettings(),
+      site ? getSite(site) : Promise.resolve(null),
+      getUsernameForMac(mac)
+    ]);
 
-    const completionsResult = await getContentCompletions(mac, site);
+    if (contentResult.ok && contentResult.data?.items?.length) liveItems = contentResult.data.items;
+
     const rows = completionsResult.ok ? (completionsResult.data?.completions ?? []) : [];
     completedIds = new Set(rows.map((r) => r.content_item_id));
     // Server-computed across every period, not summed from `rows` above —
@@ -290,27 +355,24 @@
     // forward) would silently disappear from a client-side sum.
     realUnclaimedSecs = completionsResult.ok ? (completionsResult.data?.unclaimedSecs ?? 0) : 0;
 
-    const settingsResult = await getSettings();
     if (settingsResult.ok && Number.isFinite(settingsResult.data?.earnConnectThresholdSecs)) {
       connectThresholdSecs = settingsResult.data.earnConnectThresholdSecs;
     }
 
-    if (site) {
-      const siteResult = await getSite(site);
-      if (siteResult.ok && siteResult.data?.site) {
-        siteInfo = siteResult.data.site;
-        if (siteInfo.vertical === 'institution') {
-          const postsResult = await getCampusPosts(site);
-          const allPosts = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
-          campusNotices = allPosts.filter((p) => p.type === 'notice' || p.type === 'release');
-          campusEvents = allPosts.filter((p) => p.type === 'event');
-          campusTimetable = allPosts.filter((p) => p.type === 'timetable');
-          campusResources = allPosts.filter((p) => p.type === 'resource');
-        }
-      }
+    if (siteResult?.ok && siteResult.data?.site) siteInfo = siteResult.data.site;
+    // Known one way or the other now — safe to let the main feed decide
+    // which layout to render (see the template's siteResolved guard).
+    siteResolved = true;
+
+    if (siteInfo?.vertical === 'institution') {
+      const postsResult = await getCampusPosts(site);
+      const allPosts = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
+      campusNotices = allPosts.filter((p) => p.type === 'notice' || p.type === 'release');
+      campusEvents = allPosts.filter((p) => p.type === 'event');
+      campusTimetable = allPosts.filter((p) => p.type === 'timetable');
+      campusResources = allPosts.filter((p) => p.type === 'resource');
     }
 
-    const usernameResult = await getUsernameForMac(mac);
     if (usernameResult.ok && usernameResult.data?.username) {
       username = usernameResult.data.username;
       usernameLocked = true;
@@ -1255,10 +1317,10 @@
       <div class="px-4 pt-5 pb-6">
         <p class="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] mb-1" style="color: #c29d53;">
           <span class="w-1.5 h-1.5 rounded-full" style="background: #c29d53; animation: cart-ready-ping 1.8s ease-in-out infinite;"></span>
-          Campus Hub
+          {siteInfo?.name ?? 'Campus Hub'}
         </p>
         <h1 class="text-2xl font-bold mb-4" style="color: #f3f4f6; font-family: 'Playfair Display', serif;">
-          {siteInfo?.name ?? 'Your Campus'}
+          {campusGreeting()}
         </h1>
         <div class="campus-search flex items-center gap-2 rounded-lg px-3.5 py-2.5 max-w-md mx-auto" style="background: #0a1b11; border: 1px solid #163a23;">
           <Search size={13} color="#6b7280" class="shrink-0" />
@@ -1275,31 +1337,48 @@
             </button>
           {/if}
         </div>
+        {#if campusCategories.length > 1}
+          <!-- Only worth showing once there's more than one real category in
+               the data — a single-category site gets no value from a pill
+               bar that can only ever say "All" / one other option. -->
+          <div class="flex gap-2 overflow-x-auto no-scrollbar pt-3 max-w-md mx-auto" role="group" aria-label="Filter by category">
+            <button
+              onclick={() => (campusCategory = 'all')}
+              class="shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors"
+              style={campusCategory === 'all'
+                ? 'background: #c29d53; color: #0b1e13;'
+                : 'background: #0a1b11; border: 1px solid #163a23; color: #9ca3af;'}
+            >
+              All
+            </button>
+            {#each campusCategories as cat (cat)}
+              <button
+                onclick={() => (campusCategory = cat)}
+                class="shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors"
+                style={campusCategory === cat
+                  ? 'background: #c29d53; color: #0b1e13;'
+                  : 'background: #0a1b11; border: 1px solid #163a23; color: #9ca3af;'}
+              >
+                {cat}
+              </button>
+            {/each}
+          </div>
+        {/if}
       </div>
 
       <div class="px-4 pb-6 flex flex-col gap-6">
-        <!-- Quick Links + Notice Board, interleaved into one row: Notice
-             Board sits centered between the first two resource tiles (the
-             common case), matching the reference design; any further
-             resources just continue wrapping in the grid below. -->
-        {#if filteredCampusResources.length > 0 || filteredCampusNotices.length > 0}
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
-            {#each filteredCampusResources as res, i (res.id)}
-              <div class="flex flex-col">
-                {#if i === 0}
-                  <h2 class="text-xs font-semibold uppercase tracking-wider mb-2 pl-1" style="color: #9ca3af;">Quick links</h2>
-                {:else}
-                  <div class="hidden md:block h-6"></div>
-                {/if}
-                <CampusResources post={res} />
-              </div>
-              {#if i === 0 && filteredCampusNotices.length > 0}
-                <NoticeBoard posts={filteredCampusNotices} />
-              {/if}
-            {/each}
-            {#if filteredCampusResources.length === 0 && filteredCampusNotices.length > 0}
-              <NoticeBoard posts={filteredCampusNotices} />
-            {/if}
+        <!-- Notice Board — its own full-width section, above Quick Links,
+             so an urgent institutional notice (exam results, fee deadline,
+             circular) gets the visual weight and explicit call-to-action it
+             deserves instead of sharing a grid cell with a resource tile. -->
+        {#if filteredCurrentNotices.length > 0 || filteredPastNotices.length > 0}
+          <NoticeBoard posts={filteredCurrentNotices} pastPosts={filteredPastNotices} />
+        {/if}
+
+        {#if filteredCampusResources.length > 0}
+          <div class="flex flex-col">
+            <h2 class="text-xs font-semibold uppercase tracking-wider mb-2 pl-1" style="color: #9ca3af;">Quick links</h2>
+            <QuickLinksBoard posts={filteredCampusResources} />
           </div>
         {/if}
 
@@ -1308,12 +1387,12 @@
              — no items-start override here — plus h-full on each column
              and its component, so a single short event card doesn't look
              stunted next to the timetable trigger). -->
-        {#if filteredCampusTimetable.length > 0 || filteredUpcomingEvents.length > 0}
+        {#if filteredUpcomingTimetable.length > 0 || filteredUpcomingEvents.length > 0}
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {#if filteredCampusTimetable.length > 0}
+            {#if filteredUpcomingTimetable.length > 0}
               <div class="flex flex-col h-full">
                 <h2 class="text-xs font-semibold uppercase tracking-wider mb-2 pl-1" style="color: #9ca3af;">Exam timetable</h2>
-                <ExamTimetable posts={filteredCampusTimetable} />
+                <ExamTimetable posts={filteredUpcomingTimetable} />
               </div>
             {/if}
             {#if filteredUpcomingEvents.length > 0}
@@ -1338,13 +1417,18 @@
         {#if !campusHasAnyResults}
           <div class="pt-6 pb-4 text-center">
             <p class="text-sm" style="color: #6b7280;">
-              {campusQuery ? `Nothing matches "${campusQuery}".` : 'Nothing posted here yet — check back soon.'}
+              {#if campusQuery}
+                Nothing matches "{campusQuery}".
+              {:else if campusCategory !== 'all'}
+                Nothing in {campusCategory} yet.
+              {:else}
+                Nothing posted here yet — check back soon.
+              {/if}
             </p>
           </div>
         {/if}
       </div>
-    {/if}
-    {#if !isInstitution || campusView === 'watch'}
+    {:else if siteResolved && (!isInstitution || campusView === 'watch')}
       <!-- Hero section -->
       {#if featured}
         <div class="px-4 pt-4 pb-6" style="background: #1D3C2A;">
@@ -1449,6 +1533,15 @@
           </div>
         {/if}
       </div>
+    {:else}
+      <!-- Still waiting on getSite() to know whether this is an institution
+           site — hold off rendering the general feed instead of defaulting
+           to it, so it can't flash on screen before the Campus tab takes
+           over (see siteResolved in onMount). Only reachable when `site`
+           is set, so this never shows in local dev. -->
+      <div class="flex items-center justify-center py-24">
+        <div class="w-6 h-6 rounded-full border-2 border-[#E8D4B0]/30 border-t-[#E8D4B0] animate-spin"></div>
+      </div>
     {/if}
     </div>
 
@@ -1520,7 +1613,10 @@
           </div>
           {#if canConnect}
             <button
-              onclick={handleConnect}
+              onclick={() => {
+                claimAmountMinutes = Math.floor(realUnclaimedSecs / 60);
+                showEarnedModal = true;
+              }}
               disabled={connecting}
               class="px-4 py-2.5 rounded-2xl font-bold text-sm text-white flex items-center gap-1.5 active:scale-95 transition-all shrink-0"
               style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {connecting ? 0.7 : 1};"

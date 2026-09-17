@@ -4,11 +4,12 @@
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
     ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
     BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft, Bitcoin, Trash2,
-    Megaphone, Pin, Calendar, GraduationCap, ClipboardCheck, Link2
+    Megaphone, Pin, Calendar, GraduationCap, ClipboardCheck, Link2, MousePointerClick
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import MultiLineChartMini from '$lib/components/MultiLineChartMini.svelte';
   import AdminModal from '$lib/components/AdminModal.svelte';
+  import { RESOURCE_CATEGORIES } from '$lib/campusResourceCategories.js';
   import {
     adminGetContent, adminCreateContent, adminUpdateContent,
     adminGetActivators, adminCreateActivator, adminUpdateActivator,
@@ -508,6 +509,13 @@
 
   function campusDraftToBody(draft) {
     const hasSchedule = CAMPUS_TYPES_WITH_SCHEDULE.includes(draft.type);
+    // Notices/releases reuse the same event_starts_at column as an optional
+    // "relevant until" date — e.g. "Library closes early this Friday" stays
+    // current through Friday, then TimelineScreen's filteredCurrentNotices
+    // treats it as past. No eventEndsAt/location for these — those stay
+    // event/timetable-only (an exam/event has a venue and a duration; a
+    // notice doesn't).
+    const hasExpiry = CAMPUS_TYPES_WITH_PRIORITY.includes(draft.type);
     return {
       siteId: draft.siteId,
       type: draft.type,
@@ -516,7 +524,7 @@
       category: draft.category.trim() || undefined,
       priority: draft.priority,
       attachmentUrl: draft.attachmentUrl.trim() || undefined,
-      eventStartsAt: hasSchedule && draft.eventStartsAt ? new Date(draft.eventStartsAt).toISOString() : undefined,
+      eventStartsAt: (hasSchedule || hasExpiry) && draft.eventStartsAt ? new Date(draft.eventStartsAt).toISOString() : undefined,
       eventEndsAt: hasSchedule && draft.eventEndsAt ? new Date(draft.eventEndsAt).toISOString() : undefined,
       location: hasSchedule ? draft.location.trim() || undefined : undefined,
       isPinned: draft.isPinned,
@@ -1603,6 +1611,26 @@
           </div>
           {@render inputField('Title', campusDraft.title, (e) => (campusDraft.title = e.currentTarget.value))}
           {@render inputField('Category (optional)', campusDraft.category, (e) => (campusDraft.category = e.currentTarget.value), { placeholder: 'e.g. Exams, Fees, Library' })}
+          {#if campusDraft.type === 'resource'}
+            <!-- Quick-select writes straight into the same freeform Category
+                 field above — it's a shortcut, not a separate/restricted
+                 field, so a service that doesn't fit one of these can still
+                 just be typed in directly. Matching these exact labels is
+                 also what gives the student-facing tile its icon/color (see
+                 campusResourceCategories.js's matchResourceCategory). -->
+            <div class="flex gap-1.5 flex-wrap -mt-2">
+              {#each RESOURCE_CATEGORIES as c (c.id)}
+                <button
+                  type="button"
+                  onclick={() => (campusDraft.category = c.label)}
+                  class="px-2.5 py-1 rounded-full text-[10px] font-semibold"
+                  style="background: {campusDraft.category === c.label ? c.color : 'rgba(255,255,255,0.1)'}; color: {campusDraft.category === c.label ? '#fdf6e3' : '#C4DAC0'};"
+                >
+                  {c.label}
+                </button>
+              {/each}
+            </div>
+          {/if}
           <div>
             <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Body</p>
             <textarea
@@ -1630,6 +1658,8 @@
                 {/each}
               </div>
             </div>
+            {@render inputField('Relevant until (optional)', campusDraft.eventStartsAt, (e) => (campusDraft.eventStartsAt = e.currentTarget.value), { type: 'datetime-local' })}
+            <p class="text-[10px] text-[#AECAAE] -mt-2">Leave blank for a notice with no expiry — set it for a time-bound one (e.g. "Library closes early this Friday") and it'll automatically move to Past once that time passes.</p>
           {:else if CAMPUS_TYPES_WITH_SCHEDULE.includes(campusDraft.type)}
             <div class="grid grid-cols-2 gap-3">
               {@render inputField(campusDraft.type === 'timetable' ? 'Exam starts' : 'Starts', campusDraft.eventStartsAt, (e) => (campusDraft.eventStartsAt = e.currentTarget.value), { type: 'datetime-local' })}
@@ -1699,6 +1729,11 @@
                 {#if post.category} · {post.category}{/if}
                 {#if post.is_pinned} · Pinned{/if}
               </p>
+              {#if post.type === 'resource'}
+                <p class="text-[10px] text-[#96B496] flex items-center gap-1 mt-0.5">
+                  <MousePointerClick size={9} />{Number(post.clicks ?? 0).toLocaleString()} clicks
+                </p>
+              {/if}
             </div>
             <div class="flex flex-col gap-1.5 shrink-0 items-end">
               <button

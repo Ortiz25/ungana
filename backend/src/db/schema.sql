@@ -556,6 +556,12 @@ CREATE INDEX IF NOT EXISTS idx_campus_posts_site_active ON campus_posts(site_id,
 -- ever read/written as a whole alongside their post.
 ALTER TABLE campus_posts ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'::jsonb;
 
+-- Aggregate tap count for a 'resource' (Quick Links) tile — same pattern as
+-- content_items.impressions: an aggregate counter, not per-client records,
+-- incremented via POST /api/campus/posts/:id/click. Lets an admin see which
+-- campus services students actually use and retire/replace dead ones.
+ALTER TABLE campus_posts ADD COLUMN IF NOT EXISTS clicks BIGINT NOT NULL DEFAULT 0;
+
 -- ── Escalations ──────────────────────────────────────────────────────────
 -- Issues a coordinator raises — either self-reported (e.g. a network
 -- problem) or attributed to one of their activators (e.g. "this activator

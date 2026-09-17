@@ -121,3 +121,8 @@ export async function deactivateCampusPost(id) {
   const { rows } = await query(`UPDATE campus_posts SET is_active = false WHERE id = $1 RETURNING *`, [id]);
   return rows[0] || null;
 }
+
+/** Increments a resource (Quick Links) tile's tap counter — same pattern as content.js's recordImpression. */
+export async function recordCampusPostClick(id) {
+  await query(`UPDATE campus_posts SET clicks = clicks + 1 WHERE id = $1`, [id]);
+}
