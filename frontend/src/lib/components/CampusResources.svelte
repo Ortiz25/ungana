@@ -16,8 +16,6 @@
   import { matchResourceCategory } from '$lib/campusResourceCategories.js';
   import { recordCampusPostClick } from '$lib/api.js';
 
-  let { post } = $props();
-
   const CATEGORY_ICON = {
     library: BookOpen,
     it: Laptop,
@@ -32,15 +30,43 @@
     general: Link2
   };
 
-  const category = $derived(matchResourceCategory(post.category, post.title));
-  const Icon = $derived(CATEGORY_ICON[category.id] ?? Link2);
+  const DEFAULT_THEME = {
+    bg: '#0b1e13',
+    border: '#12301e',
+    accent: '#c29d53',
+    hoverBorder: '#1c492e',
+    pinnedHoverBorder: '#d4af6a'
+  };
+
+  let {
+    post,
+    theme = DEFAULT_THEME,
+    matchCategory = matchResourceCategory,
+    categoryIcons = CATEGORY_ICON,
+    recordClick = recordCampusPostClick,
+    onOpen = undefined
+  } = $props();
+
+  const category = $derived(matchCategory(post.category, post.title));
+  const Icon = $derived(categoryIcons[category.id] ?? Link2);
 
   // Fire-and-forget usage signal for the admin's Quick Links click counts
-  // (see campus.js's POST /posts/:id/click) — never blocks the outbound
+  // (see campus.js's POST /posts/:id/click, or community.js's for a reused
+  // call site — see `recordClick` above) — never blocks the outbound
   // navigation, and skipped entirely for a tile with nothing to actually
-  // click through to.
-  function handleClick() {
-    if (post.attachment_url) recordCampusPostClick(post.id);
+  // click through to. When `onOpen` is given (Community's Local Services —
+  // see QuickLinksBoard's `detailModal` prop), the tile opens a detail
+  // sheet instead of navigating straight out, and the click is recorded
+  // from that sheet's own contact button instead, same as
+  // MarketplaceBoard's "Contact Seller" — a tap on the tile itself is just
+  // browsing, not yet a real engagement with the business.
+  function handleClick(e) {
+    if (onOpen) {
+      e.preventDefault();
+      onOpen(post);
+      return;
+    }
+    if (post.attachment_url) recordClick(post.id);
   }
 </script>
 
@@ -51,11 +77,11 @@
   onclick={handleClick}
   class="quick-link-tile group rounded-xl p-4 flex items-start justify-between gap-3 transition-all relative"
   class:pinned-tile={post.is_pinned}
-  style="background: #0b1e13; border: 1px solid {post.is_pinned ? '#c29d53' : '#12301e'}; opacity: {post.attachment_url ? 1 : 0.6};"
+  style="background: {theme.bg}; border: 1px solid {post.is_pinned ? theme.accent : theme.border}; opacity: {post.attachment_url ? 1 : 0.6}; --qlt-hover: {theme.hoverBorder}; --qlt-pinned-hover: {theme.pinnedHoverBorder};"
 >
   {#if post.is_pinned}
-    <div class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center" style="background: #c29d53; box-shadow: 0 0 0 2px #0b1e13;">
-      <Pin size={9} color="#0b1e13" fill="#0b1e13" />
+    <div class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center" style="background: {theme.accent}; box-shadow: 0 0 0 2px {theme.bg};">
+      <Pin size={9} color={theme.bg} fill={theme.bg} />
     </div>
   {/if}
   <div class="flex items-start gap-3 min-w-0">
@@ -76,9 +102,9 @@
 
 <style>
   .quick-link-tile:hover {
-    border-color: #1c492e !important;
+    border-color: var(--qlt-hover, #1c492e) !important;
   }
   .quick-link-tile.pinned-tile:hover {
-    border-color: #d4af6a !important;
+    border-color: var(--qlt-pinned-hover, #d4af6a) !important;
   }
 </style>

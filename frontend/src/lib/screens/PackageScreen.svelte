@@ -1,11 +1,11 @@
 <script>
   import { onMount } from 'svelte';
-  import { ChevronRight, Clock, CheckCircle2, Zap, UserCheck, ShieldCheck, Pin, X, GraduationCap } from '@lucide/svelte';
+  import { ChevronRight, Clock, CheckCircle2, Zap, UserCheck, ShieldCheck, Pin, X, GraduationCap, Users } from '@lucide/svelte';
   import ScreenBg from '$lib/components/ScreenBg.svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import ActivatorDropdown from '$lib/components/ActivatorDropdown.svelte';
   import { PACKAGES, ACTIVATORS } from '$lib/data.js';
-  import { getPackages, getActivatorForMac, getSite, getCampusPosts } from '$lib/api.js';
+  import { getPackages, getActivatorForMac, getSite, getCampusPosts, getCommunityPosts } from '$lib/api.js';
   import { getClientMac, getSiteId } from '$lib/device.js';
 
   let { mode = 'simulation', onSelect, onActivatorLogin, onCoordinatorLogin, onAdminLogin, onEarnAccess } = $props();
@@ -40,10 +40,12 @@
   // institution site, same convention TimelineScreen already uses.
   let siteInfo = $state(null);
   const isInstitution = $derived(siteInfo?.vertical === 'institution');
+  const isCommunity = $derived(siteInfo?.vertical === 'community');
 
-  // Institution sites only: a small dismissible banner surfacing urgent/
-  // pinned Notice Board items before a student even opens "Earn Free Access"
-  // (see TimelineScreen.svelte's NoticeBoard). Dismissal is remembered
+  // Institution and community sites only: a small dismissible banner
+  // surfacing urgent/pinned Notice Board (or Community Board) items before
+  // a client even opens "Earn Free Access" (see TimelineScreen.svelte's
+  // NoticeBoard, reused for both verticals). Dismissal is remembered
   // per-post-id in localStorage, same 'ungana_*' prefix convention as
   // device.js, so it doesn't reappear on every visit once seen.
   const DISMISSED_NOTICES_KEY = 'ungana_dismissed_notices';
@@ -74,8 +76,9 @@
       siteInfo = siteResult?.ok ? siteResult.data?.site ?? null : null;
       siteMode = siteInfo?.mode ?? 'both';
 
-      if (siteInfo?.vertical === 'institution') {
-        const postsResult = await getCampusPosts(siteId);
+      if (siteInfo?.vertical === 'institution' || siteInfo?.vertical === 'community') {
+        const postsResult =
+          siteInfo.vertical === 'institution' ? await getCampusPosts(siteId) : await getCommunityPosts(siteId);
         const posts = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
         let dismissedIds = [];
         try {
@@ -89,21 +92,62 @@
 
     if (!packagesResult.ok || !packagesResult.data?.packages) return;
 
-    const merged = packagesResult.data.packages
-      .map((row) => {
-        const local = PACKAGES.find((p) => p.id === row.id);
-        if (!local) return null; // unknown id — no icon/UI metadata to render it with
+    const merged = packagesResult.data.packages.map((row) => {
+      const local = PACKAGES.find((p) => p.id === row.id);
+      if (local) {
         return {
           ...local,
           label: row.label,
           price: Number(row.price_kes),
+          // badge is admin-editable (packages.badge) — the backend is the
+          // source of truth now, not the static demo/UI catalogue's badge.
+          badge: row.badge ?? null,
+          isFeatured: !!row.is_featured,
           demoSecs: mode === 'active' ? row.duration_secs : local.demoSecs
         };
-      })
-      .filter(Boolean);
+      }
+      // Admin-created package (added via the dashboard's "Add package") with
+      // no static icon/duration-string in PACKAGES — render it with a
+      // generic icon and a duration label derived from its real
+      // duration_secs instead of dropping it, so it's purchasable right
+      // away without a frontend redeploy.
+      return {
+        id: row.id,
+        label: row.label,
+        duration: formatDuration(row.duration_secs),
+        price: Number(row.price_kes),
+        icon: Clock,
+        badge: row.badge ?? null,
+        isFeatured: !!row.is_featured,
+        demoSecs: mode === 'active' ? row.duration_secs : 45
+      };
+    });
 
-    if (merged.length > 0) packages = merged;
+    if (merged.length > 0) {
+      packages = merged;
+      // Pre-highlight whichever package the admin marked "featured" (see
+      // AdminDashboardScreen.svelte's Packages tab) — falls back to
+      // `selected`'s hardcoded 'weekly' default if none is featured (or the
+      // featured id isn't actually in this site's catalogue), then to
+      // whatever's first so the screen never opens with nothing selected.
+      const featured = merged.find((p) => p.isFeatured);
+      selected = (featured ?? merged.find((p) => p.id === selected) ?? merged[0]).id;
+    }
   });
+
+  /** Turns duration_secs into a short human label ("3 days", "2 hours", "45 minutes") for a package with no static duration string. */
+  function formatDuration(secs) {
+    if (secs >= 86400) {
+      const days = Math.round(secs / 86400);
+      return `${days} day${days === 1 ? '' : 's'}`;
+    }
+    if (secs >= 3600) {
+      const hours = Math.round(secs / 3600);
+      return `${hours} hour${hours === 1 ? '' : 's'}`;
+    }
+    const mins = Math.max(1, Math.round(secs / 60));
+    return `${mins} minute${mins === 1 ? '' : 's'}`;
+  }
 
   let selected = $state('weekly');
   let activator = $state(null);
@@ -139,26 +183,40 @@
       style="top: -40px; width: 220px; height: 220px; border-radius: 9999px; background: radial-gradient(circle, rgba(196,92,56,0.16) 0%, transparent 70%);"
     ></div>
     <UnganaLogoMark height={52} />
+    <!-- "Ungana" always stays the headline — it's the brand actually
+         providing the service, so an institution/community site's own name
+         goes in the badge below instead of replacing it here. -->
     <h1 class="text-2xl font-bold text-[#1D3C2A] mt-3 text-center" style="font-family: 'Playfair Display', serif;">
-      {isInstitution && siteInfo?.name ? siteInfo.name : 'Ungana'}
+      Ungana
     </h1>
     <p class="text-xs font-medium mt-0.5" style="color: #2E5A3E;">
-      {isInstitution ? 'Campus WiFi & digital resources' : 'Free internet, great content'}
+      {isInstitution
+        ? 'Campus WiFi & digital resources'
+        : isCommunity
+          ? 'Community WiFi & local marketplace'
+          : 'Free internet, great content'}
     </p>
     {#if isInstitution}
       <span
         class="mt-2.5 inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full"
         style="background: rgba(46,90,62,0.12); color: #2E5A3E; border: 1px solid rgba(46,90,62,0.25);"
       >
-        <GraduationCap size={11} /> Institution Network
+        <GraduationCap size={11} /> {siteInfo?.name ?? 'Institution Network'}
+      </span>
+    {:else if isCommunity}
+      <span
+        class="mt-2.5 inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-full"
+        style="background: rgba(46,90,62,0.12); color: #2E5A3E; border: 1px solid rgba(46,90,62,0.25);"
+      >
+        <Users size={11} /> {siteInfo?.name ?? 'Community Network'}
       </span>
     {/if}
   </div>
 
   {#if urgentNotices.length > 0 && !noticeBannerDismissed}
-    <!-- Institution-only, so hardcoded rather than conditional — this
-         banner only ever shows on institution sites. Same terracotta accent
-         as the rest of the app's attention/CTA elements. -->
+    <!-- Institution/community-only, so this only ever populates on those
+         verticals (see onMount). Same terracotta accent as the rest of the
+         app's attention/CTA elements. -->
     <button
       onclick={onEarnAccess}
       class="w-full flex items-center gap-2.5 px-4 py-3 rounded-2xl mb-5 text-left active:scale-[0.98] transition-transform fade-in-up"
@@ -166,7 +224,7 @@
     >
       <Pin size={14} color="#C45C38" fill="#C45C38" class="shrink-0" />
       <span class="flex-1 text-xs font-semibold" style="color: #1D3C2A;">
-        {urgentNotices.length} campus notice{urgentNotices.length > 1 ? 's' : ''} need your attention
+        {urgentNotices.length} {isInstitution ? 'campus' : 'community'} notice{urgentNotices.length > 1 ? 's' : ''} need your attention
       </span>
       <span
         role="button"

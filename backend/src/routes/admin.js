@@ -13,13 +13,19 @@ import {
   updateCampusPost,
   deactivateCampusPost,
 } from "../services/campusPosts.js";
+import {
+  adminListPosts as adminListCommunityPosts,
+  createCommunityPost,
+  updateCommunityPost,
+  deactivateCommunityPost,
+} from "../services/communityPosts.js";
 import { createActivator, adminListActivators, updateActivator } from "../services/activators.js";
 import { createCoordinator, adminListCoordinators, updateCoordinator } from "../services/coordinators.js";
 import { uploadContentFile, optimizeUploadedVideo } from "../services/uploads.js";
 import { adminGetSettings, setEarnConnectThresholdSecs, setDefaultActivatorCommissionRate, setNotificationRetentionDays } from "../services/settings.js";
 import { getAdminAnalytics, getContentItemAnalytics, getPurchasesBySiteSeries, getPurchasesByPackageSeries } from "../services/analytics.js";
 import { adminListSites, getSite, createSite, updateSite, deleteSite, listUnifiSiteOptions } from "../services/sites.js";
-import { adminListPackages, updatePackage } from "../services/catalog.js";
+import { adminListPackages, createPackage, updatePackage, deletePackage, setPackageFeatured } from "../services/catalog.js";
 import { testMinmoConnection } from "../services/payments/minmo.js";
 
 export const adminRouter = Router();
@@ -155,17 +161,18 @@ adminRouter.get("/campus-posts", async (req, res) => {
   }
 });
 
-const CAMPUS_POST_TYPES = ["notice", "release", "event", "timetable", "resource"];
+const CAMPUS_POST_TYPES = ["notice", "release", "event", "timetable", "resource", "poll"];
 const CAMPUS_POST_PRIORITIES = ["normal", "important", "urgent"];
 
 /**
  * POST /api/admin/campus-posts
  * Body: { siteId, type, title, body?, category?, priority?, attachmentUrl?,
- *         eventStartsAt?, eventEndsAt?, location?, isPinned?, sortOrder? }
+ *         eventStartsAt?, eventEndsAt?, location?, metadata?, isPinned?, sortOrder? }
  * `eventStartsAt`/`eventEndsAt`/`location` only matter for type='event'.
+ * `metadata.options` (array of strings) for type='poll'.
  */
 adminRouter.post("/campus-posts", async (req, res) => {
-  const { siteId, type, title, priority } = req.body;
+  const { siteId, type, title, priority, metadata } = req.body;
   if (!siteId || !type || !title) {
     return res.status(400).json({ success: false, message: "siteId, type, and title are required" });
   }
@@ -174,6 +181,9 @@ adminRouter.post("/campus-posts", async (req, res) => {
   }
   if (priority !== undefined && !CAMPUS_POST_PRIORITIES.includes(priority)) {
     return res.status(400).json({ success: false, message: `priority must be one of ${CAMPUS_POST_PRIORITIES.join(", ")}` });
+  }
+  if (type === "poll" && (!Array.isArray(metadata?.options) || metadata.options.length < 2)) {
+    return res.status(400).json({ success: false, message: "A poll needs at least 2 options (metadata.options)" });
   }
 
   try {
@@ -218,6 +228,100 @@ adminRouter.delete("/campus-posts/:id", async (req, res) => {
 
 /** POST /api/admin/campus-posts/upload — multipart, field name "file". Same pipeline as /content/upload (images/video); PDFs are also accepted for release attachments. */
 adminRouter.post("/campus-posts/upload", (req, res) => {
+  uploadContentFile(req, res, async (err) => {
+    if (err) return res.status(400).json({ success: false, message: err.message });
+    if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
+    const filename = await optimizeUploadedVideo(req.file);
+    res.json({ success: true, url: `/uploads/${filename}` });
+  });
+});
+
+// ── Community posts (announcements, events, marketplace, services, polls —
+// community sites) ─────────────────────────────────────────────────────
+// Same shape as the Campus posts block above throughout.
+
+/** GET /api/admin/community-posts?site=<id> — every post, including deactivated ones; site is optional. */
+adminRouter.get("/community-posts", async (req, res) => {
+  try {
+    const posts = await adminListCommunityPosts(req.query.site || null);
+    res.json({ posts });
+  } catch (error) {
+    console.error("❌ Admin community posts list error:", error.message);
+    res.status(500).json({ posts: [], message: error.message });
+  }
+});
+
+const COMMUNITY_POST_TYPES = ["announcement", "event", "marketplace", "service", "poll"];
+const COMMUNITY_POST_PRIORITIES = ["normal", "important", "urgent"];
+
+/**
+ * POST /api/admin/community-posts
+ * Body: { siteId, type, title, body?, category?, priority?, attachmentUrl?,
+ *         priceKes?, eventStartsAt?, eventEndsAt?, location?, metadata?,
+ *         isPinned?, sortOrder? }
+ * `priceKes` only matters for type='marketplace'; `eventStartsAt`/
+ * `eventEndsAt`/`location` for type='event' (eventStartsAt is also usable
+ * on 'announcement' as an optional expiry, same convention as campus
+ * notices); `metadata.options` (array of strings) for type='poll';
+ * `metadata.condition`/`contactPhone`/`sold` for type='marketplace'.
+ */
+adminRouter.post("/community-posts", async (req, res) => {
+  const { siteId, type, title, priority, metadata } = req.body;
+  if (!siteId || !type || !title) {
+    return res.status(400).json({ success: false, message: "siteId, type, and title are required" });
+  }
+  if (!COMMUNITY_POST_TYPES.includes(type)) {
+    return res.status(400).json({ success: false, message: `type must be one of ${COMMUNITY_POST_TYPES.join(", ")}` });
+  }
+  if (priority !== undefined && !COMMUNITY_POST_PRIORITIES.includes(priority)) {
+    return res.status(400).json({ success: false, message: `priority must be one of ${COMMUNITY_POST_PRIORITIES.join(", ")}` });
+  }
+  if (type === "poll" && (!Array.isArray(metadata?.options) || metadata.options.length < 2)) {
+    return res.status(400).json({ success: false, message: "A poll needs at least 2 options (metadata.options)" });
+  }
+
+  try {
+    const post = await createCommunityPost(req.body);
+    res.json({ success: true, post });
+  } catch (error) {
+    console.error("❌ Admin community post create error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** PATCH /api/admin/community-posts/:id — partial update; any field from the create body, plus isActive. */
+adminRouter.patch("/community-posts/:id", async (req, res) => {
+  if (req.body.type !== undefined && !COMMUNITY_POST_TYPES.includes(req.body.type)) {
+    return res.status(400).json({ success: false, message: `type must be one of ${COMMUNITY_POST_TYPES.join(", ")}` });
+  }
+  if (req.body.priority !== undefined && !COMMUNITY_POST_PRIORITIES.includes(req.body.priority)) {
+    return res.status(400).json({ success: false, message: `priority must be one of ${COMMUNITY_POST_PRIORITIES.join(", ")}` });
+  }
+
+  try {
+    const post = await updateCommunityPost(req.params.id, req.body);
+    if (!post) return res.status(404).json({ success: false, message: "Community post not found" });
+    res.json({ success: true, post });
+  } catch (error) {
+    console.error("❌ Admin community post update error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** DELETE /api/admin/community-posts/:id — deactivates rather than hard-deletes (see services/communityPosts.js). */
+adminRouter.delete("/community-posts/:id", async (req, res) => {
+  try {
+    const post = await deactivateCommunityPost(req.params.id);
+    if (!post) return res.status(404).json({ success: false, message: "Community post not found" });
+    res.json({ success: true, post });
+  } catch (error) {
+    console.error("❌ Admin community post deactivate error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** POST /api/admin/community-posts/upload — multipart, field name "file". Same pipeline as /campus-posts/upload. */
+adminRouter.post("/community-posts/upload", (req, res) => {
   uploadContentFile(req, res, async (err) => {
     if (err) return res.status(400).json({ success: false, message: err.message });
     if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
@@ -347,7 +451,7 @@ adminRouter.get("/sites/unifi-options", async (_req, res) => {
 });
 
 const SITE_MODES = ["pay_only", "earn_only", "both"];
-const SITE_VERTICALS = ["general", "institution"];
+const SITE_VERTICALS = ["general", "institution", "community"];
 
 /** POST /api/admin/sites — Body: { id, name, mode?, btcEnabled?, vertical? }. `id` must match the UniFi site's own short id (see schema.sql's comment on sites.id). */
 adminRouter.post("/sites", async (req, res) => {
@@ -439,7 +543,32 @@ adminRouter.get("/packages", async (_req, res) => {
   }
 });
 
-/** PATCH /api/admin/packages/:id — partial update: label, priceKes, durationSecs, isActive, siteIds. */
+/** POST /api/admin/packages — Body: { id, label, priceKes, durationSecs, badge?, isActive?, siteIds? }. `id` is an admin-chosen slug, must be unique. */
+adminRouter.post("/packages", async (req, res) => {
+  const { id, label, priceKes, durationSecs } = req.body;
+  if (!id || !label || priceKes === undefined || durationSecs === undefined) {
+    return res.status(400).json({ success: false, message: "id, label, priceKes and durationSecs are required" });
+  }
+  if (Number(priceKes) < 0 || Number(durationSecs) < 0) {
+    return res.status(400).json({ success: false, message: "priceKes and durationSecs must be zero or greater" });
+  }
+  if (id === "earned") {
+    return res.status(400).json({ success: false, message: `"earned" is reserved for watch & earn sessions` });
+  }
+
+  try {
+    const pkg = await createPackage(req.body);
+    res.json({ success: true, package: pkg });
+  } catch (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({ success: false, message: "That package id is already in use." });
+    }
+    console.error("❌ Admin package create error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** PATCH /api/admin/packages/:id — partial update: label, priceKes, durationSecs, badge, isActive, siteIds. */
 adminRouter.patch("/packages/:id", async (req, res) => {
   try {
     const pkg = await updatePackage(req.params.id, req.body);
@@ -447,6 +576,39 @@ adminRouter.patch("/packages/:id", async (req, res) => {
     res.json({ success: true, package: pkg });
   } catch (error) {
     console.error("❌ Admin package update error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** PATCH /api/admin/packages/:id/feature — Body: { featured: boolean }. Sets which package is pre-highlighted on the purchase screen; at most one is ever featured (see schema.sql), so featuring one un-features whatever was featured before it. */
+adminRouter.patch("/packages/:id/feature", async (req, res) => {
+  if (typeof req.body.featured !== "boolean") {
+    return res.status(400).json({ success: false, message: "featured (boolean) is required" });
+  }
+  try {
+    const pkg = await setPackageFeatured(req.params.id, req.body.featured);
+    if (!pkg) return res.status(404).json({ success: false, message: "Package not found" });
+    res.json({ success: true, package: pkg });
+  } catch (error) {
+    console.error("❌ Admin package feature error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** DELETE /api/admin/packages/:id — hard delete. Blocked with 409 if the package has purchase history (sessions reference it) — deactivate it instead. */
+adminRouter.delete("/packages/:id", async (req, res) => {
+  if (req.params.id === "earned") {
+    return res.status(400).json({ success: false, message: `"earned" can't be deleted — it's required for watch & earn sessions.` });
+  }
+  try {
+    const pkg = await deletePackage(req.params.id);
+    if (!pkg) return res.status(404).json({ success: false, message: "Package not found" });
+    res.json({ success: true, package: pkg });
+  } catch (error) {
+    if (error.code === "23503") {
+      return res.status(409).json({ success: false, message: "Can't delete — this package has purchase history. Turn it Off instead." });
+    }
+    console.error("❌ Admin package delete error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });

@@ -39,6 +39,17 @@
   // tab on the user unprompted; doing it once, right after a fresh payment
   // is confirmed, is the actual point of the button.
   let cameFromConnecting = $state(false);
+  // True for every path that actually creates/authorises a real backend
+  // session before reaching 'connecting' (a paid purchase, BTC, or a real
+  // claim-earned-session) — false only for TimelineScreen's pure local/demo
+  // shortcut (realUnclaimedSecs<=0, no backend call at all). Gates whether
+  // the 'connecting' → 'active' transition re-reads the real session status
+  // from the backend (see below) — doing that unconditionally would risk
+  // picking up some unrelated *earlier* real session for this MAC and using
+  // its expiry instead of the intended local-only demo duration, breaking
+  // the "a demo completion can never touch a real session" invariant
+  // TimelineScreen's own comments already rely on elsewhere.
+  let expectRealSession = $state(true);
   let selectedPkg = $state(PACKAGES.find((p) => p.id === 'weekly'));
   let selectedActivator = $state(null);
   let loggedInActivator = $state(null);
@@ -52,6 +63,20 @@
 
   function goPackages() {
     screen = 'packages';
+  }
+  // Where TimelineScreen's own "Back" button returns to — 'packages' (the
+  // normal path in from PackageScreen's "Earn Access") or 'active' (reached
+  // via ActiveScreen's Explore tile, mid-session — see its own comment).
+  // Without this, going back from Timeline while a session is running would
+  // dump the client at package selection instead of their still-live
+  // countdown.
+  let timelineOrigin = $state('packages');
+  function goTimelineFromActive() {
+    timelineOrigin = 'active';
+    screen = 'timeline';
+  }
+  function backFromTimeline() {
+    screen = timelineOrigin;
   }
   function goWarning() {
     warningRemaining = getWarningThreshold(selectedPkg.demoSecs);
@@ -193,7 +218,10 @@
       onActivatorLogin={() => (screen = 'activator-login')}
       onCoordinatorLogin={() => (screen = 'coordinator-login')}
       onAdminLogin={() => (screen = 'admin-login')}
-      onEarnAccess={() => (screen = 'timeline')}
+      onEarnAccess={() => {
+        timelineOrigin = 'packages'; // defensive — could still be 'active' left over from a previous mid-session visit
+        screen = 'timeline';
+      }}
     />
   {/if}
   {#if screen === 'check-session'}
@@ -209,14 +237,15 @@
   {/if}
   {#if screen === 'timeline'}
     <TimelineScreen
-      onBack={goPackages}
+      onBack={backFromTimeline}
       onBuyAccess={goPackages}
-      onConnect={(secs) => {
+      onConnect={(secs, isReal) => {
         const h = Math.floor(secs / 3600);
         const m = Math.floor((secs % 3600) / 60);
         const dur = h > 0 ? `${h}h${m > 0 ? ` ${m}m` : ''}` : `${m}m`;
         selectedPkg = { id: 'daily', label: 'Earned', duration: dur, price: 0, icon: Zap, badge: 'Earned via content', demoSecs: secs };
         phone = 'earned';
+        expectRealSession = isReal;
         screen = 'connecting';
       }}
     />
@@ -291,6 +320,7 @@
         phone = p;
         simulatePaymentFailure = fail;
         paymentReference = reference;
+        expectRealSession = true; // defensive — could still be false left over from an earlier demo-only earn attempt
         screen = 'initiated';
       }}
       onBtcPaid={() => {
@@ -299,6 +329,7 @@
         // connecting, same as the watch-to-earn flow skips a payment step.
         phone = 'BTC';
         activeInitialRemaining = null;
+        expectRealSession = true;
         screen = 'connecting';
       }}
     />
@@ -330,8 +361,32 @@
   {/if}
   {#if screen === 'connecting'}
     <ConnectingScreen
-      onConnected={() => {
+      onConnected={async () => {
+        // The router auth this just completed may have folded in leftover
+        // time from a still-active prior session (see authorization.js's
+        // completeAuthorization — "Extend Session" adds to what's running
+        // rather than resetting it), so selectedPkg.demoSecs alone (just
+        // this grant) is no longer trustworthy as "how long the countdown
+        // should actually run". Re-read the real expiry from the backend
+        // instead of assuming it — same lookup applySessionData() uses to
+        // restore a session on page load. Skipped entirely for the pure
+        // local/demo shortcut (expectRealSession false) — no real session
+        // was created for that one, so looking one up here could pick up
+        // some unrelated *earlier* real session for this MAC instead.
         activeInitialRemaining = null;
+        if (expectRealSession) {
+          const result = await getSessionStatus(getClientMac());
+          if (result.ok && result.data?.active && result.data.expiresAt) {
+            const serverNow = result.data.serverNow ?? Date.now();
+            activeInitialRemaining = Math.max(0, Math.round((result.data.expiresAt - serverNow) / 1000));
+            // The ring/percentage in ActiveScreen treats pkg.demoSecs as the
+            // 100% mark — it must match this real total, or a session that
+            // just got extended would render a ring stuck past full (or a
+            // countdown that hits zero while the router still has the client
+            // authorised for longer).
+            selectedPkg = { ...selectedPkg, demoSecs: activeInitialRemaining };
+          }
+        }
         cameFromConnecting = true; // fresh payment just confirmed — safe to auto-trigger Go Online
         screen = 'active';
       }}
@@ -346,6 +401,7 @@
       initialRemaining={activeInitialRemaining}
       onExpiring={goWarning}
       onExtend={goPackages}
+      onExplore={goTimelineFromActive}
     />
   {/if}
   {#if screen === 'warning'}

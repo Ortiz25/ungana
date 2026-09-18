@@ -2,7 +2,13 @@
 // so both go through one code path for turning a confirmed payment into an
 // actually-active session.
 import { authorizeClient } from "./unifi.js";
-import { markSessionAuthorized, markSessionPaid, listPaidUnauthorizedSessions, logPaymentEvent } from "./sessions.js";
+import {
+  markSessionAuthorized,
+  markSessionPaid,
+  listPaidUnauthorizedSessions,
+  logPaymentEvent,
+  getActiveRemainingSecs,
+} from "./sessions.js";
 import { notify } from "./notifications.js";
 
 /**
@@ -11,10 +17,23 @@ import { notify } from "./notifications.js";
  * On failure (router unreachable/rejected), marks it 'paid' so the retry
  * sweep picks it up, and returns null. The customer already paid — this
  * path must never lose track of that.
+ *
+ * If this device already has time left on a still-active session (the
+ * "Extend Session" flow — buying or claiming more while already connected),
+ * that leftover is folded into what actually gets authorised: a fresh
+ * `authorize-guest` call resets the router's guest-auth expiry to
+ * now + duration, it doesn't add to what's running, so "extend" would
+ * otherwise silently *shorten* a session with more time left than the new
+ * grant. Read once up front, before this session flips to 'success', so it
+ * only ever picks up a *different*, still-active prior session — never
+ * itself.
  */
 export async function completeAuthorization(session) {
+  const extraSecs = await getActiveRemainingSecs(session.client_mac);
+  const authorizedDurationSecs = (session.duration_secs ?? 0) + extraSecs;
+
   const authorized = await authorizeClient(session.client_mac, {
-    duration: session.duration_secs ? Math.round(session.duration_secs / 60) : undefined,
+    duration: authorizedDurationSecs ? Math.round(authorizedDurationSecs / 60) : undefined,
     // null (no site recorded — pre-multi-site session, or single-site
     // deployment) must become undefined here, not stay null, so
     // authorizeClient's default parameter (`site = UNIFI_SITE`) actually
@@ -23,7 +42,7 @@ export async function completeAuthorization(session) {
   });
 
   if (authorized) {
-    const authorizedSession = await markSessionAuthorized(session.reference);
+    const authorizedSession = await markSessionAuthorized(session.reference, extraSecs);
     // Every path that can authorise a session (payments.js, btc.js,
     // content.js's earned-session claim, and this function's own retry
     // sweep) funnels through here, so this is the one place a

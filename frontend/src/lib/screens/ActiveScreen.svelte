@@ -1,9 +1,11 @@
 <script>
   import { onMount } from 'svelte';
-  import { Wifi, Signal, Clock, Phone, RotateCcw, MessageCircle, Globe } from '@lucide/svelte';
+  import { Wifi, Phone, RotateCcw, MessageCircle, Globe, Megaphone, Zap, ChevronRight } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import DemoBadge from '$lib/components/DemoBadge.svelte';
   import { formatTime, formatCompactDuration, getWarningThreshold } from '$lib/data.js';
+  import { getSite } from '$lib/api.js';
+  import { getSiteId } from '$lib/device.js';
 
   // `initialRemaining` lets a restored session (page reload while still
   // connected) resume the countdown from the actual time left instead of
@@ -13,7 +15,18 @@
   // restored/reloaded already-active session (on-load MAC check or
   // CheckSessionScreen), where auto-popping a new tab on every visit would
   // be unwanted. See +page.svelte's `cameFromConnecting`.
-  let { pkg, phone, mode = 'simulation', initialRemaining = null, autoGoOnline = false, onExpiring, onExtend } = $props();
+  // `onExplore` sends the client to TimelineScreen without losing this
+  // session — see +page.svelte's timelineOrigin, which brings them right
+  // back here on "Back" instead of dropping them at package selection.
+  let { pkg, phone, mode = 'simulation', initialRemaining = null, autoGoOnline = false, onExpiring, onExtend, onExplore } = $props();
+
+  // Same site-vertical lookup TimelineScreen itself makes — drives the
+  // Explore tile's label/icon below so it points at whichever half of
+  // TimelineScreen this site actually has (Campus for an institution site,
+  // Watch & Earn otherwise) instead of a generic "Explore" that doesn't set
+  // the right expectation. null site (dev/local) just defaults to Watch & Earn.
+  const site = getSiteId();
+  let isInstitution = $state(false);
 
   const total = pkg.demoSecs;
   const warningThreshold = getWarningThreshold(total);
@@ -71,12 +84,6 @@
   const circ = 2 * Math.PI * radius;
   const minsLeft = $derived(Math.ceil(remaining / 60));
 
-  const stats = [
-    { icon: Signal, label: 'Signal', value: 'Strong' },
-    { icon: Wifi, label: 'Speed', value: '4.2 Mbps' },
-    { icon: Clock, label: 'Plan', value: pkg.label }
-  ];
-
   // `_blank` hands focus straight to the new tab — firing this on every
   // visit to an already-active session (restored on load, or via "Check
   // Session") would yank the user onto google.com unprompted and leave the
@@ -88,8 +95,12 @@
     window.open('https://www.google.com', '_blank', 'noopener,noreferrer');
   }
 
-  onMount(() => {
+  onMount(async () => {
     if (autoGoOnline) goOnline();
+    if (site) {
+      const result = await getSite(site);
+      if (result.ok && result.data?.site) isInstitution = result.data.site.vertical === 'institution';
+    }
   });
 </script>
 
@@ -172,17 +183,30 @@
     <p class="text-xs text-[#AECAAE] mt-2">{pkg.duration} total · expires when timer ends</p>
   </div>
 
-  <!-- Stats row -->
-  <div class="grid grid-cols-3 gap-2 mb-5">
-    {#each stats as stat (stat.label)}
-      {@const Icon = stat.icon}
-      <div class="rounded-2xl flex flex-col items-center py-3 gap-1" style="background: rgba(255,255,255,0.14);">
-        <Icon size={16} color="#C45C38" />
-        <span class="text-[10px] text-[#AECAAE] uppercase tracking-wide">{stat.label}</span>
-        <span class="text-xs font-bold text-[#E8D4B0]">{stat.value}</span>
-      </div>
-    {/each}
-  </div>
+  <!-- Explore tile — replaces the old fabricated Signal/Speed readout
+       (this app has no real link-quality telemetry to show) with something
+       actually useful: a way back into TimelineScreen without losing this
+       session, pointed at whichever half of it this site actually has. -->
+  <button
+    onclick={onExplore}
+    class="w-full rounded-2xl p-4 flex items-center gap-3 mb-5 text-left transition-all active:scale-[0.98]"
+    style="background: rgba(196,92,56,0.10); border: 1px solid rgba(196,92,56,0.35);"
+  >
+    <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.30);">
+      {#if isInstitution}
+        <Megaphone size={18} color="#C45C38" />
+      {:else}
+        <Zap size={18} color="#C45C38" />
+      {/if}
+    </div>
+    <div class="flex-1 min-w-0">
+      <p class="text-sm font-bold text-[#E8D4B0]">{isInstitution ? 'Explore Campus' : 'Watch & Earn'}</p>
+      <p class="text-xs text-[#C4DAC0] mt-0.5">
+        {isInstitution ? 'Notices, exam timetable & more' : 'Earn extra time while you’re connected'}
+      </p>
+    </div>
+    <ChevronRight size={16} color="#C4DAC0" class="shrink-0" />
+  </button>
 
   <!-- Account row -->
   <div

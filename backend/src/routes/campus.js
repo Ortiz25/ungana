@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { listActivePosts, recordCampusPostClick } from "../services/campusPosts.js";
+import { listActivePosts, recordCampusPostClick, castPollVote } from "../services/campusPosts.js";
 
 export const campusRouter = Router();
 
@@ -42,5 +42,29 @@ campusRouter.post("/posts/:id/click", async (req, res) => {
   } catch (error) {
     console.error("❌ Campus post click error:", error.message);
     res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+/**
+ * POST /api/campus/posts/:id/vote — Body: { mac, optionIndex }. Casts this
+ * device's vote on a campus poll (locked in once cast — see
+ * services/campusPosts.js's castPollVote) and always returns the fresh
+ * per-option tallies. Same shape as community.js's /:id/vote.
+ */
+campusRouter.post("/posts/:id/vote", async (req, res) => {
+  const postId = Number(req.params.id);
+  const { mac, optionIndex } = req.body;
+  if (!Number.isInteger(postId)) return res.status(400).json({ success: false, message: "invalid post id" });
+  if (!mac) return res.status(400).json({ success: false, message: "mac is required" });
+  if (!Number.isInteger(optionIndex) || optionIndex < 0) {
+    return res.status(400).json({ success: false, message: "optionIndex must be a non-negative integer" });
+  }
+
+  try {
+    const results = await castPollVote(postId, mac, optionIndex);
+    res.json({ success: true, results });
+  } catch (error) {
+    console.error("❌ Campus poll vote error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
   }
 });

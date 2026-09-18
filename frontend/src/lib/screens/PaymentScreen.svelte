@@ -26,6 +26,15 @@
   } from '$lib/api.js';
   import { getClientMac, getSiteId } from '$lib/device.js';
 
+  // Gates the "Demo: simulate a failed payment" toggle below — on by
+  // default (unset/anything but the literal string 'false'), so existing
+  // dev/demo setups keep working unchanged; set VITE_DEMO_MODE=false in
+  // frontend/.env to hide it for a real client-facing deployment. Distinct
+  // from the backend's own APP_MODE (which already no-ops this toggle
+  // server-side outside 'simulation' — see payments/index.js) — this only
+  // controls whether the field is even shown.
+  const DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== 'false';
+
   // `onBtcPaid` fires once a Lightning invoice is confirmed settled — unlike
   // M-Pesa (onPay -> InitiatedScreen polls), BTC polling happens right here
   // while the QR is on screen, so by the time this fires payment is already
@@ -410,6 +419,7 @@
       </div>
 
       <div>
+        <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider px-1">Username</p>
         <div
           class="flex items-center rounded-2xl overflow-hidden border transition-colors"
           style="background: #3C6A4A; opacity: {usernameLocked ? 0.75 : 1}; border-color: {usernameStatus === 'taken'
@@ -424,7 +434,7 @@
             value={username}
             oninput={onUsernameInput}
             disabled={usernameLocked}
-            placeholder="Username"
+            placeholder="e.g. swiftrunner42"
             required
             class="flex-1 bg-transparent px-4 py-3.5 text-[#E8D4B0] placeholder-[#7A9E7A] text-sm outline-none"
           />
@@ -443,15 +453,13 @@
         {#if usernameError}
           <p class="text-[11px] text-[#F0A08A] mt-1.5 px-1">{usernameError}</p>
         {:else if usernameLocked}
-          <p class="text-[11px] mt-1.5 px-1" style="color: #7A9E7A;">Your username from a previous purchase</p>
+          <p class="text-[11px] mt-1.5 px-1" style="color: #7A9E7A;">Already set for this device</p>
         {:else if usernameStatus === 'taken'}
           <p class="text-[11px] text-[#F0A08A] mt-1.5 px-1">That username is taken — try another</p>
         {:else if !username}
-          <p class="text-[11px] mt-1.5 px-1" style="color: #C4A870;">Required — so you can check your session later from any browser</p>
+          <p class="text-[11px] mt-1.5 px-1" style="color: #C4A870;">Required · tied to this device</p>
         {:else}
-          <p class="text-[11px] mt-1.5 px-1" style="color: #7A9E7A;">
-            So you can check your session later from any browser
-          </p>
+          <p class="text-[11px] mt-1.5 px-1" style="color: #7A9E7A;">Tied to this device</p>
         {/if}
       </div>
 
@@ -571,23 +579,25 @@
         </div>
       {/if}
 
-      <button
-        type="button"
-        onclick={() => (simulateFailure = !simulateFailure)}
-        class="flex items-center justify-between gap-2 px-4 py-2.5 rounded-xl"
-        style="background: rgba(196,92,56,0.08);"
-      >
-        <p class="text-[10px] text-[#AECAAE] text-left">Demo: simulate a failed payment</p>
-        <div
-          class="w-9 h-5 rounded-full relative transition-all shrink-0"
-          style="background: {simulateFailure ? '#C45C38' : 'rgba(255,255,255,0.18)'};"
+      {#if DEMO_MODE}
+        <button
+          type="button"
+          onclick={() => (simulateFailure = !simulateFailure)}
+          class="flex items-center justify-between gap-2 px-4 py-2.5 rounded-xl"
+          style="background: rgba(196,92,56,0.08);"
         >
+          <p class="text-[10px] text-[#AECAAE] text-left">Demo: simulate a failed payment</p>
           <div
-            class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all"
-            style="left: {simulateFailure ? 'calc(100% - 18px)' : '2px'};"
-          ></div>
-        </div>
-      </button>
+            class="w-9 h-5 rounded-full relative transition-all shrink-0"
+            style="background: {simulateFailure ? '#C45C38' : 'rgba(255,255,255,0.18)'};"
+          >
+            <div
+              class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all"
+              style="left: {simulateFailure ? 'calc(100% - 18px)' : '2px'};"
+            ></div>
+          </div>
+        </button>
+      {/if}
     </div>
     {#if paymentMethod === 'mpesa'}
       <div class="px-5 pt-4 pb-5">

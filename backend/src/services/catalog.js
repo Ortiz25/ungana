@@ -10,7 +10,7 @@ import { query, withTransaction } from "../db/pool.js";
  */
 export async function listActivePackages(siteId = null) {
   const { rows } = await query(
-    `SELECT p.id, p.label, p.price_kes, p.duration_secs
+    `SELECT p.id, p.label, p.price_kes, p.duration_secs, p.badge, p.is_featured
      FROM packages p
      WHERE p.is_active = true
        AND (
@@ -43,10 +43,13 @@ export async function listActiveActivators() {
 }
 
 // ── Admin ────────────────────────────────────────────────────────────────
-// Minimal on purpose — packages are a small, fixed set of plan types (no
-// admin "create a package" flow exists, or is needed yet); this only adds
-// what multi-site scoping requires: seeing every package (including
-// inactive) with its site assignment, and editing price/label/active/sites.
+// Packages started as a small, fixed seeded set of plan types (daily/
+// weekly/monthly/...) but admins can now add their own alongside them —
+// `id` is a free-text slug (see schema.sql's packages.id comment), not a
+// constrained enum, so a new row here needs nothing else changed in the
+// DB. The frontend purchase screen (PackageScreen.svelte) falls back to a
+// generic icon/duration label for any id it doesn't have static UI
+// metadata for, so a freshly created package is purchasable immediately.
 
 const PACKAGE_SITE_IDS_SUBQUERY = `
   COALESCE(
@@ -78,12 +81,53 @@ async function setPackageSites(client, packageId, siteIds) {
   }
 }
 
+/** Creates a new plan type. `id` is admin-chosen (a slug like "hourly") and must be unique — callers should catch the pg unique-violation (error.code "23505"), same convention as createSite. `badge` (e.g. "Best Value", "Test") is optional, null = none. */
+export async function createPackage({ id, label, priceKes, durationSecs, badge = null, isActive = true, siteIds = [] }) {
+  return withTransaction(async (client) => {
+    await client.query(
+      `INSERT INTO packages (id, label, price_kes, duration_secs, badge, is_active) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, label, priceKes, durationSecs, badge, isActive]
+    );
+    if (siteIds.length > 0) await setPackageSites(client, id, siteIds);
+
+    const { rows } = await client.query(`SELECT p.*, ${PACKAGE_SITE_IDS_SUBQUERY} FROM packages p WHERE p.id = $1`, [id]);
+    return rows[0];
+  });
+}
+
+/** Hard delete. Blocked by the DB (FK violation, error.code "23503") if any session references this package — sessions.package_id has no ON DELETE action, so purchase history can't silently vanish; callers should catch that and tell the admin to deactivate it instead. */
+export async function deletePackage(id) {
+  const { rows } = await query(`DELETE FROM packages WHERE id = $1 RETURNING *`, [id]);
+  return rows[0] || null;
+}
+
 const PACKAGE_FIELD_COLUMNS = {
   label: "label",
   priceKes: "price_kes",
   durationSecs: "duration_secs",
+  badge: "badge",
   isActive: "is_active",
 };
+
+/**
+ * Sets (or clears) which package is pre-highlighted on the purchase screen.
+ * Deliberately not part of PACKAGE_FIELD_COLUMNS/updatePackage — at most
+ * one row can be featured (see the partial unique index in schema.sql), so
+ * turning one on has to atomically turn the previous one off first, which a
+ * plain per-field partial update can't express safely.
+ */
+export async function setPackageFeatured(id, featured) {
+  return withTransaction(async (client) => {
+    if (featured) {
+      await client.query(`UPDATE packages SET is_featured = false WHERE is_featured = true AND id != $1`, [id]);
+    }
+    const { rows } = await client.query(`UPDATE packages SET is_featured = $2 WHERE id = $1 RETURNING id`, [id, featured]);
+    if (rows.length === 0) return null;
+
+    const { rows: full } = await client.query(`SELECT p.*, ${PACKAGE_SITE_IDS_SUBQUERY} FROM packages p WHERE p.id = $1`, [id]);
+    return full[0];
+  });
+}
 
 /** Partial update — only fields present in `fields` are touched. `siteIds` (even `[]`) replaces the site assignment wholesale, same convention as content items. */
 export async function updatePackage(id, fields) {

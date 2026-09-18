@@ -2,21 +2,36 @@ import { query } from "../db/pool.js";
 
 /**
  * Public feed for an institution site's Notice Board / Campus Events / Exam
- * Timetable / Resources — active posts only, optionally narrowed to one
- * `type`. Pinned posts always float to the top; within that, events and
+ * Timetable / Resources / Polls — active posts only, optionally narrowed to
+ * one `type`. Pinned posts always float to the top; within that, events and
  * timetable entries (both genuinely time-based) sort soonest-first
  * (event_starts_at) and everything else sorts newest-first (published_at) —
  * matches how a notice board, an events calendar, and an exam schedule are
  * each naturally read.
+ *
+ * Each 'poll' row additionally carries a computed `poll_results` array
+ * (`[{optionIndex, votes}]`, only for options that actually have at least
+ * one vote), same as services/communityPosts.js's listActivePosts — tallies
+ * are always derived live from campus_poll_votes, never cached on the row.
  */
 export async function listActivePosts(siteId, type = null) {
   const { rows } = await query(
-    `SELECT * FROM campus_posts
-     WHERE site_id = $1 AND is_active = true
-       AND ($2::text IS NULL OR type = $2)
-     ORDER BY is_pinned DESC,
-       CASE WHEN type IN ('event', 'timetable') THEN event_starts_at END ASC NULLS LAST,
-       published_at DESC`,
+    `SELECT p.*,
+       CASE WHEN p.type = 'poll' THEN (
+         SELECT COALESCE(json_agg(json_build_object('optionIndex', v.option_index, 'votes', v.cnt) ORDER BY v.option_index), '[]'::json)
+         FROM (
+           SELECT option_index, COUNT(*) AS cnt
+           FROM campus_poll_votes
+           WHERE post_id = p.id
+           GROUP BY option_index
+         ) v
+       ) END AS poll_results
+     FROM campus_posts p
+     WHERE p.site_id = $1 AND p.is_active = true
+       AND ($2::text IS NULL OR p.type = $2)
+     ORDER BY p.is_pinned DESC,
+       CASE WHEN p.type IN ('event', 'timetable') THEN p.event_starts_at END ASC NULLS LAST,
+       p.published_at DESC`,
     [siteId, type]
   );
   return rows;
@@ -51,14 +66,15 @@ export async function createCampusPost({
   eventStartsAt,
   eventEndsAt,
   location,
+  metadata = {},
   isPinned = false,
   sortOrder = 0,
   images = [],
 }) {
   const { rows } = await query(
     `INSERT INTO campus_posts
-       (site_id, type, title, body, category, priority, attachment_url, event_starts_at, event_ends_at, location, is_pinned, sort_order, images)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       (site_id, type, title, body, category, priority, attachment_url, event_starts_at, event_ends_at, location, metadata, is_pinned, sort_order, images)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING *`,
     [
       siteId,
@@ -71,6 +87,7 @@ export async function createCampusPost({
       eventStartsAt ?? null,
       eventEndsAt ?? null,
       location ?? null,
+      JSON.stringify(metadata ?? {}),
       isPinned,
       sortOrder,
       JSON.stringify(images ?? []),
@@ -92,11 +109,14 @@ const CAMPUS_POST_FIELD_COLUMNS = {
   eventStartsAt: "event_starts_at",
   eventEndsAt: "event_ends_at",
   location: "location",
+  metadata: "metadata",
   isPinned: "is_pinned",
   sortOrder: "sort_order",
   isActive: "is_active",
   images: "images",
 };
+
+const JSON_FIELDS = new Set(["images", "metadata"]);
 
 /** Partial update — only fields present in `fields` are touched. Returns null if the id doesn't exist. */
 export async function updateCampusPost(id, fields) {
@@ -106,7 +126,7 @@ export async function updateCampusPost(id, fields) {
   for (const [key, column] of Object.entries(CAMPUS_POST_FIELD_COLUMNS)) {
     if (fields[key] === undefined) continue;
     sets.push(`${column} = $${sets.length + 1}`);
-    values.push(key === "images" ? JSON.stringify(fields[key] ?? []) : fields[key]);
+    values.push(JSON_FIELDS.has(key) ? JSON.stringify(fields[key] ?? (key === "images" ? [] : {})) : fields[key]);
   }
 
   if (sets.length === 0) return adminGetPost(id);
@@ -125,4 +145,24 @@ export async function deactivateCampusPost(id) {
 /** Increments a resource (Quick Links) tile's tap counter — same pattern as content.js's recordImpression. */
 export async function recordCampusPostClick(id) {
   await query(`UPDATE campus_posts SET clicks = clicks + 1 WHERE id = $1`, [id]);
+}
+
+/**
+ * Casts one device's vote on a campus poll — same shape/reasoning as
+ * services/communityPosts.js's castPollVote: locked in once cast via the
+ * UNIQUE (post_id, mac) constraint, always returns the fresh per-option
+ * tallies whether this call just voted or the device had already voted.
+ */
+export async function castPollVote(postId, mac, optionIndex) {
+  await query(
+    `INSERT INTO campus_poll_votes (post_id, mac, option_index) VALUES ($1, $2, $3)
+     ON CONFLICT (post_id, mac) DO NOTHING`,
+    [postId, mac.toLowerCase(), optionIndex]
+  );
+
+  const { rows } = await query(
+    `SELECT option_index, COUNT(*)::int AS votes FROM campus_poll_votes WHERE post_id = $1 GROUP BY option_index ORDER BY option_index`,
+    [postId]
+  );
+  return rows.map((r) => ({ optionIndex: r.option_index, votes: r.votes }));
 }

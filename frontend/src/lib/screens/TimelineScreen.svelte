@@ -1,6 +1,9 @@
 <script>
   import { onMount } from 'svelte';
-  import { ArrowLeft, Zap, CheckCircle2, CircleX, Play, Gift, FileText, Unlock, User, ExternalLink, Wallet, X, Clock, Search } from '@lucide/svelte';
+  import {
+    ArrowLeft, Zap, CheckCircle2, CircleX, Play, Gift, FileText, Unlock, User, ExternalLink, Wallet, X, Clock, Search,
+    GraduationCap, Users, Truck, Wrench, Dumbbell, Cpu, Bus, Building2, Link2
+  } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import TLContentCard from '$lib/components/TLContentCard.svelte';
   import NoticeBoard from '$lib/components/NoticeBoard.svelte';
@@ -8,6 +11,16 @@
   import ExamTimetable from '$lib/components/ExamTimetable.svelte';
   import QuickLinksBoard from '$lib/components/QuickLinksBoard.svelte';
   import PastEvents from '$lib/components/PastEvents.svelte';
+  import MarketplaceBoard from '$lib/components/MarketplaceBoard.svelte';
+  import CommunityPoll from '$lib/components/CommunityPoll.svelte';
+  import { matchResourceCategory as matchCommunityCategory } from '$lib/communityResourceCategories.js';
+  import {
+    COMMUNITY_DEMO_ANNOUNCEMENTS,
+    COMMUNITY_DEMO_EVENTS,
+    COMMUNITY_DEMO_MARKETPLACE,
+    COMMUNITY_DEMO_SERVICES,
+    COMMUNITY_DEMO_POLLS
+  } from '$lib/communityDemoData.js';
   import {
     TL_FEATURED,
     TL_NEW,
@@ -30,7 +43,10 @@
     getUsernameForMac,
     checkUsernameAvailable,
     getSite,
-    getCampusPosts
+    getCampusPosts,
+    getCommunityPosts,
+    recordCommunityPostClick,
+    castCampusPollVote
   } from '$lib/api.js';
   import { getClientMac, getSiteId } from '$lib/device.js';
 
@@ -68,12 +84,120 @@
   let campusEvents = $state([]);
   let campusTimetable = $state([]);
   let campusResources = $state([]);
-  // Which half of the institution feed is showing — 'campus' (Notice
-  // Board/Events, academic-styled) or 'watch' (the standard Watch & Learn
-  // feed, unchanged styling). Defaults to 'campus' since that's the
-  // time-sensitive content a student most likely opened this screen for.
-  // Irrelevant for non-institution sites, which never show the tab bar.
+  let campusPolls = $state([]);
+  // Which half of the institution/community feed is showing — 'campus'
+  // (Notice Board/Events for institution, or Board/Marketplace/Services/
+  // Events for community) or 'watch' (the standard Watch & Learn feed,
+  // unchanged styling). Shared between both verticals since a site is only
+  // ever one or the other. Defaults to 'campus' since that's the
+  // time-sensitive content a student/resident most likely opened this
+  // screen for. Irrelevant for 'general' sites, which never show the tab bar.
   let campusView = $state('campus');
+
+  // Community-only Board/Events/Marketplace/Services/Polls — same idea as
+  // the institution block above, gated on sites.vertical === 'community'.
+  // Kept as its own parallel state block (rather than generalizing the
+  // campus_posts-specific filtering above) since the two verticals' post
+  // shapes and category systems genuinely differ.
+  const isCommunity = $derived(siteInfo?.vertical === 'community');
+  let communityAnnouncements = $state([]);
+  let communityEvents = $state([]);
+  let communityMarketplace = $state([]);
+  let communityServices = $state([]);
+  let communityPolls = $state([]);
+
+  let communityQuery = $state('');
+  let communityCategory = $state('all');
+  const communityCategories = $derived.by(() => {
+    const seen = new Map();
+    for (const post of [...communityAnnouncements, ...communityEvents, ...communityServices]) {
+      const c = (post.category || '').trim();
+      if (c && !seen.has(c.toLowerCase())) seen.set(c.toLowerCase(), c);
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  });
+  function matchesCommunityFilters(post) {
+    if (communityCategory !== 'all' && (post.category || '').toLowerCase() !== communityCategory.toLowerCase()) return false;
+    const q = communityQuery.trim().toLowerCase();
+    if (!q) return true;
+    return [post.title, post.category, post.location, post.body].some((f) => (f || '').toLowerCase().includes(q));
+  }
+  const filteredCommunityAnnouncements = $derived(communityAnnouncements.filter(matchesCommunityFilters));
+  // Same optional "relevant until" convention as campus notices.
+  const filteredCurrentAnnouncements = $derived(
+    filteredCommunityAnnouncements.filter((n) => !n.event_starts_at || new Date(n.event_starts_at) >= new Date())
+  );
+  const filteredPastAnnouncements = $derived(
+    filteredCommunityAnnouncements.filter((n) => n.event_starts_at && new Date(n.event_starts_at) < new Date())
+  );
+  const filteredCommunityEvents = $derived(communityEvents.filter(matchesCommunityFilters));
+  const filteredUpcomingCommunityEvents = $derived(
+    filteredCommunityEvents.filter((e) => new Date(e.event_ends_at ?? e.event_starts_at) >= new Date())
+  );
+  const filteredPastCommunityEvents = $derived(
+    filteredCommunityEvents
+      .filter((e) => new Date(e.event_ends_at ?? e.event_starts_at) < new Date())
+      .sort((a, b) => new Date(b.event_starts_at) - new Date(a.event_starts_at))
+  );
+  const filteredCommunityMarketplace = $derived(communityMarketplace.filter(matchesCommunityFilters));
+  const filteredCommunityServices = $derived(communityServices.filter(matchesCommunityFilters));
+  const communityHasAnyResults = $derived(
+    filteredCurrentAnnouncements.length > 0 ||
+      filteredUpcomingCommunityEvents.length > 0 ||
+      filteredCommunityMarketplace.length > 0 ||
+      filteredCommunityServices.length > 0 ||
+      communityPolls.length > 0
+  );
+
+  // Dark slate + cyan/indigo "tech dashboard" palette — passed to the
+  // reused Campus components (see their own `theme` prop) and the two new
+  // Community-only ones, so Community reads as visually distinct from
+  // Campus's dark green/gold academic look while sharing every interaction
+  // pattern (trigger cards, scale-to-modal, search, pinned/featured accents).
+  // Same palette as Campus's own components' built-in defaults (dark
+  // green/gold) — Community used to run a distinct cyan/indigo "tech
+  // dashboard" look, but now matches Campus exactly so both verticals read
+  // as one consistent app rather than two different products.
+  const COMMUNITY_THEME = {
+    bg: '#0b1e13',
+    bgAlt: '#0a1b11',
+    border: '#12301e',
+    borderAlt: '#163a23',
+    borderHover: '#2a5c3a',
+    borderDashed: '#2a5c3a',
+    pinnedHoverBorder: '#d4af6a',
+    accent: '#c29d53',
+    accentSoft: 'rgba(194,157,83,0.18)',
+    accentGradA: '#d4af6a',
+    accentGradB: '#8b6a35',
+    bannerGradA: '#123420',
+    bannerGradB: '#0d2317',
+    bannerBorder: '#1c472e',
+    glow: 'rgba(212,175,106,0.22)',
+    placeholderIcon: '#3a5240',
+    carouselBg: '#05140b',
+    featured: '#d4af6a'
+  };
+  const COMMUNITY_CATEGORY_ICON = {
+    food_delivery: Truck,
+    home_services: Wrench,
+    fitness: Dumbbell,
+    tech_support: Cpu,
+    transport: Bus,
+    coworking: Building2,
+    finance: Wallet,
+    general: Link2
+  };
+
+  // Shared by the tab bar and the wrapper's background/texture below —
+  // whichever vertical's own "primary" tab (Campus or Community) is
+  // currently showing, vs. 'watch' (Watch & Learn, unchanged styling for
+  // every vertical).
+  const primaryTabActive = $derived((isInstitution || isCommunity) && campusView === 'campus');
+  // Same dark green background for both verticals' primary tab now that
+  // Community matches Campus's palette — kept as its own constant (rather
+  // than inlined at each call site) in case a future vertical needs its own.
+  const primaryTabBg = '#05140b';
 
   // Constellation-dot texture for the Campus tab background — shared by
   // both the outer min-height:100dvh wrapper and the inner pb-24 feed div
@@ -148,7 +272,8 @@
     filteredCurrentNotices.length > 0 ||
       filteredUpcomingTimetable.length > 0 ||
       filteredCampusEvents.length > 0 ||
-      filteredCampusResources.length > 0
+      filteredCampusResources.length > 0 ||
+      campusPolls.length > 0
   );
 
   // Time-of-day + username greeting for the Campus tab header, replacing
@@ -371,6 +496,17 @@
       campusEvents = allPosts.filter((p) => p.type === 'event');
       campusTimetable = allPosts.filter((p) => p.type === 'timetable');
       campusResources = allPosts.filter((p) => p.type === 'resource');
+      campusPolls = allPosts.filter((p) => p.type === 'poll');
+    } else if (siteInfo?.vertical === 'community') {
+      const postsResult = await getCommunityPosts(site);
+      const allPosts = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
+      // Demo items always trail real ones — see communityDemoData.js's own
+      // header comment for what "delete this" actually involves.
+      communityAnnouncements = [...allPosts.filter((p) => p.type === 'announcement'), ...COMMUNITY_DEMO_ANNOUNCEMENTS];
+      communityEvents = [...allPosts.filter((p) => p.type === 'event'), ...COMMUNITY_DEMO_EVENTS];
+      communityMarketplace = [...allPosts.filter((p) => p.type === 'marketplace'), ...COMMUNITY_DEMO_MARKETPLACE];
+      communityServices = [...allPosts.filter((p) => p.type === 'service'), ...COMMUNITY_DEMO_SERVICES];
+      communityPolls = [...allPosts.filter((p) => p.type === 'poll'), ...COMMUNITY_DEMO_POLLS];
     }
 
     if (usernameResult.ok && usernameResult.data?.username) {
@@ -634,8 +770,10 @@
     // Nothing real to claim — either the backend's unreachable, or every
     // completion so far was a demo/padding item. Same old client-only flow,
     // using only the demo balance (never the real one, since there isn't one).
+    // Second arg tells the caller no real backend session was created here
+    // — it must not go looking one up (see +page.svelte's onConnect).
     if (realUnclaimedSecs <= 0) {
-      onConnect(totalEarnedSecs);
+      onConnect(totalEarnedSecs, false);
       return;
     }
 
@@ -663,7 +801,7 @@
     // so a demo completion can never inflate a real, router-authorised grant.
     if (result.data?.success || result.data?.retrying) {
       showUsernamePrompt = false;
-      onConnect(result.data.durationSecs ?? realUnclaimedSecs);
+      onConnect(result.data.durationSecs ?? realUnclaimedSecs, true);
       return;
     }
 
@@ -1198,7 +1336,7 @@
        as a mismatched band above the fixed bottom bar. -->
   <div
     class="flex flex-col"
-    style="min-height: 100dvh; background: {isInstitution && campusView === 'campus' ? '#05140b' : '#0E1F14'}; {isInstitution && campusView === 'campus' ? campusTexture : ''}"
+    style="min-height: 100dvh; background: {primaryTabActive ? primaryTabBg : '#0E1F14'}; {primaryTabActive ? campusTexture : ''}"
   >
     <!-- Header -->
     <div class="px-4 pt-5 pb-3 flex items-center justify-between shrink-0" style="background: #1D3C2A; position: sticky; top: 0; z-index: 40;">
@@ -1273,24 +1411,31 @@
       </div>
     </div>
 
-    <!-- Campus / Watch & Learn segmented tabs — institution sites only.
-         Separates the academic content from the shared Watch & Learn feed
-         instead of stacking both in one long scroll. -->
-    {#if isInstitution}
+    <!-- Campus/Community + Watch & Learn segmented tabs — institution and
+         community sites only. Separates that vertical's own content from
+         the shared Watch & Learn feed instead of stacking both in one long
+         scroll. -->
+    {#if isInstitution || isCommunity}
       <div class="px-4 pt-3 shrink-0" style="background: #1D3C2A;">
         <div class="flex justify-center gap-6" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
           <button
             onclick={() => (campusView = 'campus')}
-            class="pb-2.5 text-sm font-bold transition-all"
+            class="pb-2.5 text-sm font-bold transition-all flex items-center gap-1.5"
             style="color: {campusView === 'campus' ? '#E8D4B0' : '#6B8A6B'}; border-bottom: 2px solid {campusView === 'campus' ? '#c29d53' : 'transparent'};"
           >
-            Campus
+            {#if isCommunity}
+              <Users size={14} />
+            {:else}
+              <GraduationCap size={14} />
+            {/if}
+            {isCommunity ? 'Community' : 'Campus'}
           </button>
           <button
             onclick={() => (campusView = 'watch')}
-            class="pb-2.5 text-sm font-bold transition-all"
+            class="pb-2.5 text-sm font-bold transition-all flex items-center gap-1.5"
             style="color: {campusView === 'watch' ? '#E8D4B0' : '#6B8A6B'}; border-bottom: 2px solid {campusView === 'watch' ? '#C45C38' : 'transparent'};"
           >
+            <Play size={14} />
             Watch & Learn
           </button>
         </div>
@@ -1306,9 +1451,7 @@
          seamlessly to the fixed bottom bar. -->
     <div
       class="pb-24"
-      style={isInstitution && campusView === 'campus'
-        ? `background: #05140b; ${campusTexture}`
-        : ''}
+      style={primaryTabActive ? `background: ${primaryTabBg}; ${campusTexture}` : ''}
     >
     {#if isInstitution && campusView === 'campus'}
       <!-- ── Campus view — dark green/gold "dashboard" palette, only ever
@@ -1367,6 +1510,10 @@
       </div>
 
       <div class="px-4 pb-6 flex flex-col gap-6">
+        {#each campusPolls as poll (poll.id)}
+          <CommunityPoll post={poll} castVote={castCampusPollVote} />
+        {/each}
+
         <!-- Notice Board — its own full-width section, above Quick Links,
              so an urgent institutional notice (exam results, fee deadline,
              circular) gets the visual weight and explicit call-to-action it
@@ -1428,7 +1575,122 @@
           </div>
         {/if}
       </div>
-    {:else if siteResolved && (!isInstitution || campusView === 'watch')}
+    {:else if isCommunity && campusView === 'campus'}
+      <!-- ── Community view — same dark green/gold "dashboard" palette as
+           Campus, only ever rendered for community sites. Mirrors the
+           Campus section's own structure/header exactly, just with the
+           reused components' `theme` prop swapped to COMMUNITY_THEME
+           (which now carries Campus's own colors — see its definition). -->
+      <div class="px-4 pt-5 pb-6">
+        <p class="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.2em] mb-1" style="color: #c29d53;">
+          <span class="w-1.5 h-1.5 rounded-full" style="background: #c29d53; animation: cart-ready-ping 1.8s ease-in-out infinite;"></span>
+          {siteInfo?.name ?? 'Community Hub'}
+        </p>
+        <h1 class="text-2xl font-bold mb-4" style="color: #f3f4f6; font-family: 'Playfair Display', serif;">
+          {campusGreeting()}
+        </h1>
+        <div class="campus-search flex items-center gap-2 rounded-lg px-3.5 py-2.5 max-w-md mx-auto" style="background: #0a1b11; border: 1px solid #163a23;">
+          <Search size={13} color="#6b7280" class="shrink-0" />
+          <input
+            bind:value={communityQuery}
+            type="text"
+            placeholder="Search Community…"
+            class="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder-[#6b7280]"
+            style="color: #e5e7eb;"
+          />
+          {#if communityQuery}
+            <button onclick={() => (communityQuery = '')} aria-label="Clear search" class="shrink-0">
+              <X size={13} color="#9ca3af" />
+            </button>
+          {/if}
+        </div>
+        {#if communityCategories.length > 1}
+          <div class="flex gap-2 overflow-x-auto no-scrollbar pt-3 max-w-md mx-auto" role="group" aria-label="Filter by category">
+            <button
+              onclick={() => (communityCategory = 'all')}
+              class="shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors"
+              style={communityCategory === 'all'
+                ? 'background: #c29d53; color: #0b1e13;'
+                : 'background: #0a1b11; border: 1px solid #163a23; color: #9ca3af;'}
+            >
+              All
+            </button>
+            {#each communityCategories as cat (cat)}
+              <button
+                onclick={() => (communityCategory = cat)}
+                class="shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors"
+                style={communityCategory === cat
+                  ? 'background: #c29d53; color: #0b1e13;'
+                  : 'background: #0a1b11; border: 1px solid #163a23; color: #9ca3af;'}
+              >
+                {cat}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <div class="px-4 pb-6 flex flex-col gap-6">
+        {#each communityPolls as poll (poll.id)}
+          <CommunityPoll post={poll} theme={COMMUNITY_THEME} />
+        {/each}
+
+        <!-- Community Board — same full-width banner treatment as Campus's
+             Notice Board, above everything else for the same reason: an
+             urgent announcement deserves the visual weight. -->
+        {#if filteredCurrentAnnouncements.length > 0 || filteredPastAnnouncements.length > 0}
+          <NoticeBoard posts={filteredCurrentAnnouncements} pastPosts={filteredPastAnnouncements} theme={COMMUNITY_THEME} />
+        {/if}
+
+        {#if filteredCommunityMarketplace.length > 0}
+          <div class="flex flex-col">
+            <h2 class="text-xs font-semibold uppercase tracking-wider mb-2 pl-1" style="color: #9ca3af;">Marketplace</h2>
+            <MarketplaceBoard posts={filteredCommunityMarketplace} theme={COMMUNITY_THEME} />
+          </div>
+        {/if}
+
+        {#if filteredCommunityServices.length > 0}
+          <div class="flex flex-col">
+            <h2 class="text-xs font-semibold uppercase tracking-wider mb-2 pl-1" style="color: #9ca3af;">Local services</h2>
+            <QuickLinksBoard
+              posts={filteredCommunityServices}
+              theme={COMMUNITY_THEME}
+              matchCategory={matchCommunityCategory}
+              categoryIcons={COMMUNITY_CATEGORY_ICON}
+              recordClick={recordCommunityPostClick}
+              detailModal
+            />
+          </div>
+        {/if}
+
+        {#if filteredUpcomingCommunityEvents.length > 0}
+          <div class="flex flex-col">
+            <h2 class="text-xs font-semibold uppercase tracking-wider mb-2 pl-1" style="color: #9ca3af;">Community events</h2>
+            <CampusEventsStrip posts={filteredUpcomingCommunityEvents} theme={COMMUNITY_THEME} />
+          </div>
+        {/if}
+
+        {#if filteredPastCommunityEvents.length > 0}
+          <div class="-mx-4">
+            <PastEvents posts={filteredPastCommunityEvents} theme={COMMUNITY_THEME} />
+          </div>
+        {/if}
+
+        {#if !communityHasAnyResults}
+          <div class="pt-6 pb-4 text-center">
+            <p class="text-sm" style="color: #6b7280;">
+              {#if communityQuery}
+                Nothing matches "{communityQuery}".
+              {:else if communityCategory !== 'all'}
+                Nothing in {communityCategory} yet.
+              {:else}
+                Nothing posted here yet — check back soon.
+              {/if}
+            </p>
+          </div>
+        {/if}
+      </div>
+    {:else if siteResolved && (!isInstitution && !isCommunity || campusView === 'watch')}
       <!-- Hero section -->
       {#if featured}
         <div class="px-4 pt-4 pb-6" style="background: #1D3C2A;">
@@ -1819,7 +2081,7 @@
             </div>
             <div>
               <p class="text-sm font-bold text-[#E8D4B0]">Set a username</p>
-              <p class="text-[11px] text-[#96B496]">Optional — so you can check your session later from any browser</p>
+              <p class="text-[11px] text-[#96B496]">Optional · tied to this device</p>
             </div>
           </div>
 

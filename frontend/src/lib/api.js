@@ -136,6 +136,27 @@ export function recordCampusPostClick(id) {
   return request(`/campus/posts/${encodeURIComponent(id)}/click`, { method: 'POST', body: JSON.stringify({}) });
 }
 
+/** GET /api/community/posts?site=X&type=announcement|event|marketplace|service|poll — Community tab feed for a community site. `type` is optional. */
+export function getCommunityPosts(site, type) {
+  const params = new URLSearchParams({ site, ...(type ? { type } : {}) });
+  return request(`/community/posts?${params}`);
+}
+
+/** POST /api/community/posts/:id/click — fire-and-forget tap count for a Marketplace/Services tile, analytics only. */
+export function recordCommunityPostClick(id) {
+  return request(`/community/posts/${encodeURIComponent(id)}/click`, { method: 'POST', body: JSON.stringify({}) });
+}
+
+/** POST /api/community/posts/:id/vote — Body: { mac, optionIndex }. Casts this device's poll vote; always returns fresh per-option tallies. */
+export function castCommunityPollVote(id, mac, optionIndex) {
+  return request(`/community/posts/${encodeURIComponent(id)}/vote`, { method: 'POST', body: JSON.stringify({ mac, optionIndex }) });
+}
+
+/** POST /api/campus/posts/:id/vote — same shape as castCommunityPollVote, for a Campus poll. */
+export function castCampusPollVote(id, mac, optionIndex) {
+  return request(`/campus/posts/${encodeURIComponent(id)}/vote`, { method: 'POST', body: JSON.stringify({ mac, optionIndex }) });
+}
+
 /** GET /api/content/completions?mac=X&site=Y — items this device has already finished, for UI restore after reload. */
 export function getContentCompletions(mac, site) {
   const params = new URLSearchParams({ mac, ...(site ? { site } : {}) });
@@ -376,6 +397,37 @@ export async function adminUploadCampusAttachment(token, file) {
   return result;
 }
 
+/** GET /api/admin/community-posts?site=<id> — every post, including deactivated ones. `site` is optional. */
+export function adminGetCommunityPosts(token, site) {
+  return request(`/admin/community-posts${site ? `?site=${encodeURIComponent(site)}` : ''}`, authed(token));
+}
+
+/** POST /api/admin/community-posts — Body matches services/communityPosts.js createCommunityPost fields. */
+export function adminCreateCommunityPost(token, body) {
+  return request('/admin/community-posts', { method: 'POST', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** PATCH /api/admin/community-posts/:id — partial update. */
+export function adminUpdateCommunityPost(token, id, body) {
+  return request(`/admin/community-posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** DELETE /api/admin/community-posts/:id — deactivates (soft-delete). */
+export function adminDeleteCommunityPost(token, id) {
+  return request(`/admin/community-posts/${encodeURIComponent(id)}`, { method: 'DELETE', ...authed(token) });
+}
+
+/** POST /api/admin/community-posts/upload — uploads an image/video/PDF attachment; same shape as adminUploadCampusAttachment. */
+export async function adminUploadCommunityAttachment(token, file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const result = await request('/admin/community-posts/upload', { method: 'POST', body: formData, timeoutMs: 240000, ...authed(token) });
+  if (result.ok && result.data?.url) {
+    return { ...result, data: { ...result.data, url: `${BACKEND_ORIGIN}${result.data.url}` } };
+  }
+  return result;
+}
+
 /** GET /api/admin/activators — every activator with performance numbers. */
 export function adminGetActivators(token) {
   return request('/admin/activators', authed(token));
@@ -484,7 +536,22 @@ export function adminGetPackages(token) {
   return request('/admin/packages', authed(token));
 }
 
-/** PATCH /api/admin/packages/:id — partial update: label, priceKes, durationSecs, isActive, siteIds. */
+/** POST /api/admin/packages — Body: { id, label, priceKes, durationSecs, badge?, isActive?, siteIds? }. */
+export function adminCreatePackage(token, body) {
+  return request('/admin/packages', { method: 'POST', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** PATCH /api/admin/packages/:id — partial update: label, priceKes, durationSecs, badge, isActive, siteIds. */
 export function adminUpdatePackage(token, id, body) {
   return request(`/admin/packages/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** DELETE /api/admin/packages/:id — hard delete; blocked (409) if the package has purchase history. */
+export function adminDeletePackage(token, id) {
+  return request(`/admin/packages/${encodeURIComponent(id)}`, { method: 'DELETE', ...authed(token) });
+}
+
+/** PATCH /api/admin/packages/:id/feature — Body: { featured }. Sets which package is pre-highlighted on the purchase screen (at most one at a time). */
+export function adminSetPackageFeatured(token, id, featured) {
+  return request(`/admin/packages/${encodeURIComponent(id)}/feature`, { method: 'PATCH', body: JSON.stringify({ featured }), ...authed(token) });
 }

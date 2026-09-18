@@ -49,9 +49,11 @@ ALTER TABLE sites ADD COLUMN IF NOT EXISTS btc_enabled BOOLEAN NOT NULL DEFAULT 
 -- Notice Board / Campus Events sections (see campus_posts below) for a
 -- college/university deployment — purely additive on top of Watch & Learn,
 -- gated per-site so existing non-institution sites are never affected.
+-- 'community' is the same idea for a residential/co-working deployment —
+-- see community_posts below.
 ALTER TABLE sites ADD COLUMN IF NOT EXISTS vertical TEXT NOT NULL DEFAULT 'general';
 ALTER TABLE sites DROP CONSTRAINT IF EXISTS sites_vertical_check;
-ALTER TABLE sites ADD CONSTRAINT sites_vertical_check CHECK (vertical IN ('general', 'institution'));
+ALTER TABLE sites ADD CONSTRAINT sites_vertical_check CHECK (vertical IN ('general', 'institution', 'community'));
 
 DROP TRIGGER IF EXISTS sites_set_updated_at ON sites;
 CREATE TRIGGER sites_set_updated_at
@@ -95,6 +97,30 @@ UPDATE packages SET price_kes = 2 WHERE id = 'test';
 -- Idempotent: is_active defaults to true on INSERT, so existing databases
 -- need this explicit correction too.
 UPDATE packages SET is_active = false WHERE id = 'earned';
+
+-- Small badge shown on the purchase screen's plan card ("Best Value",
+-- "Test", ...) — admin-editable (see PATCH/POST /admin/packages), NULL =
+-- no badge. Backfills the two that were previously hardcoded in the
+-- frontend's static PACKAGES catalogue (data.js) so existing deployments
+-- render identically after this migration; PackageScreen.svelte now reads
+-- badge from here instead, so it's live-editable going forward.
+ALTER TABLE packages ADD COLUMN IF NOT EXISTS badge TEXT;
+UPDATE packages SET badge = 'Best Value' WHERE id = 'weekly' AND badge IS NULL;
+UPDATE packages SET badge = 'Test' WHERE id = 'test' AND badge IS NULL;
+
+-- Which plan is pre-highlighted when the purchase screen first renders —
+-- admin-configurable (see PATCH /admin/packages/:id/feature), decoupled
+-- from `badge` since badge is just decorative freeform text and more than
+-- one package can carry one. At most one row is ever true (enforced by the
+-- partial unique index below; setPackageFeatured() clears the old one in
+-- the same transaction before setting the new one). Backfills 'weekly' —
+-- today's hardcoded PackageScreen.svelte default — so existing deployments
+-- render identically after this migration. The NOT EXISTS guard means this
+-- backfill only ever fires once (before any package has been featured);
+-- if an admin later un-features every package, it won't reassert itself.
+ALTER TABLE packages ADD COLUMN IF NOT EXISTS is_featured BOOLEAN NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_single_featured ON packages (is_featured) WHERE is_featured;
+UPDATE packages SET is_featured = true WHERE id = 'weekly' AND NOT EXISTS (SELECT 1 FROM packages WHERE is_featured = true);
 
 -- Which sites a package is sold on. No rows for a given package_id = sold
 -- on every site (today's behaviour, unchanged) — this is additive scoping,
@@ -516,7 +542,7 @@ CREATE INDEX IF NOT EXISTS idx_content_completions_unclaimed ON content_completi
 CREATE TABLE IF NOT EXISTS campus_posts (
   id               SERIAL PRIMARY KEY,
   site_id          TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  type             TEXT NOT NULL CHECK (type IN ('notice', 'release', 'event', 'timetable', 'resource')),
+  type             TEXT NOT NULL CHECK (type IN ('notice', 'release', 'event', 'timetable', 'resource', 'poll')),
   title            TEXT NOT NULL,
   body             TEXT,
   category         TEXT,                          -- e.g. 'Exams', 'Fees', 'Library', 'Sports'
@@ -534,12 +560,12 @@ CREATE TABLE IF NOT EXISTS campus_posts (
 );
 
 -- Idempotent widening for a DB that already had campus_posts before
--- 'timetable'/'resource' existed — CREATE TABLE IF NOT EXISTS above is a
--- no-op there, so the inline CHECK needs re-applying under its
+-- 'timetable'/'resource'/'poll' existed — CREATE TABLE IF NOT EXISTS above
+-- is a no-op there, so the inline CHECK needs re-applying under its
 -- auto-generated name to actually take effect.
 ALTER TABLE campus_posts DROP CONSTRAINT IF EXISTS campus_posts_type_check;
 ALTER TABLE campus_posts ADD CONSTRAINT campus_posts_type_check
-  CHECK (type IN ('notice', 'release', 'event', 'timetable', 'resource'));
+  CHECK (type IN ('notice', 'release', 'event', 'timetable', 'resource', 'poll'));
 
 DROP TRIGGER IF EXISTS campus_posts_set_updated_at ON campus_posts;
 CREATE TRIGGER campus_posts_set_updated_at
@@ -561,6 +587,81 @@ ALTER TABLE campus_posts ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT 
 -- incremented via POST /api/campus/posts/:id/click. Lets an admin see which
 -- campus services students actually use and retire/replace dead ones.
 ALTER TABLE campus_posts ADD COLUMN IF NOT EXISTS clicks BIGINT NOT NULL DEFAULT 0;
+
+-- type='poll' options ({options: ["A", "B", ...]}) — same convention as
+-- community_posts.metadata. Vote tallies are never stored here; they're
+-- always derived live from campus_poll_votes (see services/campusPosts.js's
+-- listActivePosts), same as community polls.
+ALTER TABLE campus_posts ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- One vote per device per campus poll — same shape/reasoning as
+-- community_poll_votes (see its own comment): enforced here, not just in
+-- application code, so a retried/duplicate request can never double-count.
+CREATE TABLE IF NOT EXISTS campus_poll_votes (
+  id           SERIAL PRIMARY KEY,
+  post_id      INTEGER NOT NULL REFERENCES campus_posts(id) ON DELETE CASCADE,
+  mac          TEXT NOT NULL,
+  option_index INTEGER NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (post_id, mac)
+);
+
+-- Community Board / Community Events / Local Services / Marketplace / Polls
+-- for a site with sites.vertical = 'community' — a residential/co-working
+-- deployment rather than a campus. Deliberately its own table rather than
+-- folding into campus_posts above: the two verticals' type-sets (and, for
+-- 'marketplace'/'poll', the fields they need) are different enough that
+-- sharing one table/CHECK constraint would tangle unrelated schemas
+-- together. 'announcement' reuses the same "optional relevant-until date"
+-- convention as campus_posts' notices; 'event' reuses the same
+-- starts/ends/location shape as a campus event; 'service' is the community
+-- equivalent of a Quick Links resource tile; 'marketplace' is a buy/sell/
+-- trade listing (price_kes + metadata.condition/contactPhone/sold);
+-- 'poll' is a quick multi-option vote (metadata.options — see
+-- community_poll_votes below for the actual tallies).
+CREATE TABLE IF NOT EXISTS community_posts (
+  id               SERIAL PRIMARY KEY,
+  site_id          TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  type             TEXT NOT NULL CHECK (type IN ('announcement', 'event', 'marketplace', 'service', 'poll')),
+  title            TEXT NOT NULL,
+  body             TEXT,
+  category         TEXT,
+  priority         TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('normal', 'important', 'urgent')),
+  attachment_url   TEXT,
+  price_kes        NUMERIC(10,2),                  -- type = 'marketplace' only
+  event_starts_at  TIMESTAMPTZ,                    -- type = 'event' only, or an 'announcement's optional expiry
+  event_ends_at    TIMESTAMPTZ,
+  location         TEXT,                           -- type = 'event' only
+  metadata         JSONB NOT NULL DEFAULT '{}'::jsonb,
+  is_pinned        BOOLEAN NOT NULL DEFAULT false,
+  is_active        BOOLEAN NOT NULL DEFAULT true,
+  sort_order       INTEGER NOT NULL DEFAULT 0,
+  images           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  clicks           BIGINT NOT NULL DEFAULT 0,
+  published_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS community_posts_set_updated_at ON community_posts;
+CREATE TRIGGER community_posts_set_updated_at
+  BEFORE UPDATE ON community_posts
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_community_posts_site_active ON community_posts(site_id, is_active, type);
+
+-- One vote per device per poll — enforced here (not just in application
+-- code) so a retried/duplicate request can never double-count. Tallies are
+-- always derived live via COUNT/GROUP BY (see services/communityPosts.js's
+-- listActivePosts), never cached on community_posts itself.
+CREATE TABLE IF NOT EXISTS community_poll_votes (
+  id           SERIAL PRIMARY KEY,
+  post_id      INTEGER NOT NULL REFERENCES community_posts(id) ON DELETE CASCADE,
+  mac          TEXT NOT NULL,
+  option_index INTEGER NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (post_id, mac)
+);
 
 -- ── Escalations ──────────────────────────────────────────────────────────
 -- Issues a coordinator raises — either self-reported (e.g. a network

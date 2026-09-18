@@ -4,12 +4,13 @@
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
     ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
     BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft, Bitcoin, Trash2,
-    Megaphone, Pin, Calendar, GraduationCap, ClipboardCheck, Link2, MousePointerClick
+    Megaphone, Pin, Calendar, GraduationCap, ClipboardCheck, Link2, MousePointerClick, ShoppingBag, Star
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import MultiLineChartMini from '$lib/components/MultiLineChartMini.svelte';
   import AdminModal from '$lib/components/AdminModal.svelte';
   import { RESOURCE_CATEGORIES } from '$lib/campusResourceCategories.js';
+  import { RESOURCE_CATEGORIES as COMMUNITY_RESOURCE_CATEGORIES } from '$lib/communityResourceCategories.js';
   import {
     adminGetContent, adminCreateContent, adminUpdateContent,
     adminGetActivators, adminCreateActivator, adminUpdateActivator,
@@ -17,8 +18,9 @@
     adminUploadContentFile, adminGetSettings, adminUpdateSettings, adminGetAnalytics, adminGetContentAnalytics,
     adminGetPurchasesBySite, adminGetPurchasesByPackage,
     adminGetSites, adminCreateSite, adminUpdateSite, adminDeleteSite, adminGetUnifiSiteOptions,
-    adminGetPackages, adminUpdatePackage,
-    adminGetCampusPosts, adminCreateCampusPost, adminUpdateCampusPost, adminDeleteCampusPost, adminUploadCampusAttachment
+    adminGetPackages, adminCreatePackage, adminUpdatePackage, adminDeletePackage, adminSetPackageFeatured,
+    adminGetCampusPosts, adminCreateCampusPost, adminUpdateCampusPost, adminDeleteCampusPost, adminUploadCampusAttachment,
+    adminGetCommunityPosts, adminCreateCommunityPost, adminUpdateCommunityPost, adminDeleteCommunityPost, adminUploadCommunityAttachment
   } from '$lib/api.js';
 
   let { token, username, onLogout } = $props();
@@ -66,6 +68,7 @@
     { id: 'analytics', label: 'Analytics', Icon: BarChart3 },
     { id: 'content', label: 'Content', Icon: FileText },
     { id: 'campus', label: 'Campus', Icon: Megaphone },
+    { id: 'community', label: 'Community', Icon: Users },
     { id: 'activators', label: 'Activators', Icon: Users },
     { id: 'coordinators', label: 'Coordinators', Icon: ShieldCheck },
     { id: 'sites', label: 'Sites', Icon: Radio },
@@ -97,19 +100,22 @@
   ];
   const VIEW_FREQUENCY_LABEL = Object.fromEntries(VIEW_FREQUENCIES.map((f) => [f.id, f.label]));
 
-  // Campus posts (notices/releases/events/timetable/resources — institution sites only).
+  // Campus posts (notices/releases/events/timetable/resources/polls — institution sites only).
   const CAMPUS_TYPES = [
     { id: 'notice', label: 'Notice' },
     { id: 'release', label: 'Release' },
     { id: 'event', label: 'Event' },
     { id: 'timetable', label: 'Timetable' },
-    { id: 'resource', label: 'Resource' }
+    { id: 'resource', label: 'Resource' },
+    { id: 'poll', label: 'Poll' }
   ];
-  const CAMPUS_TYPE_ICON = { notice: Megaphone, release: FileText, event: Calendar, timetable: ClipboardCheck, resource: Link2 };
+  const CAMPUS_TYPE_ICON = { notice: Megaphone, release: FileText, event: Calendar, timetable: ClipboardCheck, resource: Link2, poll: BarChart3 };
   // Which fields the campus post form shows, per type — 'timetable' reuses
   // the same start/end/location fields an event does (an exam slot is
   // structurally the same shape), 'resource' is just title/category/body/
-  // attachment (a link tile), and only notice/release carry a priority.
+  // attachment (a link tile), only notice/release carry a priority, and
+  // 'poll' gets its own option-list builder (see the CAMPUS_TYPES==='poll'
+  // branch in the form below).
   const CAMPUS_TYPES_WITH_SCHEDULE = ['event', 'timetable'];
   const CAMPUS_TYPES_WITH_PRIORITY = ['notice', 'release'];
   const CAMPUS_PRIORITIES = [
@@ -119,12 +125,35 @@
   ];
   const CAMPUS_PRIORITY_COLOR = { normal: '#3C6A4A', important: '#CC8830', urgent: '#C45C38' };
 
+  // Community posts (announcements/events/marketplace/services/polls —
+  // community sites only). Same shape as the Campus constants above.
+  const COMMUNITY_TYPES = [
+    { id: 'announcement', label: 'Announcement' },
+    { id: 'event', label: 'Event' },
+    { id: 'marketplace', label: 'Marketplace' },
+    { id: 'service', label: 'Service' },
+    { id: 'poll', label: 'Poll' }
+  ];
+  const COMMUNITY_TYPE_ICON = { announcement: Megaphone, event: Calendar, marketplace: ShoppingBag, service: Link2, poll: BarChart3 };
+  // 'event' gets starts/ends/location; 'announcement' gets priority + the
+  // same optional expiry date as a campus notice; 'marketplace' gets
+  // price/condition/contact; 'poll' gets an option-list builder. 'service'
+  // is just title/category/body/attachment, like a campus resource.
+  const COMMUNITY_TYPES_WITH_SCHEDULE = ['event'];
+  const COMMUNITY_TYPES_WITH_PRIORITY = ['announcement'];
+  const COMMUNITY_CONDITIONS = [
+    { id: 'new', label: 'New' },
+    { id: 'like_new', label: 'Like new' },
+    { id: 'used', label: 'Used' }
+  ];
+
   let contentItems = $state([]);
   let activators = $state([]);
   let coordinators = $state([]);
   let sites = $state([]);
   let packages = $state([]);
   let campusPosts = $state([]);
+  let communityPosts = $state([]);
   let loading = $state(true);
 
   async function loadContent() {
@@ -135,6 +164,10 @@
   async function loadCampusPosts() {
     const r = await adminGetCampusPosts(token);
     if (r.ok) campusPosts = r.data.posts;
+  }
+  async function loadCommunityPosts() {
+    const r = await adminGetCommunityPosts(token);
+    if (r.ok) communityPosts = r.data.posts;
   }
   async function loadActivators() {
     const r = await adminGetActivators(token);
@@ -189,6 +222,11 @@
     { id: 'month', label: 'Month' }
   ];
   let activeDetail = $state('none'); // 'none' | 'site' | 'package'
+  // Which of the two Analytics portions is showing — Watch & Earn and
+  // Purchases used to render stacked on one long scroll; now they're
+  // separate segmented tabs (activeDetail's site/package drill-downs are
+  // reached only from within 'purchases', via its "View more" links).
+  let analyticsSection = $state('earn'); // 'earn' | 'purchases'
 
   let siteDetailGranularity = $state('day');
   let siteDetailSiteId = $state(''); // '' = every site
@@ -276,23 +314,29 @@
   });
 
   // Per-content drill-down (impressions/completions/survey answer
-  // breakdown) — expanded inline under the clicked row in Content Overview.
+  // breakdown) — opens in a modal from the clicked row in Content Overview.
+  // contentDetailItem holds the row's own summary (title/type/isActive) so
+  // the modal has something to show as a header immediately, before the
+  // fuller contentDetail finishes loading.
   let expandedContentId = $state(null);
+  let contentDetailItem = $state(null);
   let contentDetail = $state(null);
   let contentDetailLoading = $state(false);
 
-  async function toggleContentAnalytics(id) {
-    if (expandedContentId === id) {
-      expandedContentId = null;
-      contentDetail = null;
-      return;
-    }
-    expandedContentId = id;
+  async function openContentDetail(item) {
+    expandedContentId = item.id;
+    contentDetailItem = item;
     contentDetail = null;
     contentDetailLoading = true;
-    const r = await adminGetContentAnalytics(token, id);
+    const r = await adminGetContentAnalytics(token, item.id);
     contentDetailLoading = false;
     if (r.ok) contentDetail = r.data.detail;
+  }
+
+  function closeContentDetail() {
+    expandedContentId = null;
+    contentDetailItem = null;
+    contentDetail = null;
   }
 
   onMount(async () => {
@@ -304,7 +348,8 @@
       loadPackages(),
       loadSettings(),
       loadAnalytics(),
-      loadCampusPosts()
+      loadCampusPosts(),
+      loadCommunityPosts()
     ]);
 
     // Reconciles a dashboard restored from a persisted session (see
@@ -489,6 +534,7 @@
       eventStartsAt: '',
       eventEndsAt: '',
       location: '',
+      pollOptions: ['', ''],
       isPinned: false,
       images: []
     };
@@ -516,6 +562,7 @@
     // event/timetable-only (an exam/event has a venue and a duration; a
     // notice doesn't).
     const hasExpiry = CAMPUS_TYPES_WITH_PRIORITY.includes(draft.type);
+    const metadata = draft.type === 'poll' ? { options: draft.pollOptions.map((o) => o.trim()).filter(Boolean) } : {};
     return {
       siteId: draft.siteId,
       type: draft.type,
@@ -527,6 +574,7 @@
       eventStartsAt: (hasSchedule || hasExpiry) && draft.eventStartsAt ? new Date(draft.eventStartsAt).toISOString() : undefined,
       eventEndsAt: hasSchedule && draft.eventEndsAt ? new Date(draft.eventEndsAt).toISOString() : undefined,
       location: hasSchedule ? draft.location.trim() || undefined : undefined,
+      metadata,
       isPinned: draft.isPinned,
       images: draft.type === 'event' ? draft.images : []
     };
@@ -542,6 +590,7 @@
   function startEditCampusPost(post) {
     editingCampusId = post.id;
     campusFormError = '';
+    const options = Array.isArray(post.metadata?.options) ? post.metadata.options : [];
     campusDraft = {
       siteId: post.site_id,
       type: post.type,
@@ -553,6 +602,7 @@
       eventStartsAt: post.event_starts_at ? toDatetimeLocal(post.event_starts_at) : '',
       eventEndsAt: post.event_ends_at ? toDatetimeLocal(post.event_ends_at) : '',
       location: post.location ?? '',
+      pollOptions: options.length >= 2 ? options : ['', ''],
       isPinned: post.is_pinned,
       images: Array.isArray(post.images) ? post.images : []
     };
@@ -562,6 +612,10 @@
   async function submitCampusPost() {
     if (!campusDraft.siteId || !campusDraft.title.trim()) {
       campusFormError = 'Site and title are required';
+      return;
+    }
+    if (campusDraft.type === 'poll' && campusDraft.pollOptions.map((o) => o.trim()).filter(Boolean).length < 2) {
+      campusFormError = 'A poll needs at least 2 options';
       return;
     }
     campusFormError = '';
@@ -631,6 +685,170 @@
   }
   function removeCampusGalleryImage(i) {
     campusDraft.images = campusDraft.images.filter((_, idx) => idx !== i);
+  }
+
+  // ── Community posts form (announcements/events/marketplace/services/
+  // polls) ─────────────────────────────────────────────────────────────
+  // Same shared-draft-for-create-and-edit shape as the Campus form above.
+  // `priceKes`/`condition`/`contactPhone` only matter for type='marketplace'
+  // (folded into `metadata` on submit — see communityDraftToBody);
+  // `pollOptions` only for type='poll' (also folded into metadata, as
+  // metadata.options — this array is draft-only UI state, not sent as-is).
+  function freshCommunityDraft() {
+    return {
+      siteId: sites[0]?.id ?? '',
+      type: 'announcement',
+      title: '',
+      body: '',
+      category: '',
+      priority: 'normal',
+      attachmentUrl: '',
+      priceKes: '',
+      condition: 'used',
+      contactPhone: '',
+      eventStartsAt: '',
+      eventEndsAt: '',
+      location: '',
+      pollOptions: ['', ''],
+      isPinned: false,
+      images: []
+    };
+  }
+  let showCommunityForm = $state(false);
+  let editingCommunityId = $state(null);
+  let communityDraft = $state(freshCommunityDraft());
+  let communityFormError = $state('');
+  let communitySaving = $state(false);
+  let communityAttachmentUploading = $state(false);
+
+  function communityDraftToBody(draft) {
+    const hasSchedule = COMMUNITY_TYPES_WITH_SCHEDULE.includes(draft.type);
+    const hasExpiry = COMMUNITY_TYPES_WITH_PRIORITY.includes(draft.type);
+
+    let metadata = {};
+    if (draft.type === 'marketplace') {
+      metadata = { condition: draft.condition, contactPhone: draft.contactPhone.trim() || undefined };
+    } else if (draft.type === 'poll') {
+      metadata = { options: draft.pollOptions.map((o) => o.trim()).filter(Boolean) };
+    }
+
+    return {
+      siteId: draft.siteId,
+      type: draft.type,
+      title: draft.title.trim(),
+      body: draft.body.trim() || undefined,
+      category: draft.category.trim() || undefined,
+      priority: draft.priority,
+      attachmentUrl: draft.attachmentUrl.trim() || undefined,
+      priceKes: draft.type === 'marketplace' && draft.priceKes ? Number(draft.priceKes) : undefined,
+      eventStartsAt: (hasSchedule || hasExpiry) && draft.eventStartsAt ? new Date(draft.eventStartsAt).toISOString() : undefined,
+      eventEndsAt: hasSchedule && draft.eventEndsAt ? new Date(draft.eventEndsAt).toISOString() : undefined,
+      location: hasSchedule ? draft.location.trim() || undefined : undefined,
+      metadata,
+      isPinned: draft.isPinned,
+      images: []
+    };
+  }
+
+  function openCommunityForm() {
+    editingCommunityId = null;
+    communityFormError = '';
+    communityDraft = freshCommunityDraft();
+    showCommunityForm = true;
+  }
+
+  function startEditCommunityPost(post) {
+    editingCommunityId = post.id;
+    communityFormError = '';
+    const options = Array.isArray(post.metadata?.options) ? post.metadata.options : [];
+    communityDraft = {
+      siteId: post.site_id,
+      type: post.type,
+      title: post.title,
+      body: post.body ?? '',
+      category: post.category ?? '',
+      priority: post.priority,
+      attachmentUrl: post.attachment_url ?? '',
+      priceKes: post.price_kes ?? '',
+      condition: post.metadata?.condition ?? 'used',
+      contactPhone: post.metadata?.contactPhone ?? '',
+      eventStartsAt: post.event_starts_at ? toDatetimeLocal(post.event_starts_at) : '',
+      eventEndsAt: post.event_ends_at ? toDatetimeLocal(post.event_ends_at) : '',
+      location: post.location ?? '',
+      pollOptions: options.length >= 2 ? options : ['', ''],
+      isPinned: post.is_pinned,
+      images: []
+    };
+    showCommunityForm = true;
+  }
+
+  async function submitCommunityPost() {
+    if (!communityDraft.siteId || !communityDraft.title.trim()) {
+      communityFormError = 'Site and title are required';
+      return;
+    }
+    if (communityDraft.type === 'poll' && communityDraft.pollOptions.map((o) => o.trim()).filter(Boolean).length < 2) {
+      communityFormError = 'A poll needs at least 2 options';
+      return;
+    }
+    communityFormError = '';
+    communitySaving = true;
+
+    const body = communityDraftToBody(communityDraft);
+    const result = editingCommunityId
+      ? await adminUpdateCommunityPost(token, editingCommunityId, body)
+      : await adminCreateCommunityPost(token, body);
+    communitySaving = false;
+
+    if (!result.ok || !result.data?.success) {
+      communityFormError = result.data?.message || 'Could not save — check your connection';
+      return;
+    }
+
+    showCommunityForm = false;
+    editingCommunityId = null;
+    communityDraft = freshCommunityDraft();
+    await loadCommunityPosts();
+  }
+
+  async function toggleCommunityActive(post) {
+    await adminUpdateCommunityPost(token, post.id, { isActive: !post.is_active });
+    await loadCommunityPosts();
+  }
+  async function toggleCommunityPinned(post) {
+    await adminUpdateCommunityPost(token, post.id, { isPinned: !post.is_pinned });
+    await loadCommunityPosts();
+  }
+
+  async function handleCommunityAttachmentUpload(e) {
+    const file = e.currentTarget.files?.[0];
+    e.currentTarget.value = '';
+    if (!file) return;
+
+    communityAttachmentUploading = true;
+    const result = await adminUploadCommunityAttachment(token, file);
+    communityAttachmentUploading = false;
+
+    if (!result.ok || !result.data?.url) {
+      communityFormError = result.data?.message || 'Upload failed — check your connection';
+      return;
+    }
+    communityDraft.attachmentUrl = result.data.url;
+  }
+
+  function addPollOption() {
+    communityDraft.pollOptions = [...communityDraft.pollOptions, ''];
+  }
+  function removePollOption(i) {
+    if (communityDraft.pollOptions.length <= 2) return;
+    communityDraft.pollOptions = communityDraft.pollOptions.filter((_, idx) => idx !== i);
+  }
+  function addCampusPollOption() {
+    campusDraft.pollOptions = [...campusDraft.pollOptions, ''];
+  }
+  function removeCampusPollOption(i) {
+    if (campusDraft.pollOptions.length <= 2) return;
+    campusDraft.pollOptions = campusDraft.pollOptions.filter((_, idx) => idx !== i);
   }
 
   // ── Activator form ───────────────────────────────────────────────────────
@@ -838,17 +1056,24 @@
 
   // Which frontend experience this site renders — 'institution' additionally
   // surfaces the Campus tab's Notice Board/Events on that site's Watch &
-  // Learn feed (see TimelineScreen.svelte). Purely additive; 'general' is
-  // today's behaviour, unchanged.
+  // Learn feed, 'community' the Community tab's Board/Events/Marketplace/
+  // Services/Polls (see TimelineScreen.svelte). Purely additive; 'general'
+  // is today's behaviour, unchanged.
   const SITE_VERTICALS = [
     { id: 'general', label: 'General' },
-    { id: 'institution', label: 'Institution' }
+    { id: 'institution', label: 'Institution' },
+    { id: 'community', label: 'Community' }
   ];
 
   function freshSiteDraft() {
     return { id: '', name: '', mode: 'both', btcEnabled: true, vertical: 'general' };
   }
   let showSiteForm = $state(false);
+  // null = creating a new site; otherwise the id of the site being edited —
+  // both flows share one modal + one submitSite() (see below), same
+  // shared-draft-for-create-and-edit pattern as the Content/Campus/
+  // Community forms.
+  let editingSiteId = $state(null);
   let siteDraft = $state(freshSiteDraft());
   let siteFormError = $state('');
   let siteSaving = $state(false);
@@ -856,11 +1081,13 @@
   // time the form opens — lets the admin pick an id instead of typing one
   // by hand (it has to match the controller's own site id exactly, see
   // schema.sql's comment on sites.id). [] if the controller's unreachable;
-  // the id field stays a plain text input either way.
+  // the id field stays a plain text input either way. Only offered when
+  // creating — an existing site's id is fixed (see startEditSite).
   let unifiSiteOptions = $state([]);
   let unifiSiteOptionsLoading = $state(false);
 
   async function openSiteForm() {
+    editingSiteId = null;
     siteDraft = freshSiteDraft();
     siteFormError = '';
     showSiteForm = true;
@@ -872,6 +1099,19 @@
     }
   }
 
+  function startEditSite(s) {
+    editingSiteId = s.id;
+    siteFormError = '';
+    siteDraft = { id: s.id, name: s.name, mode: s.mode, btcEnabled: s.btc_enabled, vertical: s.vertical };
+    showSiteForm = true;
+  }
+
+  function closeSiteForm() {
+    showSiteForm = false;
+    editingSiteId = null;
+    siteFormError = '';
+  }
+
   async function submitSite() {
     if (!siteDraft.id.trim() || !siteDraft.name.trim()) {
       siteFormError = 'Site id and name are required';
@@ -880,48 +1120,40 @@
     siteFormError = '';
     siteSaving = true;
 
-    const result = await adminCreateSite(token, {
-      id: siteDraft.id.trim(),
-      name: siteDraft.name.trim(),
-      mode: siteDraft.mode,
-      btcEnabled: siteDraft.btcEnabled,
-      vertical: siteDraft.vertical
-    });
+    const result = editingSiteId
+      ? await adminUpdateSite(token, editingSiteId, {
+          name: siteDraft.name.trim(),
+          mode: siteDraft.mode,
+          btcEnabled: siteDraft.btcEnabled,
+          vertical: siteDraft.vertical
+        })
+      : await adminCreateSite(token, {
+          id: siteDraft.id.trim(),
+          name: siteDraft.name.trim(),
+          mode: siteDraft.mode,
+          btcEnabled: siteDraft.btcEnabled,
+          vertical: siteDraft.vertical
+        });
     siteSaving = false;
 
     if (!result.ok || !result.data?.success) {
-      siteFormError = result.data?.message || 'Could not create site — check your connection';
+      siteFormError = result.data?.message || `Could not ${editingSiteId ? 'save' : 'create'} site — check your connection`;
       return;
     }
 
-    siteDraft = freshSiteDraft();
-    showSiteForm = false;
+    closeSiteForm();
     await loadSites();
   }
 
+  // Per-row loading flag for the quick Active/Suspended toggle — the only
+  // site mutation still done inline rather than through the modal, since
+  // it's a lifecycle action (like Campus/Community's own Active toggle),
+  // not really "editing" the site's configuration.
+  let statusTogglingId = $state(null);
   async function toggleSiteStatus(s) {
+    statusTogglingId = s.id;
     await adminUpdateSite(token, s.id, { status: s.status === 'active' ? 'suspended' : 'active' });
-    await loadSites();
-  }
-
-  async function setSiteMode(s, mode) {
-    await adminUpdateSite(token, s.id, { mode });
-    await loadSites();
-  }
-
-  async function setSiteVertical(s, vertical) {
-    // Switching an already pay_only site to institution would otherwise be
-    // rejected by the backend (see PATCH /sites/:id) — fold the same "Pay +
-    // Earn" fallback the create form's mode picker defaults to into this
-    // one request instead of leaving the admin stuck unable to make the
-    // switch at all.
-    const fields = vertical === 'institution' && s.mode === 'pay_only' ? { vertical, mode: 'both' } : { vertical };
-    await adminUpdateSite(token, s.id, fields);
-    await loadSites();
-  }
-
-  async function toggleSiteBtc(s) {
-    await adminUpdateSite(token, s.id, { btcEnabled: !s.btc_enabled });
+    statusTogglingId = null;
     await loadSites();
   }
 
@@ -930,6 +1162,7 @@
   // suspend/activate toggle above, so it gets a confirmation step instead
   // of a native confirm() dialog to stay consistent with the rest of the UI.
   let armedDeleteSiteId = $state(null);
+  let deletingSiteId = $state(null);
   let siteDeleteError = $state('');
 
   async function removeSite(s) {
@@ -942,7 +1175,9 @@
       return;
     }
     armedDeleteSiteId = null;
+    deletingSiteId = s.id;
     const result = await adminDeleteSite(token, s.id);
+    deletingSiteId = null;
     if (!result.ok || !result.data?.success) {
       siteDeleteError = result.data?.message || `Could not delete "${s.name}" — check your connection`;
       return;
@@ -951,25 +1186,141 @@
     await loadSites();
   }
 
-  // ── Package site assignment ──────────────────────────────────────────────
-  // No create/delete — packages are a small fixed set of plan types (see
-  // services/catalog.js) — this only toggles which sites each is sold on
-  // and whether it's active at all.
-  async function togglePackageSite(pkg, siteId) {
-    const current = pkg.site_ids ?? [];
-    const siteIds = current.includes(siteId) ? current.filter((id) => id !== siteId) : [...current, siteId];
-    await adminUpdatePackage(token, pkg.id, { siteIds });
+  // ── Package add/edit ─────────────────────────────────────────────────────
+  // Packages started as a small fixed seeded set (see services/catalog.js)
+  // but can now be freely added — `id` is just a text slug, not a
+  // constrained enum, and PackageScreen.svelte falls back to a generic
+  // icon/duration label for any id it has no static UI metadata for, so a
+  // package created here is purchasable immediately. Add/edit share one
+  // modal + one submitPackage(), same pattern as Sites; only the Active/Off
+  // lifecycle toggle stays inline for a quick tap.
+  function freshPackageDraft() {
+    return { id: '', label: '', priceKes: '', durationSecs: '', badge: '', isActive: true, siteIds: [] };
+  }
+  // Freeform, but these are the two the client already treats specially
+  // (see data.js's static PACKAGES) — offered as one-tap presets, same
+  // quick-select pattern as the Campus/Community category pickers.
+  const PACKAGE_BADGE_PRESETS = ['Best Value', 'Test', 'Popular', 'Limited'];
+  let showPackageForm = $state(false);
+  let editingPackageId = $state(null);
+  let packageDraft = $state(freshPackageDraft());
+  let packageFormError = $state('');
+  let packageSaving = $state(false);
+
+  function openPackageForm() {
+    editingPackageId = null;
+    packageDraft = freshPackageDraft();
+    packageFormError = '';
+    showPackageForm = true;
+  }
+
+  function startEditPackage(pkg) {
+    editingPackageId = pkg.id;
+    packageFormError = '';
+    packageDraft = {
+      id: pkg.id,
+      label: pkg.label,
+      priceKes: pkg.price_kes,
+      durationSecs: Math.round(pkg.duration_secs / 60),
+      badge: pkg.badge ?? '',
+      isActive: pkg.is_active,
+      siteIds: [...(pkg.site_ids ?? [])]
+    };
+    showPackageForm = true;
+  }
+
+  function closePackageForm() {
+    showPackageForm = false;
+    editingPackageId = null;
+    packageFormError = '';
+  }
+
+  function toggleDraftPackageSite(siteId) {
+    packageDraft.siteIds = packageDraft.siteIds.includes(siteId)
+      ? packageDraft.siteIds.filter((id) => id !== siteId)
+      : [...packageDraft.siteIds, siteId];
+  }
+
+  async function submitPackage() {
+    if ((!editingPackageId && !packageDraft.id.trim()) || !packageDraft.label.trim() || !packageDraft.priceKes || !packageDraft.durationSecs) {
+      packageFormError = editingPackageId ? 'Label, price and duration are required' : 'Id, label, price and duration are required';
+      return;
+    }
+    packageFormError = '';
+    packageSaving = true;
+
+    const body = {
+      label: packageDraft.label.trim(),
+      priceKes: Number(packageDraft.priceKes),
+      durationSecs: Math.round(Number(packageDraft.durationSecs) * 60),
+      badge: packageDraft.badge.trim() || null,
+      isActive: packageDraft.isActive,
+      siteIds: packageDraft.siteIds
+    };
+    const result = editingPackageId
+      ? await adminUpdatePackage(token, editingPackageId, body)
+      : await adminCreatePackage(token, { ...body, id: packageDraft.id.trim() });
+    packageSaving = false;
+
+    if (!result.ok || !result.data?.success) {
+      packageFormError = result.data?.message || `Could not ${editingPackageId ? 'save' : 'create'} package — check your connection`;
+      return;
+    }
+
+    closePackageForm();
     await loadPackages();
   }
 
-  /** Clears a package's site restriction back to [] ("visible everywhere") — the "All sites" pill's click handler. */
-  async function clearPackageSites(pkg) {
-    await adminUpdatePackage(token, pkg.id, { siteIds: [] });
-    await loadPackages();
-  }
-
+  // Per-row loading flag for the quick Active/Suspended toggle — mirrors
+  // Sites' statusTogglingId.
+  let statusTogglingPackageId = $state(null);
   async function togglePackageActive(pkg) {
+    statusTogglingPackageId = pkg.id;
     await adminUpdatePackage(token, pkg.id, { isActive: !pkg.is_active });
+    statusTogglingPackageId = null;
+    await loadPackages();
+  }
+
+  // Two-tap delete (armed by the first click, cleared after 4s or on the
+  // second click), same pattern as removeSite — a package delete is
+  // permanent, and the backend blocks it (409) if the package has purchase
+  // history (sessions.package_id references it), surfaced via
+  // packageDeleteError.
+  let armedDeletePackageId = $state(null);
+  let deletingPackageId = $state(null);
+  let packageDeleteError = $state('');
+
+  async function removePackage(pkg) {
+    if (armedDeletePackageId !== pkg.id) {
+      armedDeletePackageId = pkg.id;
+      packageDeleteError = '';
+      setTimeout(() => {
+        if (armedDeletePackageId === pkg.id) armedDeletePackageId = null;
+      }, 4000);
+      return;
+    }
+    armedDeletePackageId = null;
+    deletingPackageId = pkg.id;
+    const result = await adminDeletePackage(token, pkg.id);
+    deletingPackageId = null;
+    if (!result.ok || !result.data?.success) {
+      packageDeleteError = result.data?.message || `Could not delete "${pkg.label}" — check your connection`;
+      return;
+    }
+    packageDeleteError = '';
+    await loadPackages();
+  }
+
+  // Which package is pre-highlighted on the purchase screen — at most one
+  // at a time (see schema.sql's partial unique index), so featuring one
+  // implicitly un-features whatever was featured before it; the star
+  // button reflects that directly rather than needing its own "are you
+  // sure" step.
+  let featuringPackageId = $state(null);
+  async function toggleFeaturedPackage(pkg) {
+    featuringPackageId = pkg.id;
+    await adminSetPackageFeatured(token, pkg.id, !pkg.is_featured);
+    featuringPackageId = null;
     await loadPackages();
   }
 
@@ -1025,7 +1376,8 @@
       {value}
       {oninput}
       placeholder={opts.placeholder || ''}
-      class="w-full bg-transparent px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none"
+      disabled={!!opts.disabled}
+      class="w-full bg-transparent px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none disabled:opacity-50"
       style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
     />
   </div>
@@ -1112,9 +1464,9 @@
 {/snippet}
 
 {#snippet statCard(Icon, label, value, color)}
-  <div class="rounded-2xl px-4 py-3.5 flex items-center gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid {color}22;">
-    <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: {color}22;">
-      <Icon size={16} color={color} />
+  <div class="rounded-2xl px-4 py-3.5 flex items-center gap-3 shadow-md transition-transform" style="background: #2E5A3E; border: 1px solid {color}22;">
+    <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style="background: linear-gradient(135deg, {color}33, {color}14); box-shadow: inset 0 0 0 1px {color}2a;">
+      <Icon size={17} color={color} />
     </div>
     <div class="min-w-0">
       <p class="text-base font-bold text-[#E8D4B0] truncate">{value}</p>
@@ -1175,7 +1527,7 @@
   <div>
     <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Site</p>
     {#if sites.length === 0}
-      <p class="text-xs" style="color: #96B496;">Add a site first (Sites tab) — a campus post belongs to exactly one site.</p>
+      <p class="text-xs" style="color: #96B496;">Add a site first (Sites tab) — a post belongs to exactly one site.</p>
     {:else}
       <div class="flex gap-1.5 flex-wrap">
         {#each sites as s (s.id)}
@@ -1671,15 +2023,42 @@
               (e) => (campusDraft.location = e.currentTarget.value),
               { placeholder: campusDraft.type === 'timetable' ? 'e.g. Exam Hall B' : 'e.g. Main Auditorium' }
             )}
+          {:else if campusDraft.type === 'poll'}
+            <div>
+              <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Options (2+)</p>
+              <div class="flex flex-col gap-2">
+                {#each campusDraft.pollOptions as opt, i (i)}
+                  <div class="flex items-center gap-2">
+                    <input
+                      value={opt}
+                      oninput={(e) => (campusDraft.pollOptions[i] = e.currentTarget.value)}
+                      placeholder={`Option ${i + 1}`}
+                      class="flex-1 bg-transparent px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none"
+                      style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
+                    />
+                    {#if campusDraft.pollOptions.length > 2}
+                      <button type="button" onclick={() => removeCampusPollOption(i)} aria-label="Remove option" class="shrink-0 w-8 h-8 rounded-full flex items-center justify-center" style="background: rgba(255,255,255,0.1);">
+                        <X size={12} color="#C4DAC0" />
+                      </button>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+              <button type="button" onclick={addCampusPollOption} class="mt-2 text-[11px] font-bold px-3 py-1.5 rounded-full" style="background: rgba(255,255,255,0.1); color: #C4DAC0;">
+                <Plus size={10} class="inline" /> Add option
+              </button>
+            </div>
           {/if}
-          {@render fileOrUrlField(
-            campusDraft.type === 'resource' ? 'Link or file' : campusDraft.type === 'event' ? 'Cover photo (optional)' : 'Attachment (optional — image, PDF, or video)',
-            campusDraft.attachmentUrl,
-            (e) => (campusDraft.attachmentUrl = e.currentTarget.value),
-            campusAttachmentUploading,
-            handleCampusAttachmentUpload,
-            'image/*,video/*,application/pdf'
-          )}
+          {#if campusDraft.type !== 'poll'}
+            {@render fileOrUrlField(
+              campusDraft.type === 'resource' ? 'Link or file' : campusDraft.type === 'event' ? 'Cover photo (optional)' : 'Attachment (optional — image, PDF, or video)',
+              campusDraft.attachmentUrl,
+              (e) => (campusDraft.attachmentUrl = e.currentTarget.value),
+              campusAttachmentUploading,
+              handleCampusAttachmentUpload,
+              'image/*,video/*,application/pdf'
+            )}
+          {/if}
           {#if campusDraft.type === 'event'}
             {@render campusGalleryField(campusDraft.images, handleCampusGalleryUpload, removeCampusGalleryImage, campusGalleryUploading)}
           {/if}
@@ -1754,6 +2133,228 @@
                 </button>
                 <button
                   onclick={() => toggleCampusActive(post)}
+                  class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full"
+                  style="background: {post.is_active ? 'rgba(78,128,80,0.30)' : 'rgba(192,97,74,0.20)'}; color: {post.is_active ? '#4E8050' : '#B85038'};"
+                >
+                  {#if post.is_active}<Pause size={10} /> Active{:else}<Play size={10} /> Off{/if}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      {/each}
+      </div>
+    {:else if tab === 'community'}
+      <button
+        onclick={openCommunityForm}
+        class="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-bold text-sm"
+        style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
+      >
+        <Plus size={15} /> Add community post
+      </button>
+
+      {#if showCommunityForm}
+        <AdminModal title={editingCommunityId ? 'Edit community post' : 'Add community post'} onClose={() => (showCommunityForm = false)}>
+          {@render campusSitePicker(communityDraft)}
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Type</p>
+            <div class="flex gap-2 flex-wrap">
+              {#each COMMUNITY_TYPES as t (t.id)}
+                <button
+                  type="button"
+                  onclick={() => (communityDraft.type = t.id)}
+                  class="flex-1 py-2 rounded-xl text-[11px] font-semibold"
+                  style="background: {communityDraft.type === t.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {communityDraft.type === t.id ? '#fff' : '#C4DAC0'};"
+                >
+                  {t.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+          {@render inputField('Title', communityDraft.title, (e) => (communityDraft.title = e.currentTarget.value))}
+          {@render inputField('Category (optional)', communityDraft.category, (e) => (communityDraft.category = e.currentTarget.value), { placeholder: 'e.g. Electronics, Fitness' })}
+          {#if communityDraft.type === 'service'}
+            <div class="flex gap-1.5 flex-wrap -mt-2">
+              {#each COMMUNITY_RESOURCE_CATEGORIES as c (c.id)}
+                <button
+                  type="button"
+                  onclick={() => (communityDraft.category = c.label)}
+                  class="px-2.5 py-1 rounded-full text-[10px] font-semibold"
+                  style="background: {communityDraft.category === c.label ? c.color : 'rgba(255,255,255,0.1)'}; color: {communityDraft.category === c.label ? '#fdf6e3' : '#C4DAC0'};"
+                >
+                  {c.label}
+                </button>
+              {/each}
+            </div>
+          {/if}
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">
+              {communityDraft.type === 'poll' ? 'Question context (optional)' : 'Body'}
+            </p>
+            <textarea
+              value={communityDraft.body}
+              oninput={(e) => (communityDraft.body = e.currentTarget.value)}
+              rows="3"
+              placeholder="Details…"
+              class="w-full bg-transparent px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none resize-none"
+              style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
+            ></textarea>
+          </div>
+
+          {#if COMMUNITY_TYPES_WITH_PRIORITY.includes(communityDraft.type)}
+            <div>
+              <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Priority</p>
+              <div class="flex gap-1.5 flex-wrap">
+                {#each CAMPUS_PRIORITIES as p (p.id)}
+                  <button
+                    type="button"
+                    onclick={() => (communityDraft.priority = p.id)}
+                    class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                    style="background: {communityDraft.priority === p.id ? CAMPUS_PRIORITY_COLOR[p.id] : 'rgba(255,255,255,0.1)'}; color: {communityDraft.priority === p.id ? '#fff' : '#C4DAC0'};"
+                  >
+                    {p.label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+            {@render inputField('Relevant until (optional)', communityDraft.eventStartsAt, (e) => (communityDraft.eventStartsAt = e.currentTarget.value), { type: 'datetime-local' })}
+            <p class="text-[10px] text-[#AECAAE] -mt-2">Leave blank for an announcement with no expiry — set it for a time-bound one and it'll automatically move to Past once that time passes.</p>
+          {:else if COMMUNITY_TYPES_WITH_SCHEDULE.includes(communityDraft.type)}
+            <div class="grid grid-cols-2 gap-3">
+              {@render inputField('Starts', communityDraft.eventStartsAt, (e) => (communityDraft.eventStartsAt = e.currentTarget.value), { type: 'datetime-local' })}
+              {@render inputField('Ends (optional)', communityDraft.eventEndsAt, (e) => (communityDraft.eventEndsAt = e.currentTarget.value), { type: 'datetime-local' })}
+            </div>
+            {@render inputField('Location', communityDraft.location, (e) => (communityDraft.location = e.currentTarget.value), { placeholder: 'e.g. Clubhouse' })}
+          {:else if communityDraft.type === 'marketplace'}
+            <div class="grid grid-cols-2 gap-3">
+              {@render inputField('Price (KES)', communityDraft.priceKes, (e) => (communityDraft.priceKes = e.currentTarget.value), { type: 'number', placeholder: 'e.g. 5000' })}
+              <div>
+                <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Condition</p>
+                <div class="flex gap-1.5 flex-wrap">
+                  {#each COMMUNITY_CONDITIONS as c (c.id)}
+                    <button
+                      type="button"
+                      onclick={() => (communityDraft.condition = c.id)}
+                      class="px-2.5 py-1.5 rounded-full text-[11px] font-semibold"
+                      style="background: {communityDraft.condition === c.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {communityDraft.condition === c.id ? '#fff' : '#C4DAC0'};"
+                    >
+                      {c.label}
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            </div>
+            {@render inputField('Contact phone (WhatsApp)', communityDraft.contactPhone, (e) => (communityDraft.contactPhone = e.currentTarget.value), { placeholder: 'e.g. 0712345678' })}
+          {:else if communityDraft.type === 'poll'}
+            <div>
+              <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Options (2+)</p>
+              <div class="flex flex-col gap-2">
+                {#each communityDraft.pollOptions as opt, i (i)}
+                  <div class="flex items-center gap-2">
+                    <input
+                      value={opt}
+                      oninput={(e) => (communityDraft.pollOptions[i] = e.currentTarget.value)}
+                      placeholder={`Option ${i + 1}`}
+                      class="flex-1 bg-transparent px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none"
+                      style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
+                    />
+                    {#if communityDraft.pollOptions.length > 2}
+                      <button type="button" onclick={() => removePollOption(i)} aria-label="Remove option" class="shrink-0 w-8 h-8 rounded-full flex items-center justify-center" style="background: rgba(255,255,255,0.1);">
+                        <X size={12} color="#C4DAC0" />
+                      </button>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+              <button type="button" onclick={addPollOption} class="mt-2 text-[11px] font-bold px-3 py-1.5 rounded-full" style="background: rgba(255,255,255,0.1); color: #C4DAC0;">
+                <Plus size={10} class="inline" /> Add option
+              </button>
+            </div>
+          {/if}
+
+          {#if communityDraft.type !== 'poll'}
+            {@render fileOrUrlField(
+              communityDraft.type === 'service' ? 'Link or file' : communityDraft.type === 'marketplace' ? 'Photo' : communityDraft.type === 'event' ? 'Cover photo (optional)' : 'Attachment (optional — image, PDF, or video)',
+              communityDraft.attachmentUrl,
+              (e) => (communityDraft.attachmentUrl = e.currentTarget.value),
+              communityAttachmentUploading,
+              handleCommunityAttachmentUpload,
+              'image/*,video/*,application/pdf'
+            )}
+          {/if}
+
+          <div>
+            <button
+              type="button"
+              onclick={() => (communityDraft.isPinned = !communityDraft.isPinned)}
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold"
+              style="background: {communityDraft.isPinned ? '#CC8830' : 'rgba(255,255,255,0.1)'}; color: {communityDraft.isPinned ? '#fff' : '#C4DAC0'};"
+            >
+              <Pin size={12} />
+              {communityDraft.isPinned ? 'Pinned / Featured' : 'Pin / Feature'}
+            </button>
+          </div>
+
+          {#if communityFormError}
+            <p class="text-xs text-[#E08A6A]">{communityFormError}</p>
+          {/if}
+
+          <button
+            onclick={submitCommunityPost}
+            disabled={communitySaving}
+            class="w-full py-3 rounded-2xl font-bold text-sm"
+            style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff; opacity: {communitySaving ? 0.7 : 1};"
+          >
+            {communitySaving ? 'Saving…' : editingCommunityId ? 'Save changes' : 'Create community post'}
+          </button>
+        </AdminModal>
+      {/if}
+
+      <p class="text-xs text-[#3C6A4A] font-semibold px-1">{communityPosts.length} posts</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
+      {#each communityPosts as post (post.id)}
+        {@const Icon = COMMUNITY_TYPE_ICON[post.type]}
+        {@const color = post.type === 'announcement' ? (CAMPUS_PRIORITY_COLOR[post.priority] ?? CAMPUS_PRIORITY_COLOR.normal) : '#CC8830'}
+        {@const postSite = sites.find((s) => s.id === post.site_id)}
+        <div class="rounded-2xl overflow-hidden shadow-sm" style="background: #2E5A3E; opacity: {post.is_active ? 1 : 0.5}; border-left: 3px solid {color};">
+          <div class="flex items-center gap-3 px-4 py-3.5">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: {color}30;">
+              <Icon size={16} color={color} />
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-semibold text-[#E8D4B0] truncate">{post.title}</p>
+              <p class="text-[10px] text-[#AECAAE]">
+                <span class="font-semibold" style="color: {color};">{COMMUNITY_TYPES.find((t) => t.id === post.type)?.label ?? post.type}</span>
+                {#if postSite} · {postSite.name}{/if}
+                {#if post.category} · {post.category}{/if}
+                {#if post.type === 'marketplace' && post.price_kes} · KES {Number(post.price_kes).toLocaleString()}{/if}
+                {#if post.is_pinned} · Pinned{/if}
+              </p>
+              {#if post.type === 'service' || post.type === 'marketplace'}
+                <p class="text-[10px] text-[#96B496] flex items-center gap-1 mt-0.5">
+                  <MousePointerClick size={9} />{Number(post.clicks ?? 0).toLocaleString()} clicks
+                </p>
+              {/if}
+            </div>
+            <div class="flex flex-col gap-1.5 shrink-0 items-end">
+              <button
+                onclick={() => startEditCommunityPost(post)}
+                class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full"
+                style="background: rgba(255,255,255,0.12); color: #C4DAC0;"
+              >
+                <Edit3 size={10} /> Edit
+              </button>
+              <div class="flex gap-1.5">
+                <button
+                  onclick={() => toggleCommunityPinned(post)}
+                  aria-label="Toggle pinned"
+                  class="flex items-center gap-1 text-[10px] font-bold px-2 py-1.5 rounded-full"
+                  style="background: {post.is_pinned ? 'rgba(204,136,48,0.30)' : 'rgba(255,255,255,0.1)'}; color: {post.is_pinned ? '#CC8830' : '#C4DAC0'};"
+                >
+                  <Pin size={10} />
+                </button>
+                <button
+                  onclick={() => toggleCommunityActive(post)}
                   class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full"
                   style="background: {post.is_active ? 'rgba(78,128,80,0.30)' : 'rgba(192,97,74,0.20)'}; color: {post.is_active ? '#4E8050' : '#B85038'};"
                 >
@@ -2019,7 +2620,18 @@
             <ChevronLeft size={16} /> Purchases by Package
           </button>
         {:else}
-          <h2 class="text-sm font-bold text-[#1D3C2A]">Analytics overview</h2>
+          <div class="flex items-center gap-2.5 fade-in-up">
+            <div
+              class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+              style="background: linear-gradient(135deg, #C45C38, #CC8830); box-shadow: 0 6px 16px rgba(196,92,56,0.3);"
+            >
+              <TrendingUp size={16} color="#fff" />
+            </div>
+            <div>
+              <h2 class="text-sm font-bold text-[#1D3C2A] leading-tight">Analytics</h2>
+              <p class="text-[10px] text-[#3C6A4A]">{analyticsSection === 'earn' ? 'Watch & Earn engagement' : 'Purchases & revenue'}</p>
+            </div>
+          </div>
         {/if}
         <button
           onclick={activeDetail === 'site' ? loadSiteDetail : activeDetail === 'package' ? loadPackageDetail : loadAnalytics}
@@ -2034,6 +2646,32 @@
           Refresh
         </button>
       </div>
+
+      {#if activeDetail === 'none'}
+        <!-- Modern segmented switcher between the two analytics portions —
+             they used to render stacked on one long scroll; each is now its
+             own tab so a portion with heavy content (Content Overview's
+             scrollable list, the purchases timeline charts) doesn't push
+             the other one far down the page. -->
+        <div class="flex gap-1 p-1 rounded-2xl mb-1 fade-in-up" style="background: rgba(29,60,42,0.08); animation-delay: 0.04s;">
+          <button
+            type="button"
+            onclick={() => (analyticsSection = 'earn')}
+            class="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition-all"
+            style="background: {analyticsSection === 'earn' ? '#2E5A3E' : 'transparent'}; color: {analyticsSection === 'earn' ? '#E8D4B0' : '#3C6A4A'}; box-shadow: {analyticsSection === 'earn' ? '0 4px 12px rgba(29,60,42,0.25)' : 'none'};"
+          >
+            <Zap size={13} /> Watch & Earn
+          </button>
+          <button
+            type="button"
+            onclick={() => (analyticsSection = 'purchases')}
+            class="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition-all"
+            style="background: {analyticsSection === 'purchases' ? '#2E5A3E' : 'transparent'}; color: {analyticsSection === 'purchases' ? '#E8D4B0' : '#3C6A4A'}; box-shadow: {analyticsSection === 'purchases' ? '0 4px 12px rgba(29,60,42,0.25)' : 'none'};"
+          >
+            <Wallet size={13} /> Purchases
+          </button>
+        </div>
+      {/if}
 
       {#if activeDetail === 'site'}
         <div class="flex gap-1.5 flex-wrap px-1">
@@ -2176,14 +2814,8 @@
         </div>
       {:else if !analytics}
         <p class="text-xs text-[#96B496] text-center py-8">Could not load analytics — check your connection.</p>
-      {:else}
-        <div class="flex items-center gap-2 mb-1 px-1">
-          <div class="w-8 h-8 rounded-xl flex items-center justify-center" style="background: rgba(196,92,56,0.28);">
-            <Zap size={14} color="#C45C38" />
-          </div>
-          <h3 class="text-sm font-bold text-[#1D3C2A]">Watch & Earn</h3>
-        </div>
-        <div class="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
+      {:else if analyticsSection === 'earn'}
+        <div class="grid grid-cols-2 lg:grid-cols-5 gap-2.5 fade-in-up">
           {@render statCard(Eye, 'Impressions', analytics.earned.totalImpressions.toLocaleString(), '#C45C38')}
           {@render statCard(CheckCircle2, 'Completions', analytics.earned.totalCompletions.toLocaleString(), '#4E8050')}
           {@render statCard(Users, 'Clients Engaged', analytics.earned.uniqueClientsEngaged.toLocaleString(), '#5B8ED6')}
@@ -2225,7 +2857,7 @@
                 {@const completionsPct = impressionsPct * completionRate}
                 <button
                   type="button"
-                  onclick={() => toggleContentAnalytics(c.id)}
+                  onclick={() => openContentDetail(c)}
                   class="w-full flex items-center gap-3 px-4 py-2.5 text-left"
                   style="border-top: {i > 0 ? '1px solid rgba(255,255,255,0.1)' : 'none'}; opacity: {c.isActive ? 1 : 0.55};"
                 >
@@ -2247,95 +2879,96 @@
                     <span class="text-[10px] font-bold" style="color: #4E8050;">{c.completions} done</span>
                   </div>
                 </button>
-
-                {#if expandedContentId === c.id}
-                  <div class="px-4 py-3" style="background: rgba(0,0,0,0.15); border-top: 1px solid rgba(255,255,255,0.08);">
-                    {#if contentDetailLoading}
-                      <div class="flex justify-center py-4"><div class="w-5 h-5 rounded-full border-2 border-white/20 border-t-white/70 animate-spin"></div></div>
-                    {:else if contentDetail}
-                      <div class="grid grid-cols-2 gap-2 mb-3">
-                        <div>
-                          <p class="text-[9px] text-[#96B496] uppercase tracking-wider">Impressions</p>
-                          <p class="text-sm font-bold text-[#E8D4B0]">{contentDetail.impressions.toLocaleString()}</p>
-                        </div>
-                        <div>
-                          <p class="text-[9px] text-[#96B496] uppercase tracking-wider">Completions</p>
-                          <p class="text-sm font-bold text-[#E8D4B0]">{contentDetail.completions.toLocaleString()}</p>
-                        </div>
-                        <div>
-                          <p class="text-[9px] text-[#96B496] uppercase tracking-wider">Unique Clients</p>
-                          <p class="text-sm font-bold text-[#E8D4B0]">{contentDetail.uniqueClients.toLocaleString()}</p>
-                        </div>
-                        <div>
-                          <p class="text-[9px] text-[#96B496] uppercase tracking-wider">Completion Rate</p>
-                          <p class="text-sm font-bold text-[#E8D4B0]">{contentDetail.completionRate != null ? `${Math.round(contentDetail.completionRate * 100)}%` : '—'}</p>
-                        </div>
-                      </div>
-                      <p class="text-[10px] text-[#96B496] mb-3">Total reward time awarded: <span class="font-bold text-[#C45C38]">{formatEarn(contentDetail.totalEarnSecsAwarded)}</span></p>
-
-                      {#if (contentDetail.type === 'survey' || contentDetail.type === 'lesson') && contentDetail.surveyQuestions?.length > 0}
-                        <p class="text-[10px] font-bold text-[#C4DAC0] uppercase tracking-wider mb-2">
-                          {contentDetail.type === 'lesson' ? 'Quiz breakdown' : 'Answer breakdown'}
-                        </p>
-                        <div class="flex flex-col gap-2.5">
-                          {#each contentDetail.surveyQuestions as q, qi (qi)}
-                            {@const answers = contentDetail.surveyBreakdown?.[String(qi)] ?? []}
-                            {@const totalAnswers = answers.reduce((s, a) => s + a.count, 0)}
-                            {@const topCount = Math.max(0, ...answers.map((a) => a.count))}
-                            <div class="rounded-xl p-3" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);">
-                              <div class="flex items-start justify-between gap-2 mb-2">
-                                <p class="text-xs font-semibold text-[#E8D4B0]">{qi + 1}. {q.question ?? q}</p>
-                                <span class="text-[9px] text-[#96B496] shrink-0 whitespace-nowrap">{totalAnswers} response{totalAnswers === 1 ? '' : 's'}</span>
-                              </div>
-                              {#if totalAnswers === 0}
-                                <p class="text-[10px] text-[#6B8A6B] italic">No answers yet</p>
-                              {:else}
-                                <div class="flex flex-col gap-1.5">
-                                  {#each answers as a (a.answer)}
-                                    {@const pct = Math.round((a.count / totalAnswers) * 100)}
-                                    {@const isTop = a.count === topCount}
-                                    <div class="flex items-center gap-2">
-                                      <span
-                                        class="text-[10px] w-20 shrink-0 truncate text-right"
-                                        style="color: {isTop ? '#E8D4B0' : '#96B496'}; font-weight: {isTop ? 700 : 400};"
-                                      >
-                                        {a.answer}
-                                      </span>
-                                      <div class="flex-1 h-2.5 rounded-full overflow-hidden" style="background: rgba(255,255,255,0.08);">
-                                        <div
-                                          class="h-full rounded-full transition-all duration-500"
-                                          style="width: {pct}%; background: {isTop ? 'linear-gradient(90deg, #C45C38, #CC8830)' : 'rgba(196,92,56,0.4)'};"
-                                        ></div>
-                                      </div>
-                                      <span class="text-[10px] w-9 shrink-0 font-semibold" style="color: {isTop ? '#C45C38' : '#96B496'};">{pct}%</span>
-                                    </div>
-                                  {/each}
-                                </div>
-                              {/if}
-                            </div>
-                          {/each}
-                        </div>
-                      {/if}
-                    {:else}
-                      <p class="text-[10px] text-[#96B496] text-center py-2">Could not load details.</p>
-                    {/if}
-                  </div>
-                {/if}
               {/each}
               </div>
             </div>
           {/if}
         </div>
 
-        <div class="h-px my-1" style="background: rgba(29,60,42,0.12);"></div>
+        {#if expandedContentId}
+          <AdminModal title="Content details" onClose={closeContentDetail}>
+            {#if contentDetailItem}
+              {@const ItemIcon = TYPE_ICON[contentDetailItem.type]}
+              <div class="flex items-center gap-3">
+                <div class="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style="background: linear-gradient(135deg, #C45C3833, #C45C3814); box-shadow: inset 0 0 0 1px #C45C382a;">
+                  {#if ItemIcon}<ItemIcon size={18} color="#C45C38" />{/if}
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-bold text-[#E8D4B0] truncate">{contentDetailItem.title}</p>
+                  <p class="text-[10px] text-[#96B496] capitalize flex items-center gap-1.5">
+                    {contentDetailItem.type}
+                    <span class="text-[#4A6842]">·</span>
+                    <span style="color: {contentDetailItem.isActive ? '#4E8050' : '#B85038'};">{contentDetailItem.isActive ? 'Active' : 'Inactive'}</span>
+                  </p>
+                </div>
+              </div>
+            {/if}
 
-        <div class="flex items-center gap-2 mb-1 px-1">
-          <div class="w-8 h-8 rounded-xl flex items-center justify-center" style="background: rgba(78,128,80,0.28);">
-            <Wallet size={14} color="#4E8050" />
-          </div>
-          <h3 class="text-sm font-bold text-[#1D3C2A]">Purchases</h3>
-        </div>
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+            {#if contentDetailLoading}
+              <div class="flex justify-center py-8"><div class="w-6 h-6 rounded-full border-2 border-white/20 border-t-white/70 animate-spin"></div></div>
+            {:else if contentDetail}
+              <div class="grid grid-cols-2 gap-2.5">
+                {@render statCard(Eye, 'Impressions', contentDetail.impressions.toLocaleString(), '#C45C38')}
+                {@render statCard(CheckCircle2, 'Completions', contentDetail.completions.toLocaleString(), '#4E8050')}
+                {@render statCard(Users, 'Unique Clients', contentDetail.uniqueClients.toLocaleString(), '#5B8ED6')}
+                {@render statCard(Award, 'Completion Rate', contentDetail.completionRate != null ? `${Math.round(contentDetail.completionRate * 100)}%` : '—', '#CC8830')}
+              </div>
+              <div class="rounded-2xl px-4 py-3 flex items-center justify-between" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);">
+                <span class="text-[11px] text-[#96B496]">Total reward time awarded</span>
+                <span class="text-sm font-bold" style="color: #C45C38;">{formatEarn(contentDetail.totalEarnSecsAwarded)}</span>
+              </div>
+
+              {#if (contentDetail.type === 'survey' || contentDetail.type === 'lesson') && contentDetail.surveyQuestions?.length > 0}
+                <p class="text-[10px] font-bold text-[#C4DAC0] uppercase tracking-wider mt-1">
+                  {contentDetail.type === 'lesson' ? 'Quiz breakdown' : 'Answer breakdown'}
+                </p>
+                <div class="flex flex-col gap-2.5">
+                  {#each contentDetail.surveyQuestions as q, qi (qi)}
+                    {@const answers = contentDetail.surveyBreakdown?.[String(qi)] ?? []}
+                    {@const totalAnswers = answers.reduce((s, a) => s + a.count, 0)}
+                    {@const topCount = Math.max(0, ...answers.map((a) => a.count))}
+                    <div class="rounded-xl p-3" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);">
+                      <div class="flex items-start justify-between gap-2 mb-2">
+                        <p class="text-xs font-semibold text-[#E8D4B0]">{qi + 1}. {q.question ?? q}</p>
+                        <span class="text-[9px] text-[#96B496] shrink-0 whitespace-nowrap">{totalAnswers} response{totalAnswers === 1 ? '' : 's'}</span>
+                      </div>
+                      {#if totalAnswers === 0}
+                        <p class="text-[10px] text-[#6B8A6B] italic">No answers yet</p>
+                      {:else}
+                        <div class="flex flex-col gap-1.5">
+                          {#each answers as a (a.answer)}
+                            {@const pct = Math.round((a.count / totalAnswers) * 100)}
+                            {@const isTop = a.count === topCount}
+                            <div class="flex items-center gap-2">
+                              <span
+                                class="text-[10px] w-20 shrink-0 truncate text-right"
+                                style="color: {isTop ? '#E8D4B0' : '#96B496'}; font-weight: {isTop ? 700 : 400};"
+                              >
+                                {a.answer}
+                              </span>
+                              <div class="flex-1 h-2.5 rounded-full overflow-hidden" style="background: rgba(255,255,255,0.08);">
+                                <div
+                                  class="h-full rounded-full transition-all duration-500"
+                                  style="width: {pct}%; background: {isTop ? 'linear-gradient(90deg, #C45C38, #CC8830)' : 'rgba(196,92,56,0.4)'};"
+                                ></div>
+                              </div>
+                              <span class="text-[10px] w-9 shrink-0 font-semibold" style="color: {isTop ? '#C45C38' : '#96B496'};">{pct}%</span>
+                            </div>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            {:else}
+              <p class="text-[11px] text-[#96B496] text-center py-6">Could not load details.</p>
+            {/if}
+          </AdminModal>
+        {/if}
+
+      {:else}
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5 fade-in-up">
           {@render statCard(CheckCircle2, 'Paid Sessions', analytics.purchased.totalPaidSessions.toLocaleString(), '#4E8050')}
           {@render statCard(Radio, 'Active Now', analytics.purchased.activeSessionsNow.toLocaleString(), '#5B8ED6')}
           {@render statCard(Wallet, 'Revenue', `KES ${analytics.purchased.totalRevenueKes.toLocaleString()}`, '#C45C38')}
@@ -2419,46 +3052,117 @@
       {/if}
     {:else if tab === 'sites'}
       <button
-        onclick={() => {
-          if (showSiteForm) {
-            showSiteForm = false;
-          } else {
-            openSiteForm();
-          }
-        }}
+        onclick={openSiteForm}
         class="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-bold text-sm"
-        style="background: {showSiteForm ? 'rgba(29,60,42,0.1)' : 'linear-gradient(135deg, #C45C38, #CC8830)'}; color: {showSiteForm ? '#1D3C2A' : '#fff'};"
+        style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
       >
-        {#if showSiteForm}<X size={15} /> Cancel{:else}<Plus size={15} /> Add site{/if}
+        <Plus size={15} /> Add site
       </button>
 
-      {#if showSiteForm}
-        <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
-          {#if unifiSiteOptionsLoading}
-            <p class="text-xs text-[#96B496]">Loading UniFi sites…</p>
-          {:else if unifiSiteOptions.length > 0}
-            <div>
-              <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">UniFi site (optional — fills id/name)</p>
-              <select
-                onchange={(e) => {
-                  const opt = unifiSiteOptions.find((o) => o.id === e.currentTarget.value);
-                  if (opt) {
-                    siteDraft.id = opt.id;
-                    siteDraft.name = opt.name;
-                  }
-                }}
-                class="w-full px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] outline-none"
-                style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
-              >
-                <option value="" style="color: #1D3C2A;">Choose or enter manually below</option>
-                {#each unifiSiteOptions as o (o.id)}
-                  <option value={o.id} style="color: #1D3C2A;">{o.name}</option>
-                {/each}
-              </select>
+      <p class="text-xs text-[#3C6A4A] font-semibold px-1">{sites.length} sites</p>
+      {#if siteDeleteError}
+        <p class="text-xs text-[#E08A6A] px-1">{siteDeleteError}</p>
+      {/if}
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
+      {#each sites as s (s.id)}
+        <div class="rounded-2xl overflow-hidden shadow-sm px-4 py-3.5 flex flex-col gap-2.5" style="background: #2E5A3E; opacity: {s.status === 'active' ? 1 : 0.5};">
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
+              <Radio size={16} color="#C45C38" />
             </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-semibold text-[#E8D4B0] truncate flex items-center gap-1.5">
+                {s.name}
+                {#if s.vertical === 'institution'}<GraduationCap size={11} color="#CC8830" />{:else if s.vertical === 'community'}<Users size={11} color="#CC8830" />{/if}
+              </p>
+              <p class="text-[10px] text-[#AECAAE]">id: {s.id}</p>
+            </div>
+            <button
+              onclick={() => toggleSiteStatus(s)}
+              disabled={statusTogglingId === s.id}
+              class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full shrink-0"
+              style="background: {s.status === 'active' ? 'rgba(78,128,80,0.30)' : 'rgba(192,97,74,0.20)'}; color: {s.status === 'active' ? '#4E8050' : '#B85038'}; opacity: {statusTogglingId === s.id ? 0.6 : 1};"
+            >
+              {#if statusTogglingId === s.id}
+                <RefreshCw size={10} class="animate-spin" />
+              {:else if s.status === 'active'}
+                <Pause size={10} /> Active
+              {:else}
+                <Play size={10} /> Off
+              {/if}
+            </button>
+          </div>
+
+          <!-- Read-only config summary — mode/type/BTC are now edited via the
+               modal (Edit button below), not by tapping pills directly on
+               the card, so the card stays scannable and every change goes
+               through the one submitSite() loading-state path. -->
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <span class="text-[10px] font-semibold px-2 py-1 rounded-full" style="background: rgba(255,255,255,0.1); color: #C4DAC0;">
+              {availableSiteModes(s.vertical).find((m) => m.id === s.mode)?.label ?? s.mode}
+            </span>
+            <span class="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-full" style="background: rgba(255,255,255,0.1); color: #C4DAC0;">
+              {#if s.vertical === 'institution'}<GraduationCap size={10} />{:else if s.vertical === 'community'}<Users size={10} />{/if}
+              {SITE_VERTICALS.find((v) => v.id === s.vertical)?.label ?? s.vertical}
+            </span>
+            <span class="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-full" style="background: rgba(255,255,255,0.1); color: #C4DAC0;">
+              <Bitcoin size={10} /> {s.btc_enabled ? 'BTC on' : 'BTC off'}
+            </span>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              onclick={() => startEditSite(s)}
+              class="flex-1 flex items-center justify-center gap-1.5 text-[11px] font-bold px-2.5 py-2 rounded-full"
+              style="background: rgba(255,255,255,0.12); color: #E8D4B0;"
+            >
+              <Edit3 size={11} /> Edit
+            </button>
+            <button
+              type="button"
+              onclick={() => removeSite(s)}
+              disabled={deletingSiteId === s.id}
+              class="flex items-center gap-1 text-[10px] font-bold px-3 py-2 rounded-full shrink-0"
+              style="background: {armedDeleteSiteId === s.id ? '#B85038' : 'rgba(192,97,74,0.15)'}; color: {armedDeleteSiteId === s.id ? '#fff' : '#E08A6A'}; opacity: {deletingSiteId === s.id ? 0.6 : 1};"
+            >
+              {#if deletingSiteId === s.id}<RefreshCw size={10} class="animate-spin" />{:else}<Trash2 size={10} />{/if}
+              {deletingSiteId === s.id ? 'Deleting…' : armedDeleteSiteId === s.id ? 'Confirm delete' : 'Delete'}
+            </button>
+          </div>
+        </div>
+      {/each}
+      </div>
+
+      {#if showSiteForm}
+        <AdminModal title={editingSiteId ? 'Edit site' : 'Add site'} onClose={closeSiteForm}>
+          {#if !editingSiteId}
+            {#if unifiSiteOptionsLoading}
+              <p class="text-xs text-[#96B496] flex items-center gap-1.5"><RefreshCw size={11} class="animate-spin" /> Loading UniFi sites…</p>
+            {:else if unifiSiteOptions.length > 0}
+              <div>
+                <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">UniFi site (optional — fills id/name)</p>
+                <select
+                  onchange={(e) => {
+                    const opt = unifiSiteOptions.find((o) => o.id === e.currentTarget.value);
+                    if (opt) {
+                      siteDraft.id = opt.id;
+                      siteDraft.name = opt.name;
+                    }
+                  }}
+                  class="w-full px-3 py-2.5 rounded-xl text-sm text-[#E8D4B0] outline-none"
+                  style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);"
+                >
+                  <option value="" style="color: #1D3C2A;">Choose or enter manually below</option>
+                  {#each unifiSiteOptions as o (o.id)}
+                    <option value={o.id} style="color: #1D3C2A;">{o.name}</option>
+                  {/each}
+                </select>
+              </div>
+            {/if}
           {/if}
           <div class="grid grid-cols-2 gap-3">
-            {@render inputField('Site id', siteDraft.id, (e) => (siteDraft.id = e.currentTarget.value), { placeholder: 'e.g. 99kv3joz' })}
+            {@render inputField('Site id', siteDraft.id, (e) => (siteDraft.id = e.currentTarget.value), { placeholder: 'e.g. 99kv3joz', disabled: !!editingSiteId })}
             {@render inputField('Name', siteDraft.name, (e) => (siteDraft.name = e.currentTarget.value), { placeholder: 'e.g. Nairobi CBD Cafe' })}
           </div>
           <div>
@@ -2489,7 +3193,7 @@
                   class="flex items-center gap-1 px-3 py-1.5 rounded-full text-[11px] font-semibold"
                   style="background: {siteDraft.vertical === v.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {siteDraft.vertical === v.id ? '#fff' : '#C4DAC0'};"
                 >
-                  {#if v.id === 'institution'}<GraduationCap size={12} />{/if}
+                  {#if v.id === 'institution'}<GraduationCap size={12} />{:else if v.id === 'community'}<Users size={12} />{/if}
                   {v.label}
                 </button>
               {/each}
@@ -2515,107 +3219,160 @@
           <button
             onclick={submitSite}
             disabled={siteSaving}
-            class="w-full py-3 rounded-2xl font-bold text-sm text-white"
+            class="w-full py-3 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2"
             style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {siteSaving ? 0.7 : 1};"
           >
-            {siteSaving ? 'Saving…' : 'Create site'}
+            {#if siteSaving}<RefreshCw size={14} class="animate-spin" />{/if}
+            {siteSaving ? 'Saving…' : editingSiteId ? 'Save changes' : 'Create site'}
           </button>
-        </div>
+        </AdminModal>
       {/if}
 
-      <p class="text-xs text-[#3C6A4A] font-semibold px-1">{sites.length} sites</p>
-      {#if siteDeleteError}
-        <p class="text-xs text-[#E08A6A] px-1">{siteDeleteError}</p>
+      <div class="flex items-center justify-between px-1 mt-4">
+        <p class="text-xs text-[#3C6A4A] font-semibold">Packages</p>
+        <button
+          onclick={openPackageForm}
+          class="flex items-center gap-1 text-[11px] font-bold px-3 py-1.5 rounded-full"
+          style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
+        >
+          <Plus size={12} /> Add package
+        </button>
+      </div>
+      {#if packageDeleteError}
+        <p class="text-xs text-[#E08A6A] px-1">{packageDeleteError}</p>
       {/if}
       <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
-      {#each sites as s (s.id)}
-        <div class="rounded-2xl overflow-hidden shadow-sm px-4 py-3.5 flex flex-col gap-2.5" style="background: #2E5A3E; opacity: {s.status === 'active' ? 1 : 0.5};">
+      {#each packages as pkg (pkg.id)}
+        <div class="rounded-2xl overflow-hidden shadow-sm px-4 py-3.5 flex flex-col gap-2.5" style="background: #2E5A3E; opacity: {pkg.is_active ? 1 : 0.5}; border: {pkg.is_featured ? '2px solid #CC8830' : '2px solid transparent'};">
           <div class="flex items-center gap-3">
-            <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
-              <Radio size={16} color="#C45C38" />
-            </div>
             <div class="flex-1 min-w-0">
               <p class="text-sm font-semibold text-[#E8D4B0] truncate flex items-center gap-1.5">
-                {s.name}
-                {#if s.vertical === 'institution'}<GraduationCap size={11} color="#CC8830" />{/if}
+                {pkg.label}
+                {#if pkg.badge}
+                  <span class="text-[9px] font-bold px-2 py-0.5 rounded-full shrink-0" style="background: #C45C38; color: #fff;">{pkg.badge}</span>
+                {/if}
+                {#if pkg.is_featured}<Star size={11} color="#CC8830" fill="#CC8830" class="shrink-0" />{/if}
               </p>
-              <p class="text-[10px] text-[#AECAAE]">id: {s.id}</p>
+              <p class="text-[10px] text-[#AECAAE]">KES {Number(pkg.price_kes).toLocaleString()} · {Math.round(pkg.duration_secs / 60)} min</p>
             </div>
             <button
-              onclick={() => toggleSiteStatus(s)}
+              onclick={() => togglePackageActive(pkg)}
+              disabled={statusTogglingPackageId === pkg.id}
               class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full shrink-0"
-              style="background: {s.status === 'active' ? 'rgba(78,128,80,0.30)' : 'rgba(192,97,74,0.20)'}; color: {s.status === 'active' ? '#4E8050' : '#B85038'};"
+              style="background: {pkg.is_active ? 'rgba(78,128,80,0.30)' : 'rgba(192,97,74,0.20)'}; color: {pkg.is_active ? '#4E8050' : '#B85038'}; opacity: {statusTogglingPackageId === pkg.id ? 0.6 : 1};"
             >
-              {#if s.status === 'active'}<Pause size={10} /> Active{:else}<Play size={10} /> Off{/if}
+              {#if statusTogglingPackageId === pkg.id}
+                <RefreshCw size={10} class="animate-spin" />
+              {:else if pkg.is_active}
+                <Pause size={10} /> Active
+              {:else}
+                <Play size={10} /> Off
+              {/if}
             </button>
           </div>
-          <div class="flex items-center justify-between gap-2">
-            <div class="flex gap-1.5 flex-wrap">
-              {#each availableSiteModes(s.vertical) as m (m.id)}
-                <button
-                  type="button"
-                  onclick={() => setSiteMode(s, m.id)}
-                  class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
-                  style="background: {s.mode === m.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {s.mode === m.id ? '#fff' : '#C4DAC0'};"
-                >
-                  {m.label}
-                </button>
-              {/each}
+
+          <!-- Featured = pre-highlighted on the purchase screen when it
+               first loads (PackageScreen.svelte); at most one package can
+               be featured at a time, so turning this on for one turns it
+               off for whichever else had it. -->
+          <button
+            type="button"
+            onclick={() => toggleFeaturedPackage(pkg)}
+            disabled={featuringPackageId === pkg.id}
+            class="flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-full self-start"
+            style="background: {pkg.is_featured ? 'rgba(204,136,48,0.22)' : 'rgba(255,255,255,0.1)'}; color: {pkg.is_featured ? '#CC8830' : '#96B496'}; opacity: {featuringPackageId === pkg.id ? 0.6 : 1};"
+          >
+            {#if featuringPackageId === pkg.id}
+              <RefreshCw size={11} class="animate-spin" />
+            {:else}
+              <Star size={11} fill={pkg.is_featured ? '#CC8830' : 'none'} />
+            {/if}
+            {featuringPackageId === pkg.id ? 'Updating…' : pkg.is_featured ? 'Featured plan' : 'Set as featured'}
+          </button>
+
+          <!-- Read-only site-visibility chips (named, not just a count) —
+               editing happens via the modal (Edit button below), matching
+               Sites' card pattern. -->
+          <div class="flex items-start gap-1.5">
+            <span class="text-[10px] text-[#96B496] shrink-0 mt-1">Sites</span>
+            <div class="flex items-center gap-1 flex-wrap">
+              {#if (pkg.site_ids ?? []).length === 0}
+                <span class="text-[10px] font-semibold px-2 py-1 rounded-full" style="background: rgba(255,255,255,0.1); color: #C4DAC0;">All sites</span>
+              {:else}
+                {#each pkg.site_ids as siteId (siteId)}
+                  <span class="text-[10px] font-semibold px-2 py-1 rounded-full" style="background: rgba(255,255,255,0.1); color: #C4DAC0;">
+                    {sites.find((s) => s.id === siteId)?.name ?? siteId}
+                  </span>
+                {/each}
+              {/if}
             </div>
-            <button
-              type="button"
-              onclick={() => removeSite(s)}
-              class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full shrink-0"
-              style="background: {armedDeleteSiteId === s.id ? '#B85038' : 'rgba(192,97,74,0.15)'}; color: {armedDeleteSiteId === s.id ? '#fff' : '#E08A6A'};"
-            >
-              <X size={10} />{armedDeleteSiteId === s.id ? 'Confirm delete' : 'Delete'}
-            </button>
           </div>
+
           <div class="flex items-center gap-2">
-            <span class="text-[10px] text-[#96B496]">BTC payments</span>
             <button
               type="button"
-              onclick={() => toggleSiteBtc(s)}
-              class="flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold"
-              style="background: {s.btc_enabled ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {s.btc_enabled ? '#fff' : '#C4DAC0'};"
+              onclick={() => startEditPackage(pkg)}
+              class="flex-1 flex items-center justify-center gap-1.5 text-[11px] font-bold px-2.5 py-2 rounded-full"
+              style="background: rgba(255,255,255,0.12); color: #E8D4B0;"
             >
-              <Bitcoin size={11} />
-              {s.btc_enabled ? 'Enabled' : 'Disabled'}
+              <Edit3 size={11} /> Edit
             </button>
-          </div>
-          <div class="flex items-center gap-1.5 flex-wrap">
-            <span class="text-[10px] text-[#96B496]">Type</span>
-            {#each SITE_VERTICALS as v (v.id)}
-              <button
-                type="button"
-                onclick={() => setSiteVertical(s, v.id)}
-                class="flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold"
-                style="background: {s.vertical === v.id ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {s.vertical === v.id ? '#fff' : '#C4DAC0'};"
-              >
-                {#if v.id === 'institution'}<GraduationCap size={11} />{/if}
-                {v.label}
-              </button>
-            {/each}
+            <button
+              type="button"
+              onclick={() => removePackage(pkg)}
+              disabled={deletingPackageId === pkg.id}
+              class="flex items-center gap-1 text-[10px] font-bold px-3 py-2 rounded-full shrink-0"
+              style="background: {armedDeletePackageId === pkg.id ? '#B85038' : 'rgba(192,97,74,0.15)'}; color: {armedDeletePackageId === pkg.id ? '#fff' : '#E08A6A'}; opacity: {deletingPackageId === pkg.id ? 0.6 : 1};"
+            >
+              {#if deletingPackageId === pkg.id}<RefreshCw size={10} class="animate-spin" />{:else}<Trash2 size={10} />{/if}
+              {deletingPackageId === pkg.id ? 'Deleting…' : armedDeletePackageId === pkg.id ? 'Confirm delete' : 'Delete'}
+            </button>
           </div>
         </div>
       {/each}
       </div>
 
-      <p class="text-xs text-[#3C6A4A] font-semibold px-1 mt-4">Packages</p>
-      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-start">
-      {#each packages as pkg (pkg.id)}
-        <div class="rounded-2xl overflow-hidden shadow-sm px-4 py-3.5 flex flex-col gap-2.5" style="background: #2E5A3E; opacity: {pkg.is_active ? 1 : 0.5};">
-          <div class="flex items-center gap-3">
-            <div class="flex-1 min-w-0">
-              <p class="text-sm font-semibold text-[#E8D4B0] truncate">{pkg.label}</p>
-              <p class="text-[10px] text-[#AECAAE]">KES {Number(pkg.price_kes).toLocaleString()} · {Math.round(pkg.duration_secs / 60)} min</p>
+      {#if showPackageForm}
+        <AdminModal title={editingPackageId ? 'Edit package' : 'Add package'} onClose={closePackageForm}>
+          {@render inputField('Package id', packageDraft.id, (e) => (packageDraft.id = e.currentTarget.value), { placeholder: 'e.g. hourly', disabled: !!editingPackageId })}
+          {@render inputField('Label', packageDraft.label, (e) => (packageDraft.label = e.currentTarget.value), { placeholder: 'e.g. 1 Hour Pass' })}
+          <div class="grid grid-cols-2 gap-3">
+            {@render inputField('Price (KES)', packageDraft.priceKes, (e) => (packageDraft.priceKes = e.currentTarget.value), { type: 'number' })}
+            {@render inputField('Duration (minutes)', packageDraft.durationSecs, (e) => (packageDraft.durationSecs = e.currentTarget.value), { type: 'number' })}
+          </div>
+          <div>
+            {@render inputField('Badge (optional)', packageDraft.badge, (e) => (packageDraft.badge = e.currentTarget.value), { placeholder: 'e.g. Best Value' })}
+            <div class="flex gap-1.5 flex-wrap mt-1.5">
+              <button
+                type="button"
+                onclick={() => (packageDraft.badge = '')}
+                class="px-2.5 py-1 rounded-full text-[10px] font-semibold"
+                style="background: {packageDraft.badge === '' ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {packageDraft.badge === '' ? '#fff' : '#C4DAC0'};"
+              >
+                None
+              </button>
+              {#each PACKAGE_BADGE_PRESETS as preset (preset)}
+                <button
+                  type="button"
+                  onclick={() => (packageDraft.badge = preset)}
+                  class="px-2.5 py-1 rounded-full text-[10px] font-semibold"
+                  style="background: {packageDraft.badge === preset ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {packageDraft.badge === preset ? '#fff' : '#C4DAC0'};"
+                >
+                  {preset}
+                </button>
+              {/each}
             </div>
+          </div>
+          <div>
+            <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Status</p>
             <button
-              onclick={() => togglePackageActive(pkg)}
-              class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full shrink-0"
-              style="background: {pkg.is_active ? 'rgba(78,128,80,0.30)' : 'rgba(192,97,74,0.20)'}; color: {pkg.is_active ? '#4E8050' : '#B85038'};"
+              type="button"
+              onclick={() => (packageDraft.isActive = !packageDraft.isActive)}
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold"
+              style="background: {packageDraft.isActive ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {packageDraft.isActive ? '#fff' : '#C4DAC0'};"
             >
-              {#if pkg.is_active}<Pause size={10} /> Active{:else}<Play size={10} /> Off{/if}
+              {#if packageDraft.isActive}<Pause size={11} />{:else}<Play size={11} />{/if}
+              {packageDraft.isActive ? 'Active' : 'Off'}
             </button>
           </div>
           <div>
@@ -2623,17 +3380,17 @@
             <div class="flex gap-1.5 flex-wrap">
               <button
                 type="button"
-                onclick={() => clearPackageSites(pkg)}
+                onclick={() => (packageDraft.siteIds = [])}
                 class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
-                style="background: {(pkg.site_ids ?? []).length === 0 ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {(pkg.site_ids ?? []).length === 0 ? '#fff' : '#C4DAC0'};"
+                style="background: {packageDraft.siteIds.length === 0 ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {packageDraft.siteIds.length === 0 ? '#fff' : '#C4DAC0'};"
               >
                 All sites
               </button>
               {#each sites as s (s.id)}
-                {@const selected = (pkg.site_ids ?? []).includes(s.id)}
+                {@const selected = packageDraft.siteIds.includes(s.id)}
                 <button
                   type="button"
-                  onclick={() => togglePackageSite(pkg, s.id)}
+                  onclick={() => toggleDraftPackageSite(s.id)}
                   class="px-3 py-1.5 rounded-full text-[11px] font-semibold"
                   style="background: {selected ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {selected ? '#fff' : '#C4DAC0'};"
                 >
@@ -2642,9 +3399,22 @@
               {/each}
             </div>
           </div>
-        </div>
-      {/each}
-      </div>
+
+          {#if packageFormError}
+            <p class="text-xs text-[#E08A6A]">{packageFormError}</p>
+          {/if}
+
+          <button
+            onclick={submitPackage}
+            disabled={packageSaving}
+            class="w-full py-3 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2"
+            style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {packageSaving ? 0.7 : 1};"
+          >
+            {#if packageSaving}<RefreshCw size={14} class="animate-spin" />{/if}
+            {packageSaving ? 'Saving…' : editingPackageId ? 'Save changes' : 'Create package'}
+          </button>
+        </AdminModal>
+      {/if}
     {:else if tab === 'settings'}
       <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
         <div class="flex items-center gap-2 mb-1">
@@ -2732,5 +3502,26 @@
   .content-overview-scroll::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.25);
     border-radius: 999px;
+  }
+
+  /* Same fade-in-up convention as AdminLoginScreen.svelte — used on the
+     Analytics tab's header and segmented switcher. */
+  .fade-in-up {
+    animation: admin-dashboard-fade-in-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes admin-dashboard-fade-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fade-in-up {
+      animation: none;
+    }
   }
 </style>

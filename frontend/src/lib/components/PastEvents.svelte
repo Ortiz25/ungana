@@ -9,10 +9,35 @@
   // item. Tapping a card opens a detail sheet with a photo carousel —
   // attachment_url is the cover photo (also the card's own background);
   // images (jsonb array, set in the admin Campus post form) holds any
-  // additional gallery photos.
-  import { X, ChevronLeft, ChevronRight, MapPin, CalendarDays, Images } from '@lucide/svelte';
+  // additional gallery photos. Past VISIBLE_LIMIT events, the strip caps
+  // itself and a trailing "+N more" card opens a searchable modal grid with
+  // everything — same scale pattern as QuickLinksBoard/MarketplaceBoard.
+  import { X, ChevronLeft, ChevronRight, MapPin, CalendarDays, Images, Search } from '@lucide/svelte';
 
-  let { posts = [] } = $props();
+  // Theme defaults to today's look — a different vertical (e.g. Community)
+  // can pass its own palette; every call site that omits `theme` renders
+  // exactly as before this prop existed.
+  const DEFAULT_THEME = {
+    bg: '#0b1e13',
+    border: '#12301e',
+    accent: '#c29d53',
+    placeholderIcon: '#3a5240',
+    carouselBg: '#05140b'
+  };
+
+  let { posts = [], theme = DEFAULT_THEME } = $props();
+
+  const VISIBLE_LIMIT = 6;
+  const overflow = $derived(Math.max(posts.length - (VISIBLE_LIMIT - 1), 0));
+  const stripPosts = $derived(overflow > 0 ? posts.slice(0, VISIBLE_LIMIT - 1) : posts);
+
+  let modalOpen = $state(false);
+  let query = $state('');
+  const filtered = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return posts;
+    return posts.filter((p) => [p.title, p.category, p.location, p.body].some((f) => (f || '').toLowerCase().includes(q)));
+  });
 
   let selected = $state(null);
   let photoIndex = $state(0);
@@ -24,11 +49,17 @@
   function close() {
     selected = null;
   }
+  function openModal() {
+    modalOpen = true;
+    query = '';
+  }
+  function closeModal() {
+    modalOpen = false;
+  }
   function handleKeydown(e) {
-    if (!selected) return;
-    if (e.key === 'Escape') close();
-    else if (e.key === 'ArrowRight') nextPhoto();
-    else if (e.key === 'ArrowLeft') prevPhoto();
+    if (e.key !== 'Escape') return;
+    if (selected) close();
+    else if (modalOpen) closeModal();
   }
 
   function dayNum(iso) {
@@ -56,50 +87,128 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
+{#snippet eventCard(post)}
+  {@const galleryCount = (post.images?.length ?? 0) + (post.attachment_url ? 1 : 0)}
+  <button
+    type="button"
+    onclick={() => open(post)}
+    class="past-event-card w-full rounded-2xl overflow-hidden relative text-left active:scale-95 transition-transform"
+    style="height: 128px; {post.is_pinned ? `border: 2px solid ${theme.accent};` : ''}"
+  >
+    {#if post.attachment_url}
+      <img src={post.attachment_url} alt="" class="w-full h-full object-cover" />
+    {:else}
+      <div class="w-full h-full flex items-center justify-center" style="background: linear-gradient(135deg, {theme.border}, {theme.bg});">
+        <CalendarDays size={22} color={theme.placeholderIcon} />
+      </div>
+    {/if}
+    <div class="absolute inset-0" style="background: linear-gradient(0deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.1) 55%, transparent 100%);"></div>
+
+    <div class="absolute top-2.5 left-2.5 px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-wide" style="background: rgba(0,0,0,0.55); color: {theme.accent};">
+      {monthAbbrev(post.event_starts_at)} {dayNum(post.event_starts_at)}
+    </div>
+    {#if galleryCount > 1}
+      <div class="absolute top-2.5 right-2.5 flex items-center gap-0.5 px-1.5 py-1 rounded-lg" style="background: rgba(0,0,0,0.55);">
+        <Images size={9} color="#fff" />
+        <span class="text-[9px] font-bold text-white">{galleryCount}</span>
+      </div>
+    {/if}
+
+    <div class="absolute bottom-0 left-0 right-0 p-2.5">
+      {#if post.location}
+        <p class="text-[9px] font-semibold mb-0.5 flex items-center gap-1" style="color: #C4DAC0;">
+          <MapPin size={8} class="shrink-0" />
+          <span class="truncate">{post.location}</span>
+        </p>
+      {/if}
+      <p class="text-xs font-bold text-white leading-tight line-clamp-2">{post.title}</p>
+    </div>
+  </button>
+{/snippet}
+
 {#if posts.length > 0}
   <div class="pt-2 pb-2">
     <div class="flex items-center justify-between px-4 mb-3">
       <h3 class="text-sm font-bold" style="color: #f3f4f6;">Past Events</h3>
     </div>
     <div class="flex gap-3 px-4 overflow-x-auto pb-2 no-scrollbar">
-      {#each posts as post (post.id)}
-        {@const galleryCount = (post.images?.length ?? 0) + (post.attachment_url ? 1 : 0)}
+      {#each stripPosts as post (post.id)}
+        <div class="shrink-0" style="width: 158px;">
+          {@render eventCard(post)}
+        </div>
+      {/each}
+      {#if overflow > 0}
         <button
           type="button"
-          onclick={() => open(post)}
-          class="past-event-card shrink-0 rounded-2xl overflow-hidden relative text-left active:scale-95 transition-transform"
-          style="width: 158px; height: 128px;"
+          onclick={openModal}
+          class="more-tile shrink-0 rounded-2xl flex flex-col items-center justify-center gap-1.5 text-center transition-all"
+          style="width: 158px; height: 128px; background: {theme.bg}; border: 1px dashed {theme.border}; --pe-hover: {theme.accent};"
         >
-          {#if post.attachment_url}
-            <img src={post.attachment_url} alt="" class="w-full h-full object-cover" />
-          {:else}
-            <div class="w-full h-full flex items-center justify-center" style="background: linear-gradient(135deg, #12301e, #0b1e13);">
-              <CalendarDays size={22} color="#3a5240" />
-            </div>
-          {/if}
-          <div class="absolute inset-0" style="background: linear-gradient(0deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.1) 55%, transparent 100%);"></div>
-
-          <div class="absolute top-2.5 left-2.5 px-2 py-1 rounded-lg text-[9px] font-bold uppercase tracking-wide" style="background: rgba(0,0,0,0.55); color: #c29d53;">
-            {monthAbbrev(post.event_starts_at)} {dayNum(post.event_starts_at)}
-          </div>
-          {#if galleryCount > 1}
-            <div class="absolute top-2.5 right-2.5 flex items-center gap-0.5 px-1.5 py-1 rounded-lg" style="background: rgba(0,0,0,0.55);">
-              <Images size={9} color="#fff" />
-              <span class="text-[9px] font-bold text-white">{galleryCount}</span>
-            </div>
-          {/if}
-
-          <div class="absolute bottom-0 left-0 right-0 p-2.5">
-            {#if post.location}
-              <p class="text-[9px] font-semibold mb-0.5 flex items-center gap-1" style="color: #C4DAC0;">
-                <MapPin size={8} class="shrink-0" />
-                <span class="truncate">{post.location}</span>
-              </p>
-            {/if}
-            <p class="text-xs font-bold text-white leading-tight line-clamp-2">{post.title}</p>
-          </div>
+          <CalendarDays size={18} color={theme.accent} />
+          <p class="text-xs font-bold" style="color: #e5e7eb;">+{overflow} more</p>
         </button>
-      {/each}
+      {/if}
+    </div>
+  </div>
+{/if}
+
+{#if modalOpen}
+  <div
+    class="fixed inset-0 z-[100] flex items-end sm:items-center justify-center"
+    style="background: rgba(0,0,0,0.65);"
+    onclick={closeModal}
+    role="presentation"
+  >
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="modal-pop w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col"
+      style="background: {theme.bg}; max-height: 85vh; border: 1px solid {theme.border};"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
+        <div>
+          <p class="text-[10px] font-bold uppercase tracking-[0.2em]" style="color: {theme.accent};">Past Events</p>
+          <p class="text-[11px] mt-0.5" style="color: #9ca3af;">{filtered.length} of {posts.length} events</p>
+        </div>
+        <button
+          onclick={closeModal}
+          aria-label="Close"
+          class="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+          style="background: rgba(255,255,255,0.08);"
+        >
+          <X size={14} color="#9ca3af" />
+        </button>
+      </div>
+
+      <div class="px-5 pb-3 shrink-0">
+        <div class="flex items-center gap-2 rounded-lg px-3.5 py-2.5 search-box" style="background: {theme.bg}; border: 1px solid {theme.border}; --pe-hover: {theme.accent};">
+          <Search size={14} color={theme.accent} class="shrink-0" />
+          <input
+            bind:value={query}
+            type="text"
+            placeholder="Search past events…"
+            class="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder-[#6b7280]"
+            style="color: #e5e7eb;"
+          />
+          {#if query}
+            <button onclick={() => (query = '')} aria-label="Clear search" class="shrink-0">
+              <X size={13} color="#9ca3af" />
+            </button>
+          {/if}
+        </div>
+      </div>
+
+      <div class="px-5 pb-6 overflow-y-auto grid grid-cols-2 gap-3">
+        {#if filtered.length === 0}
+          <p class="col-span-2 text-sm text-center py-8" style="color: #9ca3af;">
+            {query ? `No events match "${query}".` : 'Nothing here yet.'}
+          </p>
+        {:else}
+          {#each filtered as post (post.id)}
+            {@render eventCard(post)}
+          {/each}
+        {/if}
+      </div>
     </div>
   </div>
 {/if}
@@ -114,11 +223,11 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="modal-pop w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden"
-      style="background: #0b1e13; max-height: 90vh; border: 1px solid #12301e;"
+      style="background: {theme.bg}; max-height: 90vh; border: 1px solid {theme.border};"
       onclick={(e) => e.stopPropagation()}
     >
       <!-- Photo carousel -->
-      <div class="relative shrink-0" style="aspect-ratio: 4 / 3; background: #05140b;">
+      <div class="relative shrink-0" style="aspect-ratio: 4 / 3; background: {theme.carouselBg};">
         {#if photos.length > 0}
           {#key photoIndex}
             <img src={photos[photoIndex]} alt="" class="carousel-photo w-full h-full object-cover" />
@@ -144,14 +253,14 @@
               {#each photos as _, i (i)}
                 <span
                   class="rounded-full transition-all"
-                  style="width: {i === photoIndex ? '14px' : '5px'}; height: 5px; background: {i === photoIndex ? '#c29d53' : 'rgba(255,255,255,0.4)'};"
+                  style="width: {i === photoIndex ? '14px' : '5px'}; height: 5px; background: {i === photoIndex ? theme.accent : 'rgba(255,255,255,0.4)'};"
                 ></span>
               {/each}
             </div>
           {/if}
         {:else}
           <div class="w-full h-full flex items-center justify-center">
-            <CalendarDays size={32} color="#3a5240" />
+            <CalendarDays size={32} color={theme.placeholderIcon} />
           </div>
         {/if}
         <button
@@ -165,7 +274,7 @@
       </div>
 
       <div class="px-5 py-4 overflow-y-auto flex flex-col gap-2">
-        <p class="text-[10px] font-bold uppercase tracking-[0.2em]" style="color: #c29d53;">{fullDate(selected.event_starts_at)}</p>
+        <p class="text-[10px] font-bold uppercase tracking-[0.2em]" style="color: {theme.accent};">{fullDate(selected.event_starts_at)}</p>
         <h3 class="text-lg font-bold leading-snug" style="color: #f3f4f6; font-family: 'Playfair Display', serif;">{selected.title}</h3>
         {#if selected.location}
           <div class="flex items-center gap-1.5 text-[12px]" style="color: #9ca3af;">
@@ -184,6 +293,10 @@
 <style>
   .past-event-card:active {
     filter: brightness(0.95);
+  }
+  .more-tile:hover,
+  .search-box:focus-within {
+    border-color: var(--pe-hover, #c29d53) !important;
   }
   .modal-pop {
     animation: past-event-modal-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);

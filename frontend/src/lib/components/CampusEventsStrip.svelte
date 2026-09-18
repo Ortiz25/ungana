@@ -7,9 +7,21 @@
   // dark green/gold palette. Uses its own lightweight detail sheet rather
   // than the shared AdminModal, since this is a client-facing screen, not
   // the admin dashboard.
-  import { MapPin, CalendarDays, Clock, X } from '@lucide/svelte';
+  import { MapPin, CalendarDays, Clock, X, Pin } from '@lucide/svelte';
 
-  let { posts = [] } = $props();
+  // Theme defaults to today's look — a different vertical (e.g. Community)
+  // can pass its own palette; every call site that omits `theme` renders
+  // exactly as before this prop existed.
+  const DEFAULT_THEME = {
+    bg: '#0b1e13',
+    border: '#12301e',
+    borderHover: '#1c492e',
+    accent: '#c29d53',
+    accentGradA: '#d4af6a',
+    accentGradB: '#8b6a35'
+  };
+
+  let { posts = [], theme = DEFAULT_THEME } = $props();
 
   let selected = $state(null);
 
@@ -50,12 +62,17 @@
       <button
         type="button"
         onclick={() => (selected = post)}
-        class="event-trigger w-full text-left rounded-xl p-4 transition-all active:scale-[0.98]"
+        class="event-trigger w-full text-left rounded-xl p-4 transition-all active:scale-[0.98] relative"
         class:h-full={posts.length === 1}
-        style="background: #0b1e13; border: 1px solid #12301e;"
+        style="background: {theme.bg}; border: 1px solid {post.is_pinned ? theme.accent : theme.border}; --es-border-hover: {theme.borderHover};"
       >
+        {#if post.is_pinned}
+          <div class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center" style="background: {theme.accent}; box-shadow: 0 0 0 2px {theme.bg};">
+            <Pin size={9} color={theme.bg} fill={theme.bg} />
+          </div>
+        {/if}
         <div class="flex items-center gap-3" class:h-full={posts.length === 1}>
-          <div class="flex flex-col items-center justify-center rounded-lg px-3 py-1.5 shrink-0" style="background: linear-gradient(135deg, #d4af6a, #8b6a35); min-width: 56px;">
+          <div class="flex flex-col items-center justify-center rounded-lg px-3 py-1.5 shrink-0" style="background: linear-gradient(135deg, {theme.accentGradA}, {theme.accentGradB}); min-width: 56px;">
             <span class="text-[10px] uppercase tracking-tight" style="color: #fdf6e3;">{monthAbbrev(post.event_starts_at)}</span>
             <span class="text-xl font-bold leading-none my-0.5" style="color: #fdf6e3;">{dayNum(post.event_starts_at)}</span>
           </div>
@@ -80,7 +97,7 @@
 
 {#if selected}
   <div class="fixed inset-0 z-[100] flex items-center justify-center p-4" style="background: rgba(0,0,0,0.65);">
-    <div class="w-full rounded-3xl shadow-2xl flex flex-col" style="background: #0b1e13; max-width: 480px; max-height: 90vh; border: 1px solid #12301e;">
+    <div class="w-full rounded-3xl shadow-2xl flex flex-col" style="background: {theme.bg}; max-width: 480px; max-height: 90vh; border: 1px solid {theme.border};">
       <div class="flex items-center justify-between px-5 py-4 shrink-0" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
         <p class="text-sm font-bold" style="color: #f3f4f6;">Campus Event</p>
         <button
@@ -94,12 +111,15 @@
       </div>
       <div class="px-5 py-4 flex flex-col gap-3 overflow-y-auto">
         <div class="flex items-center gap-3">
-          <div class="flex flex-col items-center justify-center rounded-lg px-3 py-2 shrink-0" style="background: #12301e; border: 1px solid #1c492e;">
+          <div class="flex flex-col items-center justify-center rounded-lg px-3 py-2 shrink-0" style="background: {theme.border}; border: 1px solid {theme.borderHover};">
             <span class="text-[10px] uppercase tracking-tight" style="color: #9ca3af;">{monthAbbrev(selected.event_starts_at)}</span>
-            <span class="text-xl font-bold leading-none my-0.5" style="color: #c29d53;">{dayNum(selected.event_starts_at)}</span>
+            <span class="text-xl font-bold leading-none my-0.5" style="color: {theme.accent};">{dayNum(selected.event_starts_at)}</span>
           </div>
           <div class="flex-1 min-w-0">
-            <p class="text-base font-bold leading-snug" style="color: #f3f4f6; font-family: 'Playfair Display', serif;">{selected.title}</p>
+            <p class="text-base font-bold leading-snug flex items-center gap-1.5" style="color: #f3f4f6; font-family: 'Playfair Display', serif;">
+              {selected.title}
+              {#if selected.is_pinned}<Pin size={12} color={theme.accent} fill={theme.accent} class="shrink-0" />{/if}
+            </p>
             {#if selected.category}<p class="text-[11px] mt-0.5" style="color: #9ca3af;">{selected.category}</p>{/if}
           </div>
         </div>
@@ -123,6 +143,6 @@
 
 <style>
   .event-trigger:hover {
-    border-color: #1c492e !important;
+    border-color: var(--es-border-hover, #1c492e) !important;
   }
 </style>

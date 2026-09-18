@@ -12,11 +12,30 @@
   // and an urgent-count badge so a student's eye actually lands here first;
   // tapping it opens a modal with the full scrollable, interactive list,
   // with a Current/Past tab when there's anything to show on the Past side.
-  // Uses the Campus tab's dark green/gold palette throughout.
+  // Uses the Campus tab's dark green/gold palette by default — `theme`
+  // lets a different vertical (e.g. Community) reuse this component
+  // wholesale with its own palette instead. Every call site that doesn't
+  // pass `theme` renders pixel-identical to before this prop existed.
   import { onMount } from 'svelte';
   import { Pin, FileText, Megaphone, ExternalLink, ChevronDown, ChevronRight, Search, X } from '@lucide/svelte';
 
-  let { posts = [], pastPosts = [] } = $props();
+  const DEFAULT_THEME = {
+    bg: '#0b1e13',
+    bgAlt: '#0a1b11',
+    border: '#12301e',
+    borderAlt: '#163a23',
+    borderHover: '#2a5c3a',
+    accent: '#c29d53',
+    accentSoft: 'rgba(194,157,83,0.18)',
+    accentGradA: '#d4af6a',
+    accentGradB: '#8b6a35',
+    bannerGradA: '#123420',
+    bannerGradB: '#0d2317',
+    bannerBorder: '#1c472e',
+    glow: 'rgba(212,175,106,0.22)'
+  };
+
+  let { posts = [], pastPosts = [], theme = DEFAULT_THEME } = $props();
 
   let modalOpen = $state(false);
   let expandedId = $state(null);
@@ -133,15 +152,15 @@
     type="button"
     onclick={openModal}
     class="notice-banner w-full text-left rounded-2xl overflow-hidden relative transition-all active:scale-[0.99]"
-    style="background: linear-gradient(135deg, #123420, #0d2317 65%); border: 1px solid #1c472e; box-shadow: 0 10px 30px rgba(0,0,0,0.35);"
+    style="background: linear-gradient(135deg, {theme.bannerGradA}, {theme.bannerGradB} 65%); border: 1px solid {theme.bannerBorder}; box-shadow: 0 10px 30px rgba(0,0,0,0.35); --nb-border-hover: {theme.borderHover};"
   >
-    <!-- Soft gold glow in the corner rather than a literal pin illustration
+    <!-- Soft accent glow in the corner rather than a literal pin illustration
          dominating the card — reads as a dashboard banner, not a bulletin
          board photo, while the pin graphic itself moves into the icon tile
          below (still the flood-fill cutout built in onMount; see script). -->
-    <div class="absolute inset-0 pointer-events-none" style="background: radial-gradient(circle at 88% -20%, rgba(212,175,106,0.22), transparent 60%);"></div>
+    <div class="absolute inset-0 pointer-events-none" style="background: radial-gradient(circle at 88% -20%, {theme.glow}, transparent 60%);"></div>
     <div class="relative flex items-center gap-3.5 px-5 py-4">
-      <div class="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style="background: linear-gradient(135deg, #d4af6a, #8b6a35);">
+      <div class="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style="background: linear-gradient(135deg, {theme.accentGradA}, {theme.accentGradB});">
         <img
           src={pinSrc}
           alt=""
@@ -151,7 +170,7 @@
       </div>
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2 flex-wrap mb-1">
-          <p class="text-xs font-bold uppercase tracking-wider" style="color: #c29d53;">Notice Board</p>
+          <p class="text-xs font-bold uppercase tracking-wider" style="color: {theme.accent};">Notice Board</p>
           {#if urgentCount > 0}
             <span class="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full" style="background: rgba(196,92,56,0.22); color: #E08A6A;">
               {urgentCount} urgent
@@ -165,7 +184,7 @@
         {/if}
       </div>
       <div class="flex flex-col items-end gap-1.5 shrink-0">
-        <span class="text-[10px] font-bold px-2.5 py-1.5 rounded-full flex items-center gap-1" style="background: rgba(194,157,83,0.18); color: #c29d53;">
+        <span class="text-[10px] font-bold px-2.5 py-1.5 rounded-full flex items-center gap-1" style="background: {theme.accentSoft}; color: {theme.accent};">
           View all <ChevronRight size={11} />
         </span>
         {#if posts.length > 0}
@@ -188,12 +207,12 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="modal-pop w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col"
-      style="background: #0b1e13; max-height: 85vh; border: 1px solid #12301e;"
+      style="background: {theme.bg}; max-height: 85vh; border: 1px solid {theme.border};"
       onclick={(e) => e.stopPropagation()}
     >
       <div class="flex items-center justify-between px-5 pt-5 pb-3 shrink-0" style="border-bottom: 1px solid rgba(255,255,255,0.08);">
         <div>
-          <p class="text-[10px] font-bold uppercase tracking-[0.2em]" style="color: #c29d53;">Notice Board</p>
+          <p class="text-[10px] font-bold uppercase tracking-[0.2em]" style="color: {theme.accent};">Notice Board</p>
           <p class="text-[11px] mt-0.5" style="color: #9ca3af;">{filteredVisiblePosts.length} of {visiblePosts.length} notices</p>
         </div>
         <button
@@ -214,8 +233,8 @@
           onclick={() => (activeTab = 'all')}
           class="px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors"
           style={activeTab === 'all'
-            ? 'background: #c29d53; color: #0b1e13;'
-            : 'background: #0a1b11; border: 1px solid #163a23; color: #9ca3af;'}
+            ? `background: ${theme.accent}; color: ${theme.bg};`
+            : `background: ${theme.bgAlt}; border: 1px solid ${theme.borderAlt}; color: #9ca3af;`}
         >
           All ({posts.length + pastPosts.length})
         </button>
@@ -223,8 +242,8 @@
           onclick={() => (activeTab = 'current')}
           class="px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors"
           style={activeTab === 'current'
-            ? 'background: #c29d53; color: #0b1e13;'
-            : 'background: #0a1b11; border: 1px solid #163a23; color: #9ca3af;'}
+            ? `background: ${theme.accent}; color: ${theme.bg};`
+            : `background: ${theme.bgAlt}; border: 1px solid ${theme.borderAlt}; color: #9ca3af;`}
         >
           Current ({posts.length})
         </button>
@@ -232,16 +251,16 @@
           onclick={() => (activeTab = 'past')}
           class="px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors"
           style={activeTab === 'past'
-            ? 'background: #c29d53; color: #0b1e13;'
-            : 'background: #0a1b11; border: 1px solid #163a23; color: #9ca3af;'}
+            ? `background: ${theme.accent}; color: ${theme.bg};`
+            : `background: ${theme.bgAlt}; border: 1px solid ${theme.borderAlt}; color: #9ca3af;`}
         >
           Past ({pastPosts.length})
         </button>
       </div>
 
       <div class="px-5 pt-3 pb-3 shrink-0">
-        <div class="flex items-center gap-2 rounded-lg px-3.5 py-2.5 search-box" style="background: #0a1b11; border: 1px solid #163a23;">
-          <Search size={14} color="#c29d53" class="shrink-0" />
+        <div class="flex items-center gap-2 rounded-lg px-3.5 py-2.5 search-box" style="background: {theme.bgAlt}; border: 1px solid {theme.borderAlt}; --nb-accent: {theme.accent};">
+          <Search size={14} color={theme.accent} class="shrink-0" />
           <input
             bind:value={query}
             type="text"
@@ -284,7 +303,7 @@
                   {#if post.category}
                     <span class="text-[10px]" style="color: #9ca3af;">{post.category}</span>
                   {/if}
-                  {#if post.is_pinned}<Pin size={10} color="#c29d53" fill="#c29d53" />{/if}
+                  {#if post.is_pinned}<Pin size={10} color={theme.accent} fill={theme.accent} />{/if}
                 </div>
                 <p class="text-sm font-semibold leading-snug" style="color: #f3f4f6;">{post.title}</p>
                 {#if !open}
@@ -316,7 +335,7 @@
                     rel="noopener noreferrer"
                     onclick={(e) => e.stopPropagation()}
                     class="inline-flex items-center gap-1.5 text-[11px] font-semibold px-3 py-2 rounded-full"
-                    style="background: rgba(194,157,83,0.15); color: #c29d53;"
+                    style="background: {theme.accentSoft}; color: {theme.accent};"
                   >
                     <FileText size={12} /> View attachment <ExternalLink size={10} />
                   </a>
@@ -333,10 +352,10 @@
 
 <style>
   .notice-banner:hover {
-    border-color: #2a5c3a !important;
+    border-color: var(--nb-border-hover, #2a5c3a) !important;
   }
   .search-box:focus-within {
-    border-color: #c29d53 !important;
+    border-color: var(--nb-accent, #c29d53) !important;
   }
   .modal-pop {
     animation: notice-modal-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);

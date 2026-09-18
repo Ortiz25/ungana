@@ -101,20 +101,40 @@ export async function getLatestSessionForUsername(username) {
 }
 
 /**
+ * Seconds left on this device's current still-active session, or 0 if none
+ * (never had one, or it already expired). Used by completeAuthorization()
+ * to fold leftover time into a new grant — "Extend Session" should add to
+ * what's running, not reset the clock to just the new grant's own duration
+ * (see that function's comment for the full reasoning).
+ */
+export async function getActiveRemainingSecs(mac) {
+  const latest = await getLatestSessionForMac(mac);
+  if (!latest?.expires_at) return 0;
+  const remainingMs = new Date(latest.expires_at).getTime() - Date.now();
+  return remainingMs > 0 ? Math.round(remainingMs / 1000) : 0;
+}
+
+/**
  * Mark a session paid+authorised: computes commission (if referred by an
  * activator), stamps authorized_at/expires_at, and freezes commission_kes.
+ * `extraSecs` (default 0) is leftover time carried over from a still-active
+ * prior session — see getActiveRemainingSecs/completeAuthorization — folded
+ * into expires_at so the client's actual access period matches what was
+ * just authorised with the router. Deliberately NOT added to duration_secs
+ * itself, which stays exactly what *this* purchase/claim was for — the
+ * figure analytics and the admin dashboard report on.
  */
-export async function markSessionAuthorized(reference) {
+export async function markSessionAuthorized(reference, extraSecs = 0) {
   const { rows } = await query(
     `UPDATE sessions s
      SET payment_status = 'success',
          authorized_at = now(),
-         expires_at = now() + make_interval(secs => s.duration_secs),
+         expires_at = now() + make_interval(secs => s.duration_secs + $2::int),
          commission_kes = ROUND(s.amount_kes * COALESCE(a.commission_rate, 0), 2)
      FROM (SELECT id, commission_rate FROM activators) a
      WHERE s.reference = $1 AND a.id = s.activator_id AND s.payment_status != 'success'
      RETURNING s.*`,
-    [reference]
+    [reference, extraSecs]
   );
 
   // No activator on the session (self-onboarded) — the FROM/JOIN above
@@ -124,10 +144,10 @@ export async function markSessionAuthorized(reference) {
       `UPDATE sessions
        SET payment_status = 'success',
            authorized_at = now(),
-           expires_at = now() + make_interval(secs => duration_secs)
+           expires_at = now() + make_interval(secs => duration_secs + $2::int)
        WHERE reference = $1 AND payment_status != 'success'
        RETURNING *`,
-      [reference]
+      [reference, extraSecs]
     );
     if (plain[0]) await logPaymentEvent(plain[0].id, "authorized", { reference });
     return plain[0] || (await getSessionByReference(reference));
