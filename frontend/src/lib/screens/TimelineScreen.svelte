@@ -46,7 +46,11 @@
     getCampusPosts,
     getCommunityPosts,
     recordCommunityPostClick,
-    castCampusPollVote
+    castCampusPollVote,
+    getCampusReadIds,
+    markCampusPostRead,
+    getCommunityReadIds,
+    markCommunityPostRead
   } from '$lib/api.js';
   import { getClientMac, getSiteId } from '$lib/device.js';
 
@@ -85,6 +89,11 @@
   let campusTimetable = $state([]);
   let campusResources = $state([]);
   let campusPolls = $state([]);
+  // Post ids this device has already opened in the Notice Board — fetched
+  // once from GET /campus/notices/read on mount (see onMount), then updated
+  // optimistically by markCampusRead() the moment a notice is expanded, same
+  // "update UI first, persist in the background" convention as poll voting.
+  let campusReadIds = $state(new Set());
   // Which half of the institution/community feed is showing — 'campus'
   // (Notice Board/Events for institution, or Board/Marketplace/Services/
   // Events for community) or 'watch' (the standard Watch & Learn feed,
@@ -105,6 +114,8 @@
   let communityMarketplace = $state([]);
   let communityServices = $state([]);
   let communityPolls = $state([]);
+  // Same read-tracking shape as campusReadIds above, for the Community Board.
+  let communityReadIds = $state(new Set());
 
   let communityQuery = $state('');
   let communityCategory = $state('all');
@@ -230,6 +241,24 @@
     const q = campusQuery.trim().toLowerCase();
     if (!q) return true;
     return [post.title, post.category, post.location, post.body].some((f) => (f || '').toLowerCase().includes(q));
+  }
+
+  // Passed to NoticeBoard as onMarkRead — updates campusReadIds/
+  // communityReadIds optimistically (instant UI feedback) then persists in
+  // the background; a demo notice (string 'demo-' id, same convention as
+  // communityDemoData.js's other demo posts) has no real backend row to
+  // persist against, so it's tracked locally only.
+  async function markCampusRead(postId) {
+    if (campusReadIds.has(postId)) return;
+    campusReadIds = new Set(campusReadIds).add(postId);
+    if (typeof postId === 'string' && postId.startsWith('demo-')) return;
+    await markCampusPostRead(postId, mac);
+  }
+  async function markCommunityRead(postId) {
+    if (communityReadIds.has(postId)) return;
+    communityReadIds = new Set(communityReadIds).add(postId);
+    if (typeof postId === 'string' && postId.startsWith('demo-')) return;
+    await markCommunityPostRead(postId, mac);
   }
   const filteredCampusNotices = $derived(campusNotices.filter(matchesCampusFilters));
   // A notice's event_starts_at is optional and, when set, means "relevant
@@ -490,15 +519,16 @@
     siteResolved = true;
 
     if (siteInfo?.vertical === 'institution') {
-      const postsResult = await getCampusPosts(site);
+      const [postsResult, readIdsResult] = await Promise.all([getCampusPosts(site), getCampusReadIds(mac)]);
       const allPosts = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
       campusNotices = allPosts.filter((p) => p.type === 'notice' || p.type === 'release');
       campusEvents = allPosts.filter((p) => p.type === 'event');
       campusTimetable = allPosts.filter((p) => p.type === 'timetable');
       campusResources = allPosts.filter((p) => p.type === 'resource');
       campusPolls = allPosts.filter((p) => p.type === 'poll');
+      campusReadIds = new Set(readIdsResult.ok ? (readIdsResult.data?.readIds ?? []) : []);
     } else if (siteInfo?.vertical === 'community') {
-      const postsResult = await getCommunityPosts(site);
+      const [postsResult, readIdsResult] = await Promise.all([getCommunityPosts(site), getCommunityReadIds(mac)]);
       const allPosts = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
       // Demo items always trail real ones — see communityDemoData.js's own
       // header comment for what "delete this" actually involves.
@@ -506,6 +536,7 @@
       communityEvents = [...allPosts.filter((p) => p.type === 'event'), ...COMMUNITY_DEMO_EVENTS];
       communityMarketplace = [...allPosts.filter((p) => p.type === 'marketplace'), ...COMMUNITY_DEMO_MARKETPLACE];
       communityServices = [...allPosts.filter((p) => p.type === 'service'), ...COMMUNITY_DEMO_SERVICES];
+      communityReadIds = new Set(readIdsResult.ok ? (readIdsResult.data?.readIds ?? []) : []);
       communityPolls = [...allPosts.filter((p) => p.type === 'poll'), ...COMMUNITY_DEMO_POLLS];
     }
 
@@ -1519,7 +1550,7 @@
              circular) gets the visual weight and explicit call-to-action it
              deserves instead of sharing a grid cell with a resource tile. -->
         {#if filteredCurrentNotices.length > 0 || filteredPastNotices.length > 0}
-          <NoticeBoard posts={filteredCurrentNotices} pastPosts={filteredPastNotices} />
+          <NoticeBoard posts={filteredCurrentNotices} pastPosts={filteredPastNotices} readIds={campusReadIds} onMarkRead={markCampusRead} />
         {/if}
 
         {#if filteredCampusResources.length > 0}
@@ -1639,7 +1670,13 @@
              Notice Board, above everything else for the same reason: an
              urgent announcement deserves the visual weight. -->
         {#if filteredCurrentAnnouncements.length > 0 || filteredPastAnnouncements.length > 0}
-          <NoticeBoard posts={filteredCurrentAnnouncements} pastPosts={filteredPastAnnouncements} theme={COMMUNITY_THEME} />
+          <NoticeBoard
+            posts={filteredCurrentAnnouncements}
+            pastPosts={filteredPastAnnouncements}
+            theme={COMMUNITY_THEME}
+            readIds={communityReadIds}
+            onMarkRead={markCommunityRead}
+          />
         {/if}
 
         {#if filteredCommunityMarketplace.length > 0}

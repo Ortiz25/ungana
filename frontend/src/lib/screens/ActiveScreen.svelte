@@ -1,11 +1,11 @@
 <script>
   import { onMount } from 'svelte';
-  import { Wifi, Phone, RotateCcw, MessageCircle, Globe, Megaphone, Zap, ChevronRight } from '@lucide/svelte';
+  import { Wifi, Phone, RotateCcw, MessageCircle, Globe, Megaphone, Zap, Users, ChevronRight, Smartphone } from '@lucide/svelte';
   import UnganaLogoMark from '$lib/components/UnganaLogoMark.svelte';
   import DemoBadge from '$lib/components/DemoBadge.svelte';
   import { formatTime, formatCompactDuration, getWarningThreshold } from '$lib/data.js';
-  import { getSite } from '$lib/api.js';
-  import { getSiteId } from '$lib/device.js';
+  import { getSite, getUsernameForMac } from '$lib/api.js';
+  import { getSiteId, getClientMac } from '$lib/device.js';
 
   // `initialRemaining` lets a restored session (page reload while still
   // connected) resume the countdown from the actual time left instead of
@@ -21,12 +21,31 @@
   let { pkg, phone, mode = 'simulation', initialRemaining = null, autoGoOnline = false, onExpiring, onExtend, onExplore } = $props();
 
   // Same site-vertical lookup TimelineScreen itself makes — drives the
-  // Explore tile's label/icon below so it points at whichever half of
-  // TimelineScreen this site actually has (Campus for an institution site,
-  // Watch & Earn otherwise) instead of a generic "Explore" that doesn't set
-  // the right expectation. null site (dev/local) just defaults to Watch & Earn.
+  // Explore tile's label/icon below so it points at whichever section of
+  // TimelineScreen this site actually has (Campus for institution,
+  // Community for community, Watch & Earn otherwise) instead of a generic
+  // "Explore" that doesn't set the right expectation, or (the bug this
+  // replaced) a two-way check that lumped community sites in with
+  // "Watch & Earn" alongside general ones. null site (dev/local) just
+  // defaults to Watch & Earn.
   const site = getSiteId();
-  let isInstitution = $state(false);
+  let siteVertical = $state('general');
+  const isInstitution = $derived(siteVertical === 'institution');
+  const isCommunity = $derived(siteVertical === 'community');
+
+  // Hands this device's real, router-authorised MAC off to the Ungana
+  // mobile app via a deep link — the only way that app can ever learn a
+  // real MAC (iOS/Android block apps from reading it themselves; see the
+  // mobile app's device.ts header comment). Only ever built from a session
+  // that's already active here, so the app can act as this exact device
+  // from then on (balance, buy more time, claim rewards) rather than
+  // needing its own separate authorisation.
+  let username = $state('');
+  function continueInApp() {
+    const mac = getClientMac();
+    const params = new URLSearchParams({ mac, ...(site ? { site } : {}), ...(username ? { username } : {}) });
+    window.location.href = `ungana://activate?${params}`;
+  }
 
   const total = pkg.demoSecs;
   const warningThreshold = getWarningThreshold(total);
@@ -99,7 +118,12 @@
     if (autoGoOnline) goOnline();
     if (site) {
       const result = await getSite(site);
-      if (result.ok && result.data?.site) isInstitution = result.data.site.vertical === 'institution';
+      if (result.ok && result.data?.site) siteVertical = result.data.site.vertical ?? 'general';
+    }
+    const mac = getClientMac();
+    if (mac) {
+      const usernameResult = await getUsernameForMac(mac);
+      if (usernameResult.ok && usernameResult.data?.username) username = usernameResult.data.username;
     }
   });
 </script>
@@ -195,14 +219,22 @@
     <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.30);">
       {#if isInstitution}
         <Megaphone size={18} color="#C45C38" />
+      {:else if isCommunity}
+        <Users size={18} color="#C45C38" />
       {:else}
         <Zap size={18} color="#C45C38" />
       {/if}
     </div>
     <div class="flex-1 min-w-0">
-      <p class="text-sm font-bold text-[#E8D4B0]">{isInstitution ? 'Explore Campus' : 'Watch & Earn'}</p>
+      <p class="text-sm font-bold text-[#E8D4B0]">
+        {isInstitution ? 'Explore Campus' : isCommunity ? 'Explore Community' : 'Watch & Earn'}
+      </p>
       <p class="text-xs text-[#C4DAC0] mt-0.5">
-        {isInstitution ? 'Notices, exam timetable & more' : 'Earn extra time while you’re connected'}
+        {isInstitution
+          ? 'Notices, exam timetable & more'
+          : isCommunity
+            ? 'Announcements, marketplace & more'
+            : 'Earn extra time while you’re connected'}
       </p>
     </div>
     <ChevronRight size={16} color="#C4DAC0" class="shrink-0" />

@@ -35,7 +35,15 @@
     glow: 'rgba(212,175,106,0.22)'
   };
 
-  let { posts = [], pastPosts = [], theme = DEFAULT_THEME } = $props();
+  // readIds: a Set of post ids this device has already opened (see
+  // TimelineScreen's campusReadIds/communityReadIds, fetched once from
+  // GET /*/notices/read on mount). onMarkRead(postId) is called the first
+  // time a notice is expanded — the caller owns the optimistic Set update
+  // and the fire-and-forget POST /*/posts/:id/read, same "update UI first,
+  // persist in the background" convention as poll voting elsewhere in this
+  // app. Both default to a no-read-tracking no-op so this component still
+  // works standalone (e.g. in a future call site that doesn't wire it up).
+  let { posts = [], pastPosts = [], theme = DEFAULT_THEME, readIds = new Set(), onMarkRead = () => {} } = $props();
 
   let modalOpen = $state(false);
   let expandedId = $state(null);
@@ -112,6 +120,7 @@
 
   function toggle(id) {
     expandedId = expandedId === id ? null : id;
+    if (expandedId === id && !readIds.has(id)) onMarkRead(id);
   }
   function openModal() {
     modalOpen = true;
@@ -143,6 +152,10 @@
   // already sorted pinned-first by the backend.
   const topPost = $derived(posts[0]);
   const urgentCount = $derived(posts.filter((p) => p.priority === 'urgent').length);
+  // Unread only counts current notices — a past/expired one is no longer
+  // actionable, so it not being read yet isn't worth surfacing on the
+  // trigger card the way an unread current notice is.
+  const unreadCount = $derived(posts.filter((p) => !readIds.has(p.id)).length);
 </script>
 
 <svelte:window onkeydown={modalOpen ? handleKeydown : undefined} />
@@ -160,13 +173,21 @@
          below (still the flood-fill cutout built in onMount; see script). -->
     <div class="absolute inset-0 pointer-events-none" style="background: radial-gradient(circle at 88% -20%, {theme.glow}, transparent 60%);"></div>
     <div class="relative flex items-center gap-3.5 px-5 py-4">
-      <div class="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style="background: linear-gradient(135deg, {theme.accentGradA}, {theme.accentGradB});">
+      <div class="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 relative" style="background: linear-gradient(135deg, {theme.accentGradA}, {theme.accentGradB});">
         <img
           src={pinSrc}
           alt=""
           aria-hidden="true"
           style="width: 20px; height: auto; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.4));"
         />
+        {#if unreadCount > 0}
+          <span
+            class="absolute -top-1 -right-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold"
+            style="background: #C45C38; color: #fff; box-shadow: 0 0 0 2px {theme.bannerGradA};"
+          >
+            {unreadCount > 9 ? '9+' : unreadCount}
+          </span>
+        {/if}
       </div>
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2 flex-wrap mb-1">
@@ -188,7 +209,9 @@
           View all <ChevronRight size={11} />
         </span>
         {#if posts.length > 0}
-          <span class="text-[10px]" style="color: #6b7280;">{posts.length} notice{posts.length === 1 ? '' : 's'}</span>
+          <span class="text-[10px]" style="color: #6b7280;">
+            {unreadCount > 0 ? `${unreadCount} unread` : `${posts.length} notice${posts.length === 1 ? '' : 's'}`}
+          </span>
         {:else}
           <span class="text-[10px]" style="color: #6b7280;">{pastPosts.length} past</span>
         {/if}
@@ -285,11 +308,12 @@
         {#each filteredVisiblePosts as post (post.id)}
           {@const color = PRIORITY_COLOR[post.priority] ?? PRIORITY_COLOR.normal}
           {@const open = expandedId === post.id}
+          {@const isRead = readIds.has(post.id)}
           <button
             type="button"
             onclick={() => toggle(post.id)}
             class="text-left rounded-xl overflow-hidden transition-transform active:scale-[0.99]"
-            style="background: rgba(255,255,255,0.04); border-left: 3px solid {color};"
+            style="background: rgba(255,255,255,0.04); border-left: 3px solid {color}; opacity: {isRead ? 0.65 : 1};"
           >
             <div class="flex items-start gap-3 px-4 py-3.5">
               <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5" style="background: {color}30;">
@@ -305,7 +329,10 @@
                   {/if}
                   {#if post.is_pinned}<Pin size={10} color={theme.accent} fill={theme.accent} />{/if}
                 </div>
-                <p class="text-sm font-semibold leading-snug" style="color: #f3f4f6;">{post.title}</p>
+                <p class="text-sm leading-snug flex items-center gap-1.5" style="color: #f3f4f6; font-weight: {isRead ? 500 : 700};">
+                  {#if !isRead}<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: {theme.accent};"></span>{/if}
+                  {post.title}
+                </p>
                 {#if !open}
                   <p class="text-[11px] mt-0.5 line-clamp-1" style="color: #6b7280;">{post.body ?? ''}</p>
                 {/if}

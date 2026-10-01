@@ -3,8 +3,8 @@
   import {
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
     ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
-    BarChart3, Eye, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft, Bitcoin, Trash2,
-    Megaphone, Pin, Calendar, GraduationCap, ClipboardCheck, Link2, MousePointerClick, ShoppingBag, Star
+    BarChart3, Eye, EyeOff, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft, Bitcoin, Trash2,
+    Megaphone, Pin, Calendar, GraduationCap, ClipboardCheck, Link2, MousePointerClick, ShoppingBag, Star, Shield, Crown
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import MultiLineChartMini from '$lib/components/MultiLineChartMini.svelte';
@@ -20,10 +20,12 @@
     adminGetSites, adminCreateSite, adminUpdateSite, adminDeleteSite, adminGetUnifiSiteOptions,
     adminGetPackages, adminCreatePackage, adminUpdatePackage, adminDeletePackage, adminSetPackageFeatured,
     adminGetCampusPosts, adminCreateCampusPost, adminUpdateCampusPost, adminDeleteCampusPost, adminUploadCampusAttachment,
-    adminGetCommunityPosts, adminCreateCommunityPost, adminUpdateCommunityPost, adminDeleteCommunityPost, adminUploadCommunityAttachment
+    adminGetCommunityPosts, adminCreateCommunityPost, adminUpdateCommunityPost, adminDeleteCommunityPost, adminUploadCommunityAttachment,
+    adminGetAdmins, adminCreateAdmin, adminUpdateAdmin, adminDeleteAdmin
   } from '$lib/api.js';
 
-  let { token, username, onLogout } = $props();
+  let { token, username, role = 'admin', adminId = null, onLogout } = $props();
+  const isSuperAdmin = $derived(role === 'super_admin');
 
   let tab = $state('analytics');
   // Sidebar is always visible on wide screens (md:), and an off-canvas
@@ -71,7 +73,7 @@
     { id: 'community', label: 'Community', Icon: Users },
     { id: 'activators', label: 'Activators', Icon: Users },
     { id: 'coordinators', label: 'Coordinators', Icon: ShieldCheck },
-    { id: 'sites', label: 'Sites', Icon: Radio },
+    { id: 'sites', label: 'Sites & Packages', Icon: Radio },
     { id: 'settings', label: 'Settings', Icon: Settings2 }
   ];
 
@@ -152,6 +154,7 @@
   let coordinators = $state([]);
   let sites = $state([]);
   let packages = $state([]);
+  let admins = $state([]);
   let campusPosts = $state([]);
   let communityPosts = $state([]);
   let loading = $state(true);
@@ -184,6 +187,117 @@
   async function loadPackages() {
     const r = await adminGetPackages(token);
     if (r.ok) packages = r.data.packages;
+  }
+  // Only a super_admin can even reach GET /admin/admins (403 otherwise) —
+  // skip the call entirely for a plain admin rather than firing a request
+  // that's guaranteed to fail.
+  async function loadAdmins() {
+    if (!isSuperAdmin) return;
+    const r = await adminGetAdmins(token);
+    if (r.ok) admins = r.data.admins;
+  }
+
+  // ── Admin accounts (Settings tab, super_admin only) ─────────────────────
+  // Username is fixed once created (no rename endpoint) — same "id locked
+  // on edit" convention as Sites/Packages; editing an existing admin can
+  // only change its role and/or reset its password (password left blank on
+  // edit = keep the current one).
+  function freshAdminDraft() {
+    return { username: '', password: '', passwordConfirm: '', role: 'admin' };
+  }
+  let showAdminForm = $state(false);
+  let editingAdminId = $state(null);
+  let adminDraft = $state(freshAdminDraft());
+  let adminFormError = $state('');
+  let adminSaving = $state(false);
+  // Reveal toggles for the password/confirm fields — reset on open so the
+  // form never opens with a previous session's reveal state still on.
+  let showAdminPassword = $state(false);
+  let showAdminPasswordConfirm = $state(false);
+
+  function openAdminForm() {
+    editingAdminId = null;
+    adminDraft = freshAdminDraft();
+    adminFormError = '';
+    showAdminPassword = false;
+    showAdminPasswordConfirm = false;
+    showAdminForm = true;
+  }
+
+  function startEditAdmin(a) {
+    editingAdminId = a.id;
+    adminFormError = '';
+    adminDraft = { username: a.username, password: '', passwordConfirm: '', role: a.role };
+    showAdminPassword = false;
+    showAdminPasswordConfirm = false;
+    showAdminForm = true;
+  }
+
+  function closeAdminForm() {
+    showAdminForm = false;
+    editingAdminId = null;
+    adminFormError = '';
+  }
+
+  async function submitAdmin() {
+    if (!editingAdminId && (!adminDraft.username.trim() || !adminDraft.password)) {
+      adminFormError = 'Username and password are required';
+      return;
+    }
+    if (adminDraft.password && adminDraft.password.length < 8) {
+      adminFormError = 'Password must be at least 8 characters';
+      return;
+    }
+    if (adminDraft.password && adminDraft.password !== adminDraft.passwordConfirm) {
+      adminFormError = 'Passwords do not match';
+      return;
+    }
+    adminFormError = '';
+    adminSaving = true;
+
+    const result = editingAdminId
+      ? await adminUpdateAdmin(token, editingAdminId, {
+          role: adminDraft.role,
+          ...(adminDraft.password ? { password: adminDraft.password } : {})
+        })
+      : await adminCreateAdmin(token, { username: adminDraft.username.trim(), password: adminDraft.password, role: adminDraft.role });
+    adminSaving = false;
+
+    if (!result.ok || !result.data?.success) {
+      adminFormError = result.data?.message || `Could not ${editingAdminId ? 'save' : 'create'} admin — check your connection`;
+      return;
+    }
+
+    closeAdminForm();
+    await loadAdmins();
+  }
+
+  // Two-tap delete, same pattern as removeSite/removePackage — blocked
+  // server-side on your own account or the last remaining super_admin (see
+  // DELETE /admin/admins/:id), surfaced here via adminDeleteError.
+  let armedDeleteAdminId = $state(null);
+  let deletingAdminId = $state(null);
+  let adminDeleteError = $state('');
+
+  async function removeAdmin(a) {
+    if (armedDeleteAdminId !== a.id) {
+      armedDeleteAdminId = a.id;
+      adminDeleteError = '';
+      setTimeout(() => {
+        if (armedDeleteAdminId === a.id) armedDeleteAdminId = null;
+      }, 4000);
+      return;
+    }
+    armedDeleteAdminId = null;
+    deletingAdminId = a.id;
+    const result = await adminDeleteAdmin(token, a.id);
+    deletingAdminId = null;
+    if (!result.ok || !result.data?.success) {
+      adminDeleteError = result.data?.message || `Could not delete "${a.username}" — check your connection`;
+      return;
+    }
+    adminDeleteError = '';
+    await loadAdmins();
   }
 
   let earnConnectThresholdMinutes = $state('30');
@@ -349,7 +463,8 @@
       loadSettings(),
       loadAnalytics(),
       loadCampusPosts(),
-      loadCommunityPosts()
+      loadCommunityPosts(),
+      loadAdmins()
     ]);
 
     // Reconciles a dashboard restored from a persisted session (see
@@ -1383,6 +1498,24 @@
   </div>
 {/snippet}
 
+{#snippet passwordField(label, value, oninput, show, onToggleShow, opts = {})}
+  <div>
+    <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">{label}</p>
+    <div class="flex items-center rounded-xl overflow-hidden" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);">
+      <input
+        type={show ? 'text' : 'password'}
+        {value}
+        {oninput}
+        placeholder={opts.placeholder || ''}
+        class="flex-1 min-w-0 bg-transparent px-3 py-2.5 text-sm text-[#E8D4B0] placeholder-[#4A6842] outline-none"
+      />
+      <button type="button" onclick={onToggleShow} class="px-3 shrink-0" aria-label={show ? 'Hide password' : 'Show password'}>
+        {#if show}<EyeOff size={14} color="#AECAAE" />{:else}<Eye size={14} color="#AECAAE" />{/if}
+      </button>
+    </div>
+  </div>
+{/snippet}
+
 {#snippet fileOrUrlField(label, value, oninput, uploading, onFileChange, accept)}
   <div>
     <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">{label}</p>
@@ -2112,6 +2245,10 @@
                 <p class="text-[10px] text-[#96B496] flex items-center gap-1 mt-0.5">
                   <MousePointerClick size={9} />{Number(post.clicks ?? 0).toLocaleString()} clicks
                 </p>
+              {:else if post.type === 'notice' || post.type === 'release'}
+                <p class="text-[10px] text-[#96B496] flex items-center gap-1 mt-0.5">
+                  <Eye size={9} />{Number(post.read_count ?? 0).toLocaleString()} read
+                </p>
               {/if}
             </div>
             <div class="flex flex-col gap-1.5 shrink-0 items-end">
@@ -2333,6 +2470,10 @@
               {#if post.type === 'service' || post.type === 'marketplace'}
                 <p class="text-[10px] text-[#96B496] flex items-center gap-1 mt-0.5">
                   <MousePointerClick size={9} />{Number(post.clicks ?? 0).toLocaleString()} clicks
+                </p>
+              {:else if post.type === 'announcement'}
+                <p class="text-[10px] text-[#96B496] flex items-center gap-1 mt-0.5">
+                  <Eye size={9} />{Number(post.read_count ?? 0).toLocaleString()} read
                 </p>
               {/if}
             </div>
@@ -3466,6 +3607,146 @@
           {settingsSaving ? 'Saving…' : 'Save'}
         </button>
       </div>
+
+      {#if isSuperAdmin}
+        <!-- Admin accounts — super_admin only. A plain admin still sees the
+             rest of this Settings tab (thresholds/commission/notification
+             cleanup above); just this card is hidden for them. The real
+             enforcement is server-side (requireSuperAdmin on every
+             /admin/admins route) — this check is purely so a plain admin's
+             UI doesn't show a control that would just 403. -->
+        <div class="rounded-3xl p-5 flex flex-col gap-3 shadow-md mt-4" style="background: #2E5A3E; border: 1px solid rgba(196,92,56,0.15);">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background: rgba(196,92,56,0.28);">
+                <Shield size={16} color="#C45C38" />
+              </div>
+              <div>
+                <p class="text-sm font-bold text-[#E8D4B0]">Admin accounts</p>
+                <p class="text-[10px] text-[#96B496]">Super admins can create, re-role, and remove other admin accounts</p>
+              </div>
+            </div>
+            <button
+              onclick={openAdminForm}
+              class="flex items-center gap-1 text-[11px] font-bold px-3 py-1.5 rounded-full shrink-0"
+              style="background: linear-gradient(135deg, #C45C38, #CC8830); color: #fff;"
+            >
+              <Plus size={12} /> Add admin
+            </button>
+          </div>
+
+          {#if adminDeleteError}
+            <p class="text-xs text-[#E08A6A]">{adminDeleteError}</p>
+          {/if}
+
+          <div class="flex flex-col gap-2">
+            {#each admins as a (a.id)}
+              <div class="rounded-2xl px-4 py-3 flex items-center gap-3" style="background: rgba(255,255,255,0.05);">
+                <div class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style="background: {a.role === 'super_admin' ? 'rgba(204,136,48,0.28)' : 'rgba(255,255,255,0.1)'};">
+                  {#if a.role === 'super_admin'}
+                    <Crown size={14} color="#CC8830" />
+                  {:else}
+                    <Shield size={14} color="#96B496" />
+                  {/if}
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-semibold text-[#E8D4B0] truncate flex items-center gap-1.5">
+                    {a.username}
+                    {#if a.id === adminId}
+                      <span class="text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0" style="background: rgba(255,255,255,0.1); color: #96B496;">You</span>
+                    {/if}
+                  </p>
+                  <p class="text-[10px]" style="color: {a.role === 'super_admin' ? '#CC8830' : '#96B496'};">
+                    {a.role === 'super_admin' ? 'Super admin' : 'Admin'}
+                  </p>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onclick={() => startEditAdmin(a)}
+                    class="flex items-center gap-1 text-[11px] font-bold px-2.5 py-1.5 rounded-full"
+                    style="background: rgba(255,255,255,0.12); color: #E8D4B0;"
+                  >
+                    <Edit3 size={11} /> Edit
+                  </button>
+                  <button
+                    type="button"
+                    onclick={() => removeAdmin(a)}
+                    disabled={deletingAdminId === a.id || a.id === adminId}
+                    class="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1.5 rounded-full shrink-0"
+                    style="background: {armedDeleteAdminId === a.id ? '#B85038' : 'rgba(192,97,74,0.15)'}; color: {armedDeleteAdminId === a.id ? '#fff' : '#E08A6A'}; opacity: {deletingAdminId === a.id || a.id === adminId ? 0.5 : 1};"
+                  >
+                    {#if deletingAdminId === a.id}<RefreshCw size={10} class="animate-spin" />{:else}<Trash2 size={10} />{/if}
+                    {deletingAdminId === a.id ? 'Deleting…' : armedDeleteAdminId === a.id ? 'Confirm' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        {#if showAdminForm}
+          <AdminModal title={editingAdminId ? 'Edit admin' : 'Add admin'} onClose={closeAdminForm}>
+            {@render inputField('Username', adminDraft.username, (e) => (adminDraft.username = e.currentTarget.value), { placeholder: 'e.g. jane', disabled: !!editingAdminId })}
+            {@render passwordField(
+              editingAdminId ? 'New password (optional)' : 'Password',
+              adminDraft.password,
+              (e) => (adminDraft.password = e.currentTarget.value),
+              showAdminPassword,
+              () => (showAdminPassword = !showAdminPassword),
+              { placeholder: editingAdminId ? 'Leave blank to keep current' : 'At least 8 characters' }
+            )}
+            {#if adminDraft.password}
+              {@render passwordField(
+                'Confirm password',
+                adminDraft.passwordConfirm,
+                (e) => (adminDraft.passwordConfirm = e.currentTarget.value),
+                showAdminPasswordConfirm,
+                () => (showAdminPasswordConfirm = !showAdminPasswordConfirm),
+                { placeholder: 'Re-enter the password above' }
+              )}
+            {/if}
+            <div>
+              <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">Role</p>
+              <div class="flex gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onclick={() => (adminDraft.role = 'admin')}
+                  class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                  style="background: {adminDraft.role === 'admin' ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {adminDraft.role === 'admin' ? '#fff' : '#C4DAC0'};"
+                >
+                  <Shield size={12} /> Admin
+                </button>
+                <button
+                  type="button"
+                  onclick={() => (adminDraft.role = 'super_admin')}
+                  class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                  style="background: {adminDraft.role === 'super_admin' ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {adminDraft.role === 'super_admin' ? '#fff' : '#C4DAC0'};"
+                >
+                  <Crown size={12} /> Super admin
+                </button>
+              </div>
+              <p class="text-[10px] text-[#96B496] mt-1.5">
+                Super admins can manage other admin accounts and every privileged setting in this panel; a plain admin gets everything else.
+              </p>
+            </div>
+
+            {#if adminFormError}
+              <p class="text-xs text-[#E08A6A]">{adminFormError}</p>
+            {/if}
+
+            <button
+              onclick={submitAdmin}
+              disabled={adminSaving}
+              class="w-full py-3 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2"
+              style="background: linear-gradient(135deg, #C45C38, #CC8830); opacity: {adminSaving ? 0.7 : 1};"
+            >
+              {#if adminSaving}<RefreshCw size={14} class="animate-spin" />{/if}
+              {adminSaving ? 'Saving…' : editingAdminId ? 'Save changes' : 'Create admin'}
+            </button>
+          </AdminModal>
+        {/if}
+      {/if}
     {/if}
   </div>
   </div>

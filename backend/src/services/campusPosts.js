@@ -41,10 +41,18 @@ export async function listActivePosts(siteId, type = null) {
 // Unlike listActivePosts(), these ignore is_active — the admin panel needs
 // to see (and re-activate) deactivated posts too.
 
-/** Every post for a site (admin panel), or every post across every site if siteId is omitted. */
+/**
+ * Every post for a site (admin panel), or every post across every site if
+ * siteId is omitted. `read_count` (distinct devices that have opened it —
+ * see campus_notice_reads) is only meaningful for notice/release rows but
+ * computed for every row the same cheap way rather than special-cased.
+ */
 export async function adminListPosts(siteId = null) {
   const { rows } = await query(
-    `SELECT * FROM campus_posts WHERE $1::text IS NULL OR site_id = $1 ORDER BY sort_order, id DESC`,
+    `SELECT p.*, (SELECT COUNT(*) FROM campus_notice_reads r WHERE r.post_id = p.id)::int AS read_count
+     FROM campus_posts p
+     WHERE $1::text IS NULL OR p.site_id = $1
+     ORDER BY p.sort_order, p.id DESC`,
     [siteId]
   );
   return rows;
@@ -145,6 +153,20 @@ export async function deactivateCampusPost(id) {
 /** Increments a resource (Quick Links) tile's tap counter — same pattern as content.js's recordImpression. */
 export async function recordCampusPostClick(id) {
   await query(`UPDATE campus_posts SET clicks = clicks + 1 WHERE id = $1`, [id]);
+}
+
+/** Marks one device's read state for a post (idempotent — ON CONFLICT DO NOTHING, same shape as castPollVote's insert). */
+export async function markPostRead(postId, mac) {
+  await query(
+    `INSERT INTO campus_notice_reads (post_id, mac) VALUES ($1, $2) ON CONFLICT (post_id, mac) DO NOTHING`,
+    [postId, mac.toLowerCase()]
+  );
+}
+
+/** Every post id this device has read, across every site — the frontend intersects this against whichever site's posts it already has loaded. */
+export async function getReadPostIds(mac) {
+  const { rows } = await query(`SELECT post_id FROM campus_notice_reads WHERE mac = $1`, [mac.toLowerCase()]);
+  return rows.map((r) => r.post_id);
 }
 
 /**

@@ -157,6 +157,26 @@ export function castCampusPollVote(id, mac, optionIndex) {
   return request(`/campus/posts/${encodeURIComponent(id)}/vote`, { method: 'POST', body: JSON.stringify({ mac, optionIndex }) });
 }
 
+/** GET /api/campus/notices/read?mac=X — post ids this device has already read, for the Notice Board's read/unread state. */
+export function getCampusReadIds(mac) {
+  return request(`/campus/notices/read?mac=${encodeURIComponent(mac)}`);
+}
+
+/** POST /api/campus/posts/:id/read — Body: { mac }. Marks a campus notice read; idempotent. */
+export function markCampusPostRead(id, mac) {
+  return request(`/campus/posts/${encodeURIComponent(id)}/read`, { method: 'POST', body: JSON.stringify({ mac }) });
+}
+
+/** GET /api/community/notices/read?mac=X — same shape as getCampusReadIds, for the Community Board. */
+export function getCommunityReadIds(mac) {
+  return request(`/community/notices/read?mac=${encodeURIComponent(mac)}`);
+}
+
+/** POST /api/community/posts/:id/read — Body: { mac }. Marks a community announcement read; idempotent. */
+export function markCommunityPostRead(id, mac) {
+  return request(`/community/posts/${encodeURIComponent(id)}/read`, { method: 'POST', body: JSON.stringify({ mac }) });
+}
+
 /** GET /api/content/completions?mac=X&site=Y — items this device has already finished, for UI restore after reload. */
 export function getContentCompletions(mac, site) {
   const params = new URLSearchParams({ mac, ...(site ? { site } : {}) });
@@ -325,6 +345,26 @@ export function adminLogin(username, password) {
     body: JSON.stringify({ username, password }),
     timeoutMs: 15000
   });
+}
+
+/** GET /api/admin/admins — super_admin only; every admin account (never password_hash). */
+export function adminGetAdmins(token) {
+  return request('/admin/admins', authed(token));
+}
+
+/** POST /api/admin/admins — super_admin only. Body: { username, password, role? }. `role` defaults to 'admin'. */
+export function adminCreateAdmin(token, body) {
+  return request('/admin/admins', { method: 'POST', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** PATCH /api/admin/admins/:id — super_admin only. Body: { role?, password? }. */
+export function adminUpdateAdmin(token, id, body) {
+  return request(`/admin/admins/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body), ...authed(token) });
+}
+
+/** DELETE /api/admin/admins/:id — super_admin only; blocked on your own account or the last remaining super_admin. */
+export function adminDeleteAdmin(token, id) {
+  return request(`/admin/admins/${encodeURIComponent(id)}`, { method: 'DELETE', ...authed(token) });
 }
 
 /** GET /api/admin/content — every item, including deactivated ones. */

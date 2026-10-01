@@ -1,6 +1,13 @@
 import { Router } from "express";
-import { verifyAdminLogin } from "../services/admin.js";
-import { signAdminToken, requireAdmin } from "../middleware/auth.js";
+import {
+  verifyAdminLogin,
+  adminListAdminUsers,
+  createAdminUser,
+  updateAdminUser,
+  deleteAdminUser,
+  countSuperAdmins,
+} from "../services/admin.js";
+import { signAdminToken, requireAdmin, requireSuperAdmin } from "../middleware/auth.js";
 import {
   adminListAllContent,
   createContentItem,
@@ -41,11 +48,109 @@ adminRouter.post("/login", async (req, res) => {
   if (!admin) return res.status(401).json({ success: false, message: "Invalid username or password" });
 
   const token = signAdminToken(admin);
-  res.json({ success: true, token, admin: { id: admin.id, username: admin.username } });
+  res.json({ success: true, token, admin: { id: admin.id, username: admin.username, role: admin.role } });
 });
 
 // Everything below requires a valid admin bearer token.
 adminRouter.use(requireAdmin);
+
+// ── Admin accounts (super_admin only) ───────────────────────────────────────
+// A plain 'admin' gets a 403 from requireSuperAdmin on every route in this
+// block — including just listing other admins, not only mutating them.
+
+/** GET /api/admin/admins — every admin account (id/username/role/created_at only, never password_hash). */
+adminRouter.get("/admins", requireSuperAdmin, async (_req, res) => {
+  try {
+    const admins = await adminListAdminUsers();
+    res.json({ admins });
+  } catch (error) {
+    console.error("❌ Admin accounts list error:", error.message);
+    res.status(500).json({ admins: [], message: error.message });
+  }
+});
+
+/** POST /api/admin/admins — Body: { username, password, role? }. `role` defaults to 'admin'; pass 'super_admin' to grant full access. */
+adminRouter.post("/admins", requireSuperAdmin, async (req, res) => {
+  const { username, password, role = "admin" } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ success: false, message: "username and password are required" });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
+  }
+  if (role !== "admin" && role !== "super_admin") {
+    return res.status(400).json({ success: false, message: "role must be 'admin' or 'super_admin'" });
+  }
+
+  try {
+    const admin = await createAdminUser({ username, password, role });
+    res.json({ success: true, admin });
+  } catch (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({ success: false, message: "That username is already in use." });
+    }
+    console.error("❌ Admin account create error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** PATCH /api/admin/admins/:id — Body: { role?, password? }. Blocked if it would demote the last remaining super_admin. */
+adminRouter.patch("/admins/:id", requireSuperAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const { role, password } = req.body;
+  if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: "invalid admin id" });
+  if (role !== undefined && role !== "admin" && role !== "super_admin") {
+    return res.status(400).json({ success: false, message: "role must be 'admin' or 'super_admin'" });
+  }
+  if (password !== undefined && password.length < 8) {
+    return res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
+  }
+
+  try {
+    if (role === "admin") {
+      const count = await countSuperAdmins();
+      // Only actually a demotion (and thus only worth blocking) if this
+      // account currently holds the role being taken away — updateAdminUser
+      // itself doesn't know the prior value, so that check happens here.
+      const admins = await adminListAdminUsers();
+      const target = admins.find((a) => a.id === id);
+      if (target?.role === "super_admin" && count <= 1) {
+        return res.status(400).json({ success: false, message: "Can't demote the last super admin." });
+      }
+    }
+
+    const admin = await updateAdminUser(id, { role, password });
+    if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
+    res.json({ success: true, admin });
+  } catch (error) {
+    console.error("❌ Admin account update error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/** DELETE /api/admin/admins/:id — blocked on your own account (avoid a mid-session self-lockout) and on the last remaining super_admin. */
+adminRouter.delete("/admins/:id", requireSuperAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: "invalid admin id" });
+  if (id === req.admin.adminId) {
+    return res.status(400).json({ success: false, message: "You can't delete your own account." });
+  }
+
+  try {
+    const admins = await adminListAdminUsers();
+    const target = admins.find((a) => a.id === id);
+    if (target?.role === "super_admin" && (await countSuperAdmins()) <= 1) {
+      return res.status(400).json({ success: false, message: "Can't delete the last super admin." });
+    }
+
+    const admin = await deleteAdminUser(id);
+    if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
+    res.json({ success: true, admin });
+  } catch (error) {
+    console.error("❌ Admin account delete error:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 // ── Content ──────────────────────────────────────────────────────────────
 

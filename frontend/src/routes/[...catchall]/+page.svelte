@@ -20,7 +20,7 @@
   import AdminDashboardScreen from '$lib/screens/AdminDashboardScreen.svelte';
   import { PACKAGES, getWarningThreshold } from '$lib/data.js';
   import { getSessionStatus, getAppInfo } from '$lib/api.js';
-  import { getClientMac, getStoredClientMac } from '$lib/device.js';
+  import { getClientMac, getStoredClientMac, setClientMac, setSiteId } from '$lib/device.js';
   import { saveDashboardSession, loadDashboardSession, clearDashboardSession } from '$lib/dashboardSession.js';
 
   let screen = $state('packages');
@@ -111,6 +111,15 @@
   function applySessionData(data) {
     const restoredPkg = buildPkgFromSession(data);
     if (!restoredPkg) return false;
+
+    // Present when this came from the username-recovery path (this browser
+    // never saw the router's redirect params) — adopt the real MAC/site the
+    // session was actually authorised under, so anything read later in this
+    // session (ActiveScreen's "Continue in the app" deep link, another
+    // GET /session/:mac call, etc.) uses the real device identity instead of
+    // getClientMac()'s stale/random localStorage fallback.
+    setClientMac(data.clientMac);
+    setSiteId(data.siteId);
 
     selectedPkg = restoredPkg;
     phone = data.phone ? data.phone.replace(/^\+?254/, '') : '';
@@ -304,6 +313,8 @@
     <AdminDashboardScreen
       token={loggedInAdmin.token}
       username={loggedInAdmin.username}
+      role={loggedInAdmin.role}
+      adminId={loggedInAdmin.id}
       onLogout={() => {
         loggedInAdmin = null;
         clearDashboardSession();

@@ -244,6 +244,12 @@ function sessionStatusPayload(session) {
     durationSecs: session.duration_secs,
     packageId: session.package_id,
     phone: session.client_phone,
+    // Lets a client that recovered its session by username (no MAC redirect
+    // seen yet) adopt the real MAC/site the session was actually authorised
+    // under, instead of only getting a read-only status view — see the
+    // mobile app's setRecoveredIdentity().
+    clientMac: session.client_mac,
+    siteId: session.site_id,
     serverNow,
   };
 }

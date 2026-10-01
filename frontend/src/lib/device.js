@@ -41,6 +41,20 @@ export function getClientMac() {
   return mac;
 }
 
+/**
+ * Adopts a MAC recovered from the backend (GET /session/by-username/:username
+ * returns the real client_mac a session was authorised under) — the case
+ * where this browser never saw the router's redirect params at all (Android's
+ * isolated captive-portal WebView, a bookmarked/reopened page, etc.), so
+ * getClientMac() would otherwise be stuck on a stale or randomly-generated
+ * MAC from localStorage. Call this before anything downstream (e.g.
+ * ActiveScreen's "Continue in the app" deep link) reads getClientMac() again.
+ */
+export function setClientMac(mac) {
+  if (typeof window === 'undefined' || !mac) return;
+  localStorage.setItem(MAC_STORAGE_KEY, mac.toLowerCase());
+}
+
 /** Reads the persisted MAC without resolving/generating a new one — null if none stored yet. */
 export function getStoredClientMac() {
   if (typeof window === 'undefined') return null;
@@ -77,6 +91,12 @@ export function getSiteId() {
     return siteId;
   }
   return localStorage.getItem(SITE_STORAGE_KEY);
+}
+
+/** Same recovery case as setClientMac() above, for the site id half of the pair. */
+export function setSiteId(site) {
+  if (typeof window === 'undefined' || !site) return;
+  localStorage.setItem(SITE_STORAGE_KEY, site);
 }
 
 /** Reads the persisted site id without re-parsing the URL — null if none stored/found yet. */

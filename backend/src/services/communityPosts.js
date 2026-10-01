@@ -42,10 +42,18 @@ export async function listActivePosts(siteId, type = null) {
 // to see (and re-activate) deactivated posts too. Same shape as
 // campusPosts.js's admin functions.
 
-/** Every post for a site (admin panel), or every post across every site if siteId is omitted. */
+/**
+ * Every post for a site (admin panel), or every post across every site if
+ * siteId is omitted. `read_count` (distinct devices that have opened it —
+ * see community_notice_reads) is only meaningful for announcement rows but
+ * computed for every row the same cheap way rather than special-cased.
+ */
 export async function adminListPosts(siteId = null) {
   const { rows } = await query(
-    `SELECT * FROM community_posts WHERE $1::text IS NULL OR site_id = $1 ORDER BY sort_order, id DESC`,
+    `SELECT p.*, (SELECT COUNT(*) FROM community_notice_reads r WHERE r.post_id = p.id)::int AS read_count
+     FROM community_posts p
+     WHERE $1::text IS NULL OR p.site_id = $1
+     ORDER BY p.sort_order, p.id DESC`,
     [siteId]
   );
   return rows;
@@ -178,4 +186,18 @@ export async function castPollVote(postId, mac, optionIndex) {
 export async function hasVoted(postId, mac) {
   const { rows } = await query(`SELECT 1 FROM community_poll_votes WHERE post_id = $1 AND mac = $2`, [postId, mac.toLowerCase()]);
   return rows.length > 0;
+}
+
+/** Marks one device's read state for a post (idempotent — same shape as campusPosts.js's markPostRead). */
+export async function markPostRead(postId, mac) {
+  await query(
+    `INSERT INTO community_notice_reads (post_id, mac) VALUES ($1, $2) ON CONFLICT (post_id, mac) DO NOTHING`,
+    [postId, mac.toLowerCase()]
+  );
+}
+
+/** Every post id this device has read, across every site — the frontend intersects this against whichever site's posts it already has loaded. */
+export async function getReadPostIds(mac) {
+  const { rows } = await query(`SELECT post_id FROM community_notice_reads WHERE mac = $1`, [mac.toLowerCase()]);
+  return rows.map((r) => r.post_id);
 }

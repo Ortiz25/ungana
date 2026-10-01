@@ -1,6 +1,8 @@
-// Creates (or resets the password of) an admin_users account. There's no
-// public signup for admin accounts by design — this CLI is the only way to
-// provision the first one.
+// Creates (or resets the password of) an admin_users account — always as
+// super_admin. There's no public signup for admin accounts by design, and a
+// plain 'admin' can only be created from inside the app (Settings > Admins,
+// by an existing super_admin) — this CLI is exclusively the super-admin
+// bootstrap/reset path, so a lower-privileged account never needs it.
 //
 // Usage: npm run admin:create -- <username> <password>
 import dotenv from "dotenv";
@@ -29,11 +31,11 @@ async function run() {
   await client.connect();
   try {
     await client.query(
-      `INSERT INTO admin_users (username, password_hash) VALUES ($1, $2)
-       ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+      `INSERT INTO admin_users (username, password_hash, role) VALUES ($1, $2, 'super_admin')
+       ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash, role = 'super_admin'`,
       [username, passwordHash]
     );
-    console.log(`✅ Admin user '${username}' is ready.`);
+    console.log(`✅ Super admin '${username}' is ready.`);
   } finally {
     await client.end();
   }

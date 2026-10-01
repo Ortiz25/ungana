@@ -240,6 +240,18 @@ CREATE TABLE IF NOT EXISTS admin_users (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 'super_admin' can manage other admin accounts (see PATCH/POST/DELETE
+-- /admin/admins) and everything a plain 'admin' can; 'admin' is everything
+-- else in the panel today. Only the bootstrap CLI (db/createAdmin.js)
+-- creates a super_admin — every account made from inside the app (the
+-- Settings > Admins tab) defaults to plain 'admin', a super_admin has to
+-- explicitly grant the higher role. Backfills every pre-existing account to
+-- super_admin the one time this migration runs on a database with none yet
+-- (the NOT EXISTS guard means it never fires again after that, so an
+-- 'admin' created afterward stays 'admin' on every later restart).
+ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('admin', 'super_admin'));
+UPDATE admin_users SET role = 'super_admin' WHERE role = 'admin' AND NOT EXISTS (SELECT 1 FROM admin_users WHERE role = 'super_admin');
+
 -- ── App settings ─────────────────────────────────────────────────────────
 -- Small generic key/value store for admin-tunable values that don't
 -- deserve their own column/table (e.g. the Earn Free Access "Connect Now"
@@ -606,6 +618,21 @@ CREATE TABLE IF NOT EXISTS campus_poll_votes (
   UNIQUE (post_id, mac)
 );
 
+-- Read/unread tracking for the Notice Board (type 'notice'/'release' in
+-- practice, but not restricted — any post can be marked read). One row per
+-- device per post, same UNIQUE-constraint-as-source-of-truth shape as
+-- campus_poll_votes: marking read twice is a harmless no-op (ON CONFLICT DO
+-- NOTHING), and a per-notice read COUNT is always derived live from this
+-- table for the admin view, never cached on campus_posts itself.
+CREATE TABLE IF NOT EXISTS campus_notice_reads (
+  id         SERIAL PRIMARY KEY,
+  post_id    INTEGER NOT NULL REFERENCES campus_posts(id) ON DELETE CASCADE,
+  mac        TEXT NOT NULL,
+  read_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (post_id, mac)
+);
+CREATE INDEX IF NOT EXISTS idx_campus_notice_reads_mac ON campus_notice_reads(mac);
+
 -- Community Board / Community Events / Local Services / Marketplace / Polls
 -- for a site with sites.vertical = 'community' — a residential/co-working
 -- deployment rather than a campus. Deliberately its own table rather than
@@ -662,6 +689,17 @@ CREATE TABLE IF NOT EXISTS community_poll_votes (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (post_id, mac)
 );
+
+-- Read/unread tracking for the Community Board — same shape/reasoning as
+-- campus_notice_reads above.
+CREATE TABLE IF NOT EXISTS community_notice_reads (
+  id         SERIAL PRIMARY KEY,
+  post_id    INTEGER NOT NULL REFERENCES community_posts(id) ON DELETE CASCADE,
+  mac        TEXT NOT NULL,
+  read_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (post_id, mac)
+);
+CREATE INDEX IF NOT EXISTS idx_community_notice_reads_mac ON community_notice_reads(mac);
 
 -- ── Escalations ──────────────────────────────────────────────────────────
 -- Issues a coordinator raises — either self-reported (e.g. a network

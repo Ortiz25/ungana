@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { listActivePosts, recordCommunityPostClick, castPollVote } from "../services/communityPosts.js";
+import { listActivePosts, recordCommunityPostClick, castPollVote, markPostRead, getReadPostIds } from "../services/communityPosts.js";
 
 export const communityRouter = Router();
 
@@ -39,6 +39,43 @@ communityRouter.post("/posts/:id/click", async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     console.error("❌ Community post click error:", error.message);
+    res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+/**
+ * GET /api/community/notices/read?mac=<mac> — every post id this device has
+ * already read, same shape as campus.js's own /notices/read.
+ */
+communityRouter.get("/notices/read", async (req, res) => {
+  const { mac } = req.query;
+  if (!mac) return res.json({ readIds: [] });
+
+  try {
+    const readIds = await getReadPostIds(mac);
+    res.json({ readIds });
+  } catch (error) {
+    console.error("❌ Community notice read-ids fetch error:", error.message);
+    res.status(500).json({ readIds: [], message: error.message });
+  }
+});
+
+/**
+ * POST /api/community/posts/:id/read — Body: { mac }. Marks this device as
+ * having read this post — idempotent, same shape as campus.js's own
+ * /posts/:id/read.
+ */
+communityRouter.post("/posts/:id/read", async (req, res) => {
+  const postId = Number(req.params.id);
+  const { mac } = req.body;
+  if (!Number.isInteger(postId)) return res.status(400).json({ ok: false, message: "invalid post id" });
+  if (!mac) return res.status(400).json({ ok: false, message: "mac is required" });
+
+  try {
+    await markPostRead(postId, mac);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("❌ Community post read error:", error.message);
     res.status(500).json({ ok: false, message: error.message });
   }
 });
