@@ -2,9 +2,16 @@
 // not per-tab, so it's visible over both the Campus/Community and Watch
 // tabs, matching the source's single shared "main feed" wrapper (see the
 // plan doc's "Key architectural call"). Ported from TimelineScreen.svelte's
-// earned/locked/unlocked banners (template lines ~1405-1443), the fixed
-// bottom Connect Now bar (~1897-1966), the earned-balance modal
-// (~1968-2105), and the username prompt (~2107-2184).
+// earned/locked/unlocked banners (template lines ~1405-1443), the
+// earned-balance modal (~1968-2105), and the username prompt (~2107-2184).
+//
+// The source's fixed bottom Connect Now bar (~1897-1966) is deliberately
+// NOT ported here — on an institution/community site it would sit directly
+// on top of (tabs)/_layout.tsx's own native tab bar, which already occupies
+// that same screen region, covering both tab buttons. Earned-balance/
+// Connect-Now/Buy-Access all now live in TimelineHeader's top pill instead
+// (next to the back button), which has no such collision and needs no
+// per-site layout special-casing.
 import { View, Text, Pressable, TextInput, Modal } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Circle } from "react-native-svg";
@@ -60,85 +67,6 @@ function Banners() {
           <Text className="text-xs font-bold text-white">You can connect now!</Text>
         </View>
       )}
-    </View>
-  );
-}
-
-function BottomConnectBar({ onBuyAccess }: { onBuyAccess: () => void }) {
-  const w = useWatchEarn();
-  const insets = useSafeAreaInsets();
-
-  function openEarnedModal() {
-    w.setClaimAmountMinutes(Math.floor(w.realUnclaimedSecs / 60));
-    w.setShowEarnedModal(true);
-  }
-
-  return (
-    <View
-      className="px-4 pt-3"
-      style={{
-        backgroundColor: "#1D3C2A",
-        borderTopWidth: 1,
-        borderTopColor: "rgba(232,212,176,0.1)",
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 40,
-        gap: 8,
-        paddingBottom: insets.bottom + 12,
-      }}
-    >
-      {!!w.connectError && <Text className="text-[11px] text-center" style={{ color: "#E08A6A" }}>{w.connectError}</Text>}
-      <View className="flex-row items-center gap-3">
-        {w.totalEarnedSecs > 0 ? (
-          <>
-            <View className="flex-1 min-w-0">
-              <Text className="text-[10px]" style={{ color: "#96B496" }}>Balance earned</Text>
-              <Text className="text-sm font-bold" style={{ color: "#E8D4B0" }}>{w.earnedFormatted} free internet</Text>
-            </View>
-            {w.canConnect ? (
-              <Pressable
-                onPress={openEarnedModal}
-                disabled={w.connecting}
-                className="px-4 py-2.5 rounded-2xl flex-row items-center gap-1.5 active:scale-95"
-                style={{ backgroundColor: "#C45C38", opacity: w.connecting ? 0.7 : 1 }}
-              >
-                <Zap size={14} color="#fff" />
-                <Text className="font-bold text-sm text-white">{w.connecting ? "Connecting…" : "Connect Now"}</Text>
-              </Pressable>
-            ) : (
-              <View className="flex-row items-center gap-2">
-                <View className="items-center justify-center" style={{ width: 36, height: 36 }}>
-                  <ProgressRing pct={w.connectProgressPct} />
-                  <View className="absolute items-center">
-                    <Text className="text-[9px] font-bold" style={{ color: "#E8D4B0" }}>{w.connectProgressPct}%</Text>
-                  </View>
-                </View>
-                <Text className="text-[11px] text-right" style={{ color: "#96B496", lineHeight: 14 }}>
-                  {(() => {
-                    const remainingSecs = Math.max(w.connectThresholdSecs - w.totalEarnedSecs, 0);
-                    return remainingSecs >= 60 ? `${Math.ceil(remainingSecs / 60)}m` : `${remainingSecs}s`;
-                  })()}
-                  {"\nmore to connect"}
-                </Text>
-              </View>
-            )}
-          </>
-        ) : (
-          <>
-            <View className="flex-1 min-w-0">
-              <Text className="text-xs font-sans-semibold" style={{ color: "#C4DAC0" }}>Complete content to earn access</Text>
-              <Pressable onPress={onBuyAccess}>
-                <Text className="text-[10px] font-sans-semibold mt-0.5" style={{ color: "#C45C38" }}>or buy access instantly →</Text>
-              </Pressable>
-            </View>
-            <Pressable onPress={onBuyAccess} className="px-4 py-2.5 rounded-2xl" style={{ backgroundColor: "rgba(196,92,56,0.25)", borderWidth: 1.5, borderColor: "rgba(196,92,56,0.5)" }}>
-              <Text className="font-bold text-sm" style={{ color: "#E8D4B0" }}>Buy Access</Text>
-            </Pressable>
-          </>
-        )}
-      </View>
     </View>
   );
 }
@@ -330,21 +258,15 @@ function UsernamePrompt() {
   );
 }
 
-export default function WatchEarnOverlays({ onBuyAccess }: { onBuyAccess: () => void }) {
+export default function WatchEarnOverlays() {
   const w = useWatchEarn();
 
   return (
     <>
       {/* The content viewer (WatchEarnScreen) is a full-screen takeover with
-          its own header and no bottom bar, same as the source — hide these
-          cross-tab overlays while it's open rather than letting them show
-          through on top of it. */}
-      {!w.isViewerOpen && (
-        <>
-          <Banners />
-          <BottomConnectBar onBuyAccess={onBuyAccess} />
-        </>
-      )}
+          its own header, same as the source — hide these cross-tab overlays
+          while it's open rather than letting them show through on top of it. */}
+      {!w.isViewerOpen && <Banners />}
       <EarnedBalanceModal />
       <UsernamePrompt />
     </>

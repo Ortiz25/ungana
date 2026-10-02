@@ -3,6 +3,10 @@
   import { MOCK_COORDINATORS } from '$lib/data.js';
   import { coordinatorLogin } from '$lib/api.js';
 
+  // Same flag as ActivatorLoginScreen/PaymentScreen — gates the
+  // "backend unreachable → accept PIN 5678" fallback and its hint.
+  const DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== 'false';
+
   let { onLogin, onBack } = $props();
 
   let phone = $state('');
@@ -38,11 +42,14 @@
       return;
     }
 
-    // Backend unreachable — fall back to local demo validation.
-    if (pin === '5678') {
+    // Backend unreachable — fall back to local demo validation, but only in
+    // demo mode; a real deployment should never accept a hardcoded PIN.
+    if (DEMO_MODE && pin === '5678') {
       onLogin({ ...MOCK_COORDINATORS[0], token: undefined });
-    } else {
+    } else if (DEMO_MODE) {
       error = 'Incorrect PIN. Try 5678 for this demo.';
+    } else {
+      error = 'Could not reach the server — try again in a moment.';
     }
   }
 </script>
@@ -114,9 +121,11 @@
         </div>
       {/if}
 
-      <div class="px-5 mt-3 pb-2 flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(196,92,56,0.08);">
-        <p class="text-[10px] text-[#AECAAE]">Demo (offline only): any phone + PIN <span class="font-bold text-[#C45C38]">5678</span></p>
-      </div>
+      {#if DEMO_MODE}
+        <div class="px-5 mt-3 pb-2 flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(196,92,56,0.08);">
+          <p class="text-[10px] text-[#AECAAE]">Demo (offline only): any phone + PIN <span class="font-bold text-[#C45C38]">5678</span></p>
+        </div>
+      {/if}
 
       <div class="px-5 pt-3 pb-5">
         <button

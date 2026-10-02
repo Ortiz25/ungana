@@ -4,6 +4,12 @@
   import { ACTIVATORS } from '$lib/data.js';
   import { activatorLogin } from '$lib/api.js';
 
+  // Same flag as PaymentScreen's "simulate a failed payment" toggle — gates
+  // the "backend unreachable → accept PIN 1234" fallback below (and its
+  // hint) rather than a separate flag, since both are "things that only
+  // belong in an offline demo/pitch, never a real deployment".
+  const DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== 'false';
+
   let { onLogin, onBack } = $props();
 
   let phone = $state('');
@@ -50,11 +56,14 @@
       return;
     }
 
-    // Backend unreachable — fall back to local demo validation.
-    if (pin === '1234') {
+    // Backend unreachable — fall back to local demo validation, but only in
+    // demo mode; a real deployment should never accept a hardcoded PIN.
+    if (DEMO_MODE && pin === '1234') {
       onLogin(ACTIVATORS[1]); // James Mwangi
-    } else {
+    } else if (DEMO_MODE) {
       error = 'Incorrect PIN. Try 1234 for this demo.';
+    } else {
+      error = 'Could not reach the server — try again in a moment.';
     }
   }
 </script>
@@ -147,9 +156,11 @@
         {/if}
 
         <!-- Demo hint -->
-        <div class="flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(196,92,56,0.08);">
-          <p class="text-[10px] text-[#AECAAE]">Demo: any phone + PIN <span class="font-bold text-[#C45C38]">1234</span></p>
-        </div>
+        {#if DEMO_MODE}
+          <div class="flex items-center gap-2 px-3 py-2 rounded-xl" style="background: rgba(196,92,56,0.08);">
+            <p class="text-[10px] text-[#AECAAE]">Demo: any phone + PIN <span class="font-bold text-[#C45C38]">1234</span></p>
+          </div>
+        {/if}
       </div>
 
       <!-- Sign in button -->

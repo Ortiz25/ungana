@@ -6,10 +6,11 @@
 import { useEffect, useState } from "react";
 import { View, Text, Pressable } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { ChevronRight, Clock, CheckCircle2, Zap, Pin, X, GraduationCap, Users, UserCheck, ShieldCheck } from "lucide-react-native";
+import { ChevronRight, Clock, CheckCircle2, Zap, Pin, GraduationCap, Users, UserCheck, ShieldCheck } from "lucide-react-native";
 import ScreenBg from "@/components/ScreenBg";
 import UnganaLogoMark from "@/components/UnganaLogoMark";
 import ActivatorDropdown from "@/components/ActivatorDropdown";
+import ActiveSessionBanner from "@/components/ActiveSessionBanner";
 import { PACKAGES, ACTIVATORS, type Package, type Activator } from "@/lib/data";
 import { getPackages, getActivatorForMac, getSite, getCampusPosts, getCommunityPosts } from "@/lib/api";
 import { getClientMac, getSiteId, hasKnownIdentity } from "@/lib/device";
@@ -54,22 +55,26 @@ export default function PackageScreen({
   const isCommunity = siteInfo?.vertical === "community";
 
   const [urgentNotices, setUrgentNotices] = useState<{ id: number | string }[]>([]);
-  const [noticeBannerDismissed, setNoticeBannerDismissed] = useState(false);
 
   const [selected, setSelected] = useState("weekly");
   const [activator, setActivator] = useState<Activator | null>(null);
   const [activatorError, setActivatorError] = useState(false);
   const [activatorLocked, setActivatorLocked] = useState(false);
 
-  async function dismissNoticeBanner() {
-    setNoticeBannerDismissed(true);
+  // Tapping the notification pin both opens the notices (via onEarnAccess,
+  // same destination the old banner used) and marks the current batch seen,
+  // so the badge count is accurate again next time this screen mounts —
+  // there's no separate "X to dismiss" affordance anymore now that this is a
+  // persistent icon rather than a one-off banner.
+  async function openNotices() {
     try {
       const prior = JSON.parse((await AsyncStorage.getItem(DISMISSED_NOTICES_KEY)) || "[]");
       const ids = new Set([...prior, ...urgentNotices.map((n) => n.id)]);
       await AsyncStorage.setItem(DISMISSED_NOTICES_KEY, JSON.stringify([...ids]));
     } catch {
-      // storage unavailable — the banner just won't remember the dismissal, no functional loss
+      // storage unavailable — the badge just won't remember it's been seen, no functional loss
     }
+    onEarnAccess();
   }
 
   useEffect(() => {
@@ -149,7 +154,27 @@ export default function PackageScreen({
   return (
     <ScreenBg scroll>
       <View className="w-full max-w-md mx-auto self-center flex-col" style={{ width: "100%" }}>
-        <View className="items-center pt-8 pb-6">
+        <View className="items-center pt-8 pb-6" style={{ position: "relative" }}>
+          {(isInstitution || isCommunity) && urgentNotices.length > 0 && (
+            <View style={{ position: "absolute", top: 0, left: 0 }}>
+              <Pressable
+                onPress={openNotices}
+                className="items-center justify-center active:scale-95"
+                style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(196,92,56,0.14)", borderWidth: 1, borderColor: "rgba(196,92,56,0.3)" }}
+              >
+                <Pin size={17} color="#C45C38" fill="#C45C38" />
+                <View
+                  className="absolute items-center justify-center"
+                  style={{ top: -4, right: -4, minWidth: 18, height: 18, paddingHorizontal: 3, borderRadius: 9, backgroundColor: "#C45C38", borderWidth: 2, borderColor: "#E8D4B0" }}
+                >
+                  <Text style={{ fontSize: 9, fontWeight: "700", color: "#fff" }}>{urgentNotices.length > 9 ? "9+" : urgentNotices.length}</Text>
+                </View>
+              </Pressable>
+            </View>
+          )}
+          <View style={{ position: "absolute", top: 0, right: 0 }}>
+            <ActiveSessionBanner />
+          </View>
           <UnganaLogoMark height={52} />
           <Text className="text-2xl font-serif mt-3 text-center" style={{ color: "#1D3C2A" }}>
             Ungana
@@ -174,22 +199,6 @@ export default function PackageScreen({
             </View>
           )}
         </View>
-
-        {urgentNotices.length > 0 && !noticeBannerDismissed && (
-          <Pressable
-            onPress={onEarnAccess}
-            className="w-full flex-row items-center gap-2.5 px-4 py-3 rounded-2xl mb-5"
-            style={{ backgroundColor: "rgba(196,92,56,0.12)", borderWidth: 1, borderColor: "rgba(196,92,56,0.3)" }}
-          >
-            <Pin size={14} color="#C45C38" fill="#C45C38" />
-            <Text className="flex-1 text-xs font-sans-semibold" style={{ color: "#1D3C2A" }}>
-              {urgentNotices.length} {isInstitution ? "campus" : "community"} notice{urgentNotices.length > 1 ? "s" : ""} need your attention
-            </Text>
-            <Pressable onPress={dismissNoticeBanner} className="w-6 h-6 rounded-full items-center justify-center" style={{ backgroundColor: "rgba(29,60,42,0.08)" }}>
-              <X size={12} color="#2E5A3E" />
-            </Pressable>
-          </Pressable>
-        )}
 
         <View className="mb-5 rounded-3xl px-4 pt-4 pb-4" style={{ backgroundColor: "rgba(46,90,62,0.08)", borderWidth: 1, borderColor: "rgba(29,60,42,0.08)" }}>
           <View className="flex-row items-center gap-2 mb-2">

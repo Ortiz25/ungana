@@ -10,7 +10,8 @@
 // instead — see WatchEarnContext.tsx's header comment for why. This context
 // only covers what the Campus/Community components need.
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { getSite, getUsernameForMac, getCampusPosts, getCampusReadIds, getCommunityPosts, getCommunityReadIds, markCampusPostRead, markCommunityPostRead } from "@/lib/api";
+import Constants from "expo-constants";
+import { getSite, getUsernameForMac, getCampusPosts, getCampusReadIds, getCommunityPosts, getCommunityReadIds, markCampusPostRead, markCommunityPostRead, resolveMediaUrl } from "@/lib/api";
 import { getClientMac, getSiteId } from "@/lib/device";
 import {
   COMMUNITY_DEMO_ANNOUNCEMENTS,
@@ -19,6 +20,10 @@ import {
   COMMUNITY_DEMO_SERVICES,
   COMMUNITY_DEMO_POLLS,
 } from "@/lib/communityDemoData";
+
+// Same flag/convention as PaymentScreen.tsx and WatchEarnContext.tsx —
+// gates the static community demo catalogue below.
+const DEMO_MODE = Constants.expoConfig?.extra?.demoMode !== false;
 import type { NoticePost } from "@/components/NoticeBoard";
 import type { EventPost } from "@/components/CampusEventsStrip";
 import type { TimetablePost } from "@/components/ExamTimetable";
@@ -27,6 +32,18 @@ import type { ListingPost } from "@/components/MarketplaceBoard";
 import type { PollPost } from "@/components/CommunityPoll";
 
 type Post = Record<string, any>;
+
+// Campus/community post attachments go through the exact same web-admin
+// upload pipeline as content items (see WatchEarnContext.tsx's
+// normalizeLiveItem comment on resolveMediaUrl) — same fix needed here for
+// attachment_url and each gallery photo in images[].
+function resolvePostMedia(post: Post): Post {
+  return {
+    ...post,
+    attachment_url: resolveMediaUrl(post.attachment_url) ?? post.attachment_url,
+    images: Array.isArray(post.images) ? post.images.map((u: string) => resolveMediaUrl(u) ?? u) : post.images,
+  };
+}
 
 function isPast(post: Post): boolean {
   return new Date(post.event_ends_at ?? post.event_starts_at) < new Date();
@@ -138,7 +155,7 @@ export function TimelineProvider({ children }: { children: ReactNode }) {
       if (vertical === "institution" && site) {
         const [postsResult, readIdsResult] = await Promise.all([getCampusPosts(site), mac ? getCampusReadIds(mac) : Promise.resolve(null)]);
         if (cancelled) return;
-        const allPosts: Post[] = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
+        const allPosts: Post[] = (postsResult.ok ? (postsResult.data?.posts ?? []) : []).map(resolvePostMedia);
         setCampusNotices(allPosts.filter((p) => p.type === "notice" || p.type === "release"));
         setCampusEvents(allPosts.filter((p) => p.type === "event"));
         setCampusTimetable(allPosts.filter((p) => p.type === "timetable"));
@@ -148,12 +165,12 @@ export function TimelineProvider({ children }: { children: ReactNode }) {
       } else if (vertical === "community" && site) {
         const [postsResult, readIdsResult] = await Promise.all([getCommunityPosts(site), mac ? getCommunityReadIds(mac) : Promise.resolve(null)]);
         if (cancelled) return;
-        const allPosts: Post[] = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
-        setCommunityAnnouncements([...allPosts.filter((p) => p.type === "announcement"), ...COMMUNITY_DEMO_ANNOUNCEMENTS]);
-        setCommunityEvents([...allPosts.filter((p) => p.type === "event"), ...COMMUNITY_DEMO_EVENTS]);
-        setCommunityMarketplace([...allPosts.filter((p) => p.type === "marketplace"), ...COMMUNITY_DEMO_MARKETPLACE]);
-        setCommunityServices([...allPosts.filter((p) => p.type === "service"), ...COMMUNITY_DEMO_SERVICES]);
-        setCommunityPolls([...allPosts.filter((p) => p.type === "poll"), ...COMMUNITY_DEMO_POLLS]);
+        const allPosts: Post[] = (postsResult.ok ? (postsResult.data?.posts ?? []) : []).map(resolvePostMedia);
+        setCommunityAnnouncements([...allPosts.filter((p) => p.type === "announcement"), ...(DEMO_MODE ? COMMUNITY_DEMO_ANNOUNCEMENTS : [])]);
+        setCommunityEvents([...allPosts.filter((p) => p.type === "event"), ...(DEMO_MODE ? COMMUNITY_DEMO_EVENTS : [])]);
+        setCommunityMarketplace([...allPosts.filter((p) => p.type === "marketplace"), ...(DEMO_MODE ? COMMUNITY_DEMO_MARKETPLACE : [])]);
+        setCommunityServices([...allPosts.filter((p) => p.type === "service"), ...(DEMO_MODE ? COMMUNITY_DEMO_SERVICES : [])]);
+        setCommunityPolls([...allPosts.filter((p) => p.type === "poll"), ...(DEMO_MODE ? COMMUNITY_DEMO_POLLS : [])]);
         setCommunityReadIds(new Set(readIdsResult?.ok ? (readIdsResult.data?.readIds ?? []) : []));
       }
     })();

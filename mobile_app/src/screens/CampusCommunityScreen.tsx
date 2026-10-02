@@ -88,11 +88,7 @@ export default function CampusCommunityScreen({ onBack }: { onBack: () => void }
   return (
     <View className="flex-1" style={{ backgroundColor: "#05140b" }}>
       <TimelineHeader onBack={onBack} />
-      {/* 110px accounts for the persistent bottom Connect bar now mounted
-          above this screen (see app/timeline/_layout.tsx's WatchEarnOverlays)
-          — same reason the source's Campus feed div reserves pb-24; insets.bottom
-          on top of that since the bar itself now pads for the home indicator. */}
-      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 110 }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
         <View className="px-4 pt-5 pb-6">
           <View className="flex-row items-center gap-2 mb-1">
             <View className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: "#c29d53" }} />

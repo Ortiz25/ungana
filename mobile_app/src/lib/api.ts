@@ -18,6 +18,34 @@ const API_BASE: string = (Constants.expoConfig?.extra?.apiBaseUrl as string | un
 export const BACKEND_ORIGIN = API_BASE.replace(/\/api$/, "");
 const TIMEOUT_MS = 5000;
 
+/**
+ * Resolves a content/campus/community item's stored media URL (img_url,
+ * body_url for video/lesson, attachment_url, images[]) into something an
+ * <Image>/video source can actually load.
+ *
+ * Three shapes reach here, depending on who uploaded it:
+ *  - A full http(s) URL (mobile admin uploads, or an admin-pasted external
+ *    link) — already correct, used as-is.
+ *  - "/backend/uploads/<file>" — the frontend web app's *production* build
+ *    resolves its own uploads against BACKEND_ORIGIN = '/backend', a path
+ *    meant to be proxied by that app's own nginx config
+ *    (location /backend/ { proxy_pass http://backend:5000/; }). That prefix
+ *    only means anything on the web frontend's own domain; this app talks to
+ *    the backend directly and has no such proxy, so the leading "/backend"
+ *    segment has to be stripped before resolving against our own
+ *    BACKEND_ORIGIN.
+ *  - A bare "/uploads/<file>" — the web frontend's *dev* build (where
+ *    BACKEND_ORIGIN is already a full origin) produces this shape instead;
+ *    resolve it the same way, just without anything to strip.
+ */
+export function resolveMediaUrl(url?: string | null): string | null {
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  if (!url.startsWith("/")) return url; // not a path at all (e.g. article body text) — leave untouched
+  const path = url.startsWith("/backend/") ? url.slice("/backend".length) : url;
+  return `${BACKEND_ORIGIN}${path}`;
+}
+
 // `data` is present on every variant (undefined on the network-error one) so
 // call sites can read `result.data` unconditionally, matching how every
 // screen actually uses this — mirrors the web app's api.js contract, which

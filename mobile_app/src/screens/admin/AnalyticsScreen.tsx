@@ -1,18 +1,47 @@
 // Ported from AdminDashboardScreen.svelte's 'analytics' tab — the stat-card
 // summary, Content Overview list, per-item drill-down modal (with survey/
-// quiz answer breakdown), Revenue-by-Package, and By-Payment-Provider
-// sections. NOT ported: the 14-day purchases-by-site/by-package timeline
-// line charts and their "view more" granularity drill-down — those need a
-// real SVG charting component (MultiLineChartMini/BarChartMini on web),
-// which is a bigger decision than the rest of this phase; left for later.
+// quiz answer breakdown), the 14-day Purchases-by-Site/Purchases-by-Package
+// timeline charts with their "View more" granularity + site/package
+// drill-down, Revenue-by-Package, and By-Payment-Provider sections.
 import { useEffect, useState, useCallback } from "react";
 import { View, Text, Pressable, ScrollView, RefreshControl, ActivityIndicator } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Eye, CheckCircle2, Users, Award, Radio, Wallet, Zap, RefreshCw, Video, FileText, ClipboardList, BookOpen } from "lucide-react-native";
+import { Eye, CheckCircle2, Users, Award, Radio, Wallet, Zap, RefreshCw, Video, FileText, ClipboardList, BookOpen, ChevronLeft } from "lucide-react-native";
 import { useAdminAuth } from "@/flow/AdminAuthContext";
-import { adminGetAnalytics, adminGetContentAnalytics, type AdminAnalytics, type ContentItemAnalytics } from "@/lib/adminApi";
+import {
+  adminGetAnalytics,
+  adminGetContentAnalytics,
+  adminGetPurchasesBySite,
+  adminGetPurchasesByPackage,
+  adminGetSites,
+  adminGetPackages,
+  type AdminAnalytics,
+  type ContentItemAnalytics,
+  type PurchasesBySiteTimeline,
+  type PurchasesByPackageTimeline,
+  type TimelineGranularity,
+  type Site,
+  type Package,
+} from "@/lib/adminApi";
 import AdminModal from "@/components/admin/AdminModal";
 import StatCard from "@/components/admin/StatCard";
+import MultiLineChartMini from "@/components/MultiLineChartMini";
+
+const GRANULARITIES: { id: TimelineGranularity; label: string }[] = [
+  { id: "day", label: "Day" },
+  { id: "week", label: "Week" },
+  { id: "month", label: "Month" },
+];
+
+function Pill({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} className="px-3 py-1.5 rounded-full" style={{ backgroundColor: active ? "#C45C38" : "rgba(255,255,255,0.1)" }}>
+      <Text className="text-[11px] font-bold" style={{ color: active ? "#fff" : "#E8D4B0" }}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
 
 const TYPE_ICON = { video: Video, article: FileText, survey: ClipboardList, lesson: BookOpen } as const;
 
@@ -80,6 +109,109 @@ export default function AnalyticsScreen() {
     setDetail(null);
   }
 
+  // ── Purchases-by-Site / Purchases-by-Package "View more" drill-downs ─────
+  const [activeView, setActiveView] = useState<"none" | "site" | "package">("none");
+  const [sites, setSites] = useState<Site[]>([]);
+  const [packages, setPackages] = useState<Package[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const [sitesResult, packagesResult] = await Promise.all([adminGetSites(token!), adminGetPackages(token!)]);
+      if (sitesResult.ok && sitesResult.data.sites) setSites(sitesResult.data.sites);
+      if (packagesResult.ok && packagesResult.data.packages) setPackages(packagesResult.data.packages);
+    })();
+  }, [token]);
+
+  // loadSiteDetail/loadPackageDetail are called directly from the triggering
+  // event handler (opening the drill-down, tapping a granularity/filter
+  // pill) rather than from a useEffect keyed on that state — an effect that
+  // fires setState synchronously in its body trips
+  // react-hooks/set-state-in-effect, and every trigger here is already a
+  // direct user action, so there's no "derive from a prop/state change"
+  // case an effect would actually be for. See CoordinatorDashboardScreen's
+  // loadRegionsOnce for the same pattern.
+  const [siteGranularity, setSiteGranularity] = useState<TimelineGranularity>("day");
+  const [siteFilter, setSiteFilter] = useState<string>("");
+  const [siteDetail, setSiteDetail] = useState<PurchasesBySiteTimeline | null>(null);
+  const [siteDetailLoading, setSiteDetailLoading] = useState(false);
+
+  const loadSiteDetail = useCallback(
+    async (granularity: TimelineGranularity = siteGranularity, siteId: string = siteFilter) => {
+      setSiteDetailLoading(true);
+      const result = await adminGetPurchasesBySite(token!, { granularity, siteId: siteId || undefined });
+      if (result.ok && result.data.timeline) setSiteDetail(result.data.timeline);
+      setSiteDetailLoading(false);
+    },
+    [token, siteGranularity, siteFilter]
+  );
+
+  function openSiteDetail() {
+    setActiveView("site");
+    loadSiteDetail();
+  }
+
+  function selectSiteGranularity(g: TimelineGranularity) {
+    setSiteGranularity(g);
+    loadSiteDetail(g, siteFilter);
+  }
+
+  function selectSiteFilter(id: string) {
+    setSiteFilter(id);
+    loadSiteDetail(siteGranularity, id);
+  }
+
+  const siteTotals = siteDetail
+    ? [...siteDetail.series]
+        .map((s) => ({
+          siteId: s.siteId,
+          siteName: s.siteName,
+          revenueKes: s.data.reduce((sum, v) => sum + v, 0),
+          sessions: s.counts.reduce((sum, v) => sum + v, 0),
+        }))
+        .sort((a, b) => b.revenueKes - a.revenueKes)
+    : [];
+
+  const [packageGranularity, setPackageGranularity] = useState<TimelineGranularity>("day");
+  const [packageFilter, setPackageFilter] = useState<string>("");
+  const [packageDetail, setPackageDetail] = useState<PurchasesByPackageTimeline | null>(null);
+  const [packageDetailLoading, setPackageDetailLoading] = useState(false);
+
+  const loadPackageDetail = useCallback(
+    async (granularity: TimelineGranularity = packageGranularity, packageId: string = packageFilter) => {
+      setPackageDetailLoading(true);
+      const result = await adminGetPurchasesByPackage(token!, { granularity, packageId: packageId || undefined });
+      if (result.ok && result.data.timeline) setPackageDetail(result.data.timeline);
+      setPackageDetailLoading(false);
+    },
+    [token, packageGranularity, packageFilter]
+  );
+
+  function openPackageDetail() {
+    setActiveView("package");
+    loadPackageDetail();
+  }
+
+  function selectPackageGranularity(g: TimelineGranularity) {
+    setPackageGranularity(g);
+    loadPackageDetail(g, packageFilter);
+  }
+
+  function selectPackageFilter(id: string) {
+    setPackageFilter(id);
+    loadPackageDetail(packageGranularity, id);
+  }
+
+  const packageTotals = packageDetail
+    ? [...packageDetail.series]
+        .map((s) => ({
+          packageId: s.packageId,
+          packageLabel: s.packageLabel,
+          purchases: s.data.reduce((sum, v) => sum + v, 0),
+          revenueKes: s.revenue.reduce((sum, v) => sum + v, 0),
+        }))
+        .sort((a, b) => b.purchases - a.purchases)
+    : [];
+
   if (loading || !analytics) {
     return (
       <View className="flex-1 items-center justify-center" style={{ backgroundColor: "#1D3C2A" }}>
@@ -91,32 +223,171 @@ export default function AnalyticsScreen() {
   const maxContentImpressions = Math.max(1, ...analytics.earned.contentOverview.map((c) => c.impressions));
   const maxPackageRevenue = Math.max(1, ...analytics.purchased.byPackage.map((p) => p.revenueKes));
 
+  const headerRefreshing = activeView === "site" ? siteDetailLoading : activeView === "package" ? packageDetailLoading : refreshing;
+  const onHeaderRefresh = activeView === "site" ? () => loadSiteDetail() : activeView === "package" ? () => loadPackageDetail() : () => load(true);
+
   return (
     <View className="flex-1" style={{ backgroundColor: "#1D3C2A" }}>
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 24, gap: 12 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor="#c29d53" />}>
-        <View className="flex-row" style={{ gap: 4, padding: 4, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.08)" }}>
-          <Pressable onPress={() => setSection("earn")} className="flex-1 flex-row items-center justify-center gap-1.5 py-2.5 rounded-xl" style={{ backgroundColor: section === "earn" ? "#2E5A3E" : "transparent" }}>
-            <Zap size={13} color={section === "earn" ? "#E8D4B0" : "#3C6A4A"} />
-            <Text className="text-xs font-bold" style={{ color: section === "earn" ? "#E8D4B0" : "#3C6A4A" }}>
-              Watch & Earn
-            </Text>
-          </Pressable>
-          <Pressable onPress={() => setSection("purchases")} className="flex-1 flex-row items-center justify-center gap-1.5 py-2.5 rounded-xl" style={{ backgroundColor: section === "purchases" ? "#2E5A3E" : "transparent" }}>
-            <Wallet size={13} color={section === "purchases" ? "#E8D4B0" : "#3C6A4A"} />
-            <Text className="text-xs font-bold" style={{ color: section === "purchases" ? "#E8D4B0" : "#3C6A4A" }}>
-              Purchases
+        <View className="flex-row items-center justify-between">
+          {activeView === "site" ? (
+            <Pressable onPress={() => setActiveView("none")} className="flex-row items-center gap-1">
+              <ChevronLeft size={16} color="#E8D4B0" />
+              <Text className="text-sm font-bold" style={{ color: "#E8D4B0" }}>
+                Purchases by Site
+              </Text>
+            </Pressable>
+          ) : activeView === "package" ? (
+            <Pressable onPress={() => setActiveView("none")} className="flex-row items-center gap-1">
+              <ChevronLeft size={16} color="#E8D4B0" />
+              <Text className="text-sm font-bold" style={{ color: "#E8D4B0" }}>
+                Purchases by Package
+              </Text>
+            </Pressable>
+          ) : (
+            <View />
+          )}
+          <Pressable onPress={onHeaderRefresh} disabled={headerRefreshing} className="flex-row items-center gap-1.5 px-3 py-1.5 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.1)", opacity: headerRefreshing ? 0.6 : 1 }}>
+            <RefreshCw size={12} color="#C4DAC0" />
+            <Text className="text-[11px] font-bold" style={{ color: "#C4DAC0" }}>
+              Refresh
             </Text>
           </Pressable>
         </View>
 
-        <Pressable onPress={() => load(true)} disabled={refreshing} className="self-end flex-row items-center gap-1.5 px-3 py-1.5 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.1)", opacity: refreshing ? 0.6 : 1 }}>
-          <RefreshCw size={12} color="#C4DAC0" />
-          <Text className="text-[11px] font-bold" style={{ color: "#C4DAC0" }}>
-            Refresh
-          </Text>
-        </Pressable>
+        {activeView === "none" && (
+          <View className="flex-row" style={{ gap: 4, padding: 4, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.08)" }}>
+            <Pressable onPress={() => setSection("earn")} className="flex-1 flex-row items-center justify-center gap-1.5 py-2.5 rounded-xl" style={{ backgroundColor: section === "earn" ? "#2E5A3E" : "transparent" }}>
+              <Zap size={13} color={section === "earn" ? "#E8D4B0" : "#3C6A4A"} />
+              <Text className="text-xs font-bold" style={{ color: section === "earn" ? "#E8D4B0" : "#3C6A4A" }}>
+                Watch & Earn
+              </Text>
+            </Pressable>
+            <Pressable onPress={() => setSection("purchases")} className="flex-1 flex-row items-center justify-center gap-1.5 py-2.5 rounded-xl" style={{ backgroundColor: section === "purchases" ? "#2E5A3E" : "transparent" }}>
+              <Wallet size={13} color={section === "purchases" ? "#E8D4B0" : "#3C6A4A"} />
+              <Text className="text-xs font-bold" style={{ color: section === "purchases" ? "#E8D4B0" : "#3C6A4A" }}>
+                Purchases
+              </Text>
+            </Pressable>
+          </View>
+        )}
 
-        {section === "earn" ? (
+        {activeView === "site" ? (
+          <>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+              {GRANULARITIES.map((g) => (
+                <Pill key={g.id} label={g.label} active={siteGranularity === g.id} onPress={() => selectSiteGranularity(g.id)} />
+              ))}
+            </ScrollView>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+              <Pill label="All sites" active={siteFilter === ""} onPress={() => selectSiteFilter("")} />
+              {sites.map((s) => (
+                <Pill key={s.id} label={s.name} active={siteFilter === s.id} onPress={() => selectSiteFilter(s.id)} />
+              ))}
+            </ScrollView>
+
+            {siteDetailLoading && !siteDetail ? (
+              <View className="items-center justify-center py-12">
+                <ActivityIndicator color="#c29d53" />
+              </View>
+            ) : siteDetail ? (
+              <>
+                <View className="rounded-2xl px-4 pt-3.5 pb-4" style={{ backgroundColor: "#2E5A3E", opacity: siteDetailLoading ? 0.6 : 1 }}>
+                  {siteDetail.series.length === 0 ? (
+                    <Text className="text-xs text-center py-8" style={{ color: "#96B496" }}>
+                      No purchases in this window.
+                    </Text>
+                  ) : (
+                    <MultiLineChartMini days={siteDetail.periods} series={siteDetail.series} height={200} showGrid showYLabels />
+                  )}
+                </View>
+
+                {siteTotals.length > 0 && (
+                  <View className="rounded-2xl overflow-hidden" style={{ backgroundColor: "#2E5A3E" }}>
+                    <View className="px-4 pt-3.5 pb-2">
+                      <Text className="text-xs font-bold uppercase" style={{ color: "#C4DAC0", letterSpacing: 1 }}>
+                        Totals for this window
+                      </Text>
+                    </View>
+                    {siteTotals.map((t, i) => (
+                      <View key={t.siteId ?? i} className="flex-row items-center justify-between px-4 py-2.5" style={{ borderTopWidth: i > 0 ? 1 : 0, borderTopColor: "rgba(255,255,255,0.1)" }}>
+                        <Text className="text-xs" style={{ color: "#E8D4B0" }}>
+                          {t.siteName}
+                        </Text>
+                        <Text className="text-xs" style={{ color: "#96B496" }}>
+                          {t.sessions} sessions · <Text style={{ fontWeight: "700", color: "#C45C38" }}>KES {t.revenueKes.toLocaleString()}</Text>
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </>
+            ) : null}
+          </>
+        ) : activeView === "package" ? (
+          <>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+              {GRANULARITIES.map((g) => (
+                <Pill key={g.id} label={g.label} active={packageGranularity === g.id} onPress={() => selectPackageGranularity(g.id)} />
+              ))}
+            </ScrollView>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+              <Pill label="All packages" active={packageFilter === ""} onPress={() => selectPackageFilter("")} />
+              {packages.map((p) => (
+                <Pill key={p.id} label={p.label} active={packageFilter === p.id} onPress={() => selectPackageFilter(p.id)} />
+              ))}
+            </ScrollView>
+
+            {packageDetailLoading && !packageDetail ? (
+              <View className="items-center justify-center py-12">
+                <ActivityIndicator color="#c29d53" />
+              </View>
+            ) : packageDetail ? (
+              <>
+                <View className="rounded-2xl px-4 pt-3.5 pb-4" style={{ backgroundColor: "#2E5A3E", opacity: packageDetailLoading ? 0.6 : 1 }}>
+                  {packageDetail.series.length === 0 ? (
+                    <Text className="text-xs text-center py-8" style={{ color: "#96B496" }}>
+                      No purchases in this window.
+                    </Text>
+                  ) : (
+                    <>
+                      <Text className="text-[9px] uppercase mb-2" style={{ color: "#96B496", letterSpacing: 1 }}>
+                        Purchases (count)
+                      </Text>
+                      <MultiLineChartMini
+                        days={packageDetail.periods}
+                        series={packageDetail.series.map((s) => ({ siteId: s.packageId, siteName: s.packageLabel, data: s.data }))}
+                        height={200}
+                        showGrid
+                        showYLabels
+                      />
+                    </>
+                  )}
+                </View>
+
+                {packageTotals.length > 0 && (
+                  <View className="rounded-2xl overflow-hidden" style={{ backgroundColor: "#2E5A3E" }}>
+                    <View className="px-4 pt-3.5 pb-2">
+                      <Text className="text-xs font-bold uppercase" style={{ color: "#C4DAC0", letterSpacing: 1 }}>
+                        Totals for this window
+                      </Text>
+                    </View>
+                    {packageTotals.map((t, i) => (
+                      <View key={t.packageId ?? i} className="flex-row items-center justify-between px-4 py-2.5" style={{ borderTopWidth: i > 0 ? 1 : 0, borderTopColor: "rgba(255,255,255,0.1)" }}>
+                        <Text className="text-xs" style={{ color: "#E8D4B0" }}>
+                          {t.packageLabel}
+                        </Text>
+                        <Text className="text-xs" style={{ color: "#96B496" }}>
+                          {t.purchases} purchases · <Text style={{ fontWeight: "700", color: "#C45C38" }}>KES {t.revenueKes.toLocaleString()}</Text>
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </>
+            ) : null}
+          </>
+        ) : section === "earn" ? (
           <>
             <View className="flex-row flex-wrap" style={{ gap: 10 }}>
               <StatCard icon={Eye} label="Impressions" value={analytics.earned.totalImpressions.toLocaleString()} color="#C45C38" />
@@ -200,6 +471,50 @@ export default function AnalyticsScreen() {
               <StatCard icon={Wallet} label="Revenue" value={`KES ${analytics.purchased.totalRevenueKes.toLocaleString()}`} color="#C45C38" />
               <StatCard icon={Award} label="Commission Paid" value={`KES ${analytics.purchased.totalCommissionKes.toLocaleString()}`} color="#CC8830" />
             </View>
+
+            {analytics.purchased.bySiteTimeline?.series.length > 0 && (
+              <View className="rounded-2xl overflow-hidden px-4 pt-3.5 pb-4" style={{ backgroundColor: "#2E5A3E" }}>
+                <View className="flex-row items-center justify-between mb-0.5">
+                  <Text className="text-xs font-bold uppercase" style={{ color: "#C4DAC0", letterSpacing: 1 }}>
+                    Purchases by Site (last 14 days)
+                  </Text>
+                  <Pressable onPress={openSiteDetail}>
+                    <Text className="text-[11px] font-bold" style={{ color: "#C45C38" }}>
+                      View more →
+                    </Text>
+                  </Pressable>
+                </View>
+                <Text className="text-[9px] uppercase mb-2" style={{ color: "#96B496", letterSpacing: 1 }}>
+                  Revenue (KES)
+                </Text>
+                <MultiLineChartMini days={analytics.purchased.bySiteTimeline.days} series={analytics.purchased.bySiteTimeline.series} height={160} showGrid showYLabels />
+              </View>
+            )}
+
+            {analytics.purchased.byPackageTimeline?.series.length > 0 && (
+              <View className="rounded-2xl overflow-hidden px-4 pt-3.5 pb-4" style={{ backgroundColor: "#2E5A3E" }}>
+                <View className="flex-row items-center justify-between mb-0.5">
+                  <Text className="text-xs font-bold uppercase" style={{ color: "#C4DAC0", letterSpacing: 1 }}>
+                    Purchases by Package (last 14 days)
+                  </Text>
+                  <Pressable onPress={openPackageDetail}>
+                    <Text className="text-[11px] font-bold" style={{ color: "#C45C38" }}>
+                      View more →
+                    </Text>
+                  </Pressable>
+                </View>
+                <Text className="text-[9px] uppercase mb-2" style={{ color: "#96B496", letterSpacing: 1 }}>
+                  Purchase count
+                </Text>
+                <MultiLineChartMini
+                  days={analytics.purchased.byPackageTimeline.days}
+                  series={analytics.purchased.byPackageTimeline.series.map((s) => ({ siteId: s.packageId, siteName: s.packageLabel, data: s.data }))}
+                  height={160}
+                  showGrid
+                  showYLabels
+                />
+              </View>
+            )}
 
             {analytics.purchased.byPackage.length > 0 && (
               <View className="rounded-2xl overflow-hidden px-4 py-3.5" style={{ backgroundColor: "#2E5A3E", gap: 8 }}>

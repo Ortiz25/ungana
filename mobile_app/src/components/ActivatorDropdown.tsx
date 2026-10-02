@@ -55,10 +55,10 @@ export default function ActivatorDropdown({
         disabled={locked}
         onPress={() => {
           if (locked) return;
-          setOpen(true);
+          setOpen(true)
           setQuery("");
         }}
-        className="w-full flex-row items-center gap-3 px-4 py-3.5 rounded-2xl"
+        className="w-full flex-row items-center gap-2 px-4 py-3.5 rounded-2xl"
         style={{
           backgroundColor: "rgba(46,90,62,0.08)",
           opacity: locked ? 0.8 : 1,

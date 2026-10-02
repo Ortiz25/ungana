@@ -3,6 +3,7 @@
 // Kept in its own file rather than folded into api.ts, matching that file's
 // own header comment ("adminX/activatorX/coordinatorX endpoints come in a
 // later phase") — this *is* that later phase, for the admin slice of it.
+import { Platform } from "react-native";
 import { request, type ApiResult, BACKEND_ORIGIN } from "@/lib/api";
 
 function authed(token: string): { headers: Record<string, string> } {
@@ -198,10 +199,18 @@ export async function adminUploadFile(
   file: { uri: string; name: string; mimeType: string }
 ): Promise<ApiResult<{ success: boolean; url?: string; message?: string }>> {
   const formData = new FormData();
-  // React Native's fetch FormData accepts this {uri,name,type} shape for a
-  // local file picked via expo-image-picker — it isn't a real Blob, but RN's
-  // networking layer knows how to stream it from disk as a multipart part.
-  formData.append("file", { uri: file.uri, name: file.name, type: file.mimeType } as unknown as Blob);
+  if (Platform.OS === "web") {
+    // On web, expo-image-picker's asset.uri is a blob: URL, not a real file
+    // path — the {uri,name,type} object below is a React-Native-only
+    // FormData convention that silently fails to web's XHR/fetch (RN's
+    // native networking layer streams it from disk; a browser just has
+    // nothing to stream, so the field ends up empty/garbage server-side).
+    // Fetching the blob: URL back into a real Blob is the web equivalent.
+    const blob = await (await fetch(file.uri)).blob();
+    formData.append("file", blob, file.name);
+  } else {
+    formData.append("file", { uri: file.uri, name: file.name, type: file.mimeType } as unknown as Blob);
+  }
   const result = await request<{ success: boolean; url?: string; message?: string }>(endpoint, { method: "POST", body: formData, timeoutMs: 240000, ...authed(token) });
   if (result.ok && result.data?.url) {
     return { ...result, data: { ...result.data, url: `${BACKEND_ORIGIN}${result.data.url}` } };
@@ -395,12 +404,6 @@ export function adminDeleteCommunityPost(token: string, id: number): Promise<Api
 }
 
 // ── Analytics ────────────────────────────────────────────────────────────
-// Covers the summary stat cards + content overview + per-item drill-down
-// only. The web dashboard's 14-day purchases-by-site/by-package timeline
-// charts (MultiLineChartMini/BarChartMini, SVG-based) and their "view more"
-// granularity drill-down are deliberately not ported yet — a real charting
-// dependency for a phone screen is a bigger decision than the rest of this
-// phase, left for a later pass.
 export type AdminAnalytics = {
   earned: {
     totalImpressions: number;
@@ -419,12 +422,46 @@ export type AdminAnalytics = {
     activeSessionsNow: number;
     byPackage: { packageId: string; count: number; revenueKes: number }[];
     byProvider: { provider: string; count: number; revenueKes: number }[];
+    bySiteTimeline: { days: string[]; series: { siteId: string | null; siteName: string; data: number[] }[] };
+    byPackageTimeline: { days: string[]; series: { packageId: string; packageLabel: string; data: number[] }[] };
   };
 };
 
 /** GET /api/admin/analytics — Watch & Earn engagement + purchase revenue summary. */
 export function adminGetAnalytics(token: string): Promise<ApiResult<{ success: boolean; analytics?: AdminAnalytics; message?: string }>> {
   return request("/admin/analytics", authed(token));
+}
+
+export type TimelineGranularity = "day" | "week" | "month";
+
+export type PurchasesBySiteTimeline = {
+  granularity: TimelineGranularity;
+  periods: string[];
+  series: { siteId: string | null; siteName: string; data: number[]; counts: number[] }[];
+};
+
+/** GET /api/admin/analytics/purchases-by-site?granularity=day|week|month&site=<id> — the "View more" drill-down behind the compact 14-day chart. */
+export function adminGetPurchasesBySite(
+  token: string,
+  { granularity, siteId }: { granularity?: TimelineGranularity; siteId?: string } = {}
+): Promise<ApiResult<{ success: boolean; timeline?: PurchasesBySiteTimeline; message?: string }>> {
+  const params = new URLSearchParams({ granularity: granularity || "day", ...(siteId ? { site: siteId } : {}) });
+  return request(`/admin/analytics/purchases-by-site?${params}`, authed(token));
+}
+
+export type PurchasesByPackageTimeline = {
+  granularity: TimelineGranularity;
+  periods: string[];
+  series: { packageId: string; packageLabel: string; data: number[]; revenue: number[] }[];
+};
+
+/** GET /api/admin/analytics/purchases-by-package?granularity=day|week|month&package=<id> — the "View more" drill-down behind the compact 14-day chart. */
+export function adminGetPurchasesByPackage(
+  token: string,
+  { granularity, packageId }: { granularity?: TimelineGranularity; packageId?: string } = {}
+): Promise<ApiResult<{ success: boolean; timeline?: PurchasesByPackageTimeline; message?: string }>> {
+  const params = new URLSearchParams({ granularity: granularity || "day", ...(packageId ? { package: packageId } : {}) });
+  return request(`/admin/analytics/purchases-by-package?${params}`, authed(token));
 }
 
 export type ContentItemAnalytics = {

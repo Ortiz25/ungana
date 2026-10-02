@@ -327,6 +327,7 @@ function QuizCarousel() {
 function HeroCard() {
   const w = useWatchEarn();
   const item = w.featured;
+  if (!item) return null;
   const done = w.completedIds.has(item.id);
   return (
     <View className="px-4 pt-4 pb-6" style={{ backgroundColor: "#1D3C2A" }}>
@@ -435,7 +436,7 @@ function Feed({ onBack }: { onBack: () => void }) {
   return (
     <View className="flex-1" style={{ backgroundColor: "#0E1F14" }}>
       <TimelineHeader onBack={onBack} />
-      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 110 }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
         <HeroCard />
         <View style={{ backgroundColor: "#E8D4B0" }}>
           {(Object.entries(sections) as [SectionKey, SectionMeta][]).map(([key, meta]) => (

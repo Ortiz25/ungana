@@ -56,14 +56,19 @@
 
   let { onBuyAccess, onConnect, onBack } = $props();
 
+  // Same flag as ActivatorLoginScreen/CoordinatorLoginScreen/PaymentScreen —
+  // gates the static demo catalogue below so a real deployment never shows
+  // placeholder content alongside genuine admin-authored content.
+  const DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== 'false';
+
   // Real content (from the backend) and the static demo catalogue are shown
-  // together, always — real items first, demo items filling out the rest of
-  // each section for visual completeness even when the admin hasn't
-  // populated every zone yet. Each item carries its own `isLive` flag so
-  // completion behaviour stays per-item rather than an all-or-nothing mode:
-  // a real item's completion is submitted to the backend for real crediting
-  // (and can end up in a real, router-authorised session); a demo item's
-  // completion stays purely local, exactly like the old fully-offline
+  // together when DEMO_MODE is on — real items first, demo items filling out
+  // the rest of each section for visual completeness even when the admin
+  // hasn't populated every zone yet. Each item carries its own `isLive` flag
+  // so completion behaviour stays per-item rather than an all-or-nothing
+  // mode: a real item's completion is submitted to the backend for real
+  // crediting (and can end up in a real, router-authorised session); a demo
+  // item's completion stays purely local, exactly like the old fully-offline
   // behaviour, and can never inflate a real session's granted duration —
   // see handleConnect().
   let mac = $state('');
@@ -364,11 +369,11 @@
   }
 
   const normalized = $derived(liveItems.map(normalizeLiveItem));
-  const DEMO_FEATURED = { ...TL_FEATURED, isLive: false };
-  const DEMO_NEW = TL_NEW.map((i) => ({ ...i, isLive: false }));
-  const DEMO_SURVEYS = TL_SURVEYS.map((i) => ({ ...i, isLive: false }));
-  const DEMO_ARTICLES = TL_ARTICLES.map((i) => ({ ...i, isLive: false }));
-  const DEMO_VIDEOS = TL_VIDEOS.map((i) => ({ ...i, isLive: false }));
+  const DEMO_FEATURED = DEMO_MODE ? { ...TL_FEATURED, isLive: false } : null;
+  const DEMO_NEW = DEMO_MODE ? TL_NEW.map((i) => ({ ...i, isLive: false })) : [];
+  const DEMO_SURVEYS = DEMO_MODE ? TL_SURVEYS.map((i) => ({ ...i, isLive: false })) : [];
+  const DEMO_ARTICLES = DEMO_MODE ? TL_ARTICLES.map((i) => ({ ...i, isLive: false })) : [];
+  const DEMO_VIDEOS = DEMO_MODE ? TL_VIDEOS.map((i) => ({ ...i, isLive: false })) : [];
 
   // Section placement is an explicit admin choice (content_items.section),
   // not inferred from type — matches the five fixed zones this screen has
@@ -376,7 +381,8 @@
   // "Watch & Earn". Only 'hero' is meant to hold a single active real item;
   // if the admin marks several, only the first (by sort_order) is used as
   // the hero slot. 'survey' (like the other list sections) can hold many —
-  // every active real survey shows as its own card, demo surveys appended.
+  // every active real survey shows as its own card, demo surveys appended
+  // only when DEMO_MODE is on (DEMO_* arrays/consts are empty/null otherwise).
   const featured = $derived(normalized.find((i) => i.section === 'hero') ?? DEMO_FEATURED);
   const newItems = $derived([...normalized.filter((i) => i.section === 'whats_new'), ...DEMO_NEW]);
   const surveys = $derived([...normalized.filter((i) => i.section === 'survey'), ...DEMO_SURVEYS]);
@@ -530,14 +536,15 @@
     } else if (siteInfo?.vertical === 'community') {
       const [postsResult, readIdsResult] = await Promise.all([getCommunityPosts(site), getCommunityReadIds(mac)]);
       const allPosts = postsResult.ok ? (postsResult.data?.posts ?? []) : [];
-      // Demo items always trail real ones — see communityDemoData.js's own
-      // header comment for what "delete this" actually involves.
-      communityAnnouncements = [...allPosts.filter((p) => p.type === 'announcement'), ...COMMUNITY_DEMO_ANNOUNCEMENTS];
-      communityEvents = [...allPosts.filter((p) => p.type === 'event'), ...COMMUNITY_DEMO_EVENTS];
-      communityMarketplace = [...allPosts.filter((p) => p.type === 'marketplace'), ...COMMUNITY_DEMO_MARKETPLACE];
-      communityServices = [...allPosts.filter((p) => p.type === 'service'), ...COMMUNITY_DEMO_SERVICES];
+      // Demo items always trail real ones, and only show up at all in
+      // DEMO_MODE — see communityDemoData.js's own header comment for what
+      // "delete this" actually involves.
+      communityAnnouncements = [...allPosts.filter((p) => p.type === 'announcement'), ...(DEMO_MODE ? COMMUNITY_DEMO_ANNOUNCEMENTS : [])];
+      communityEvents = [...allPosts.filter((p) => p.type === 'event'), ...(DEMO_MODE ? COMMUNITY_DEMO_EVENTS : [])];
+      communityMarketplace = [...allPosts.filter((p) => p.type === 'marketplace'), ...(DEMO_MODE ? COMMUNITY_DEMO_MARKETPLACE : [])];
+      communityServices = [...allPosts.filter((p) => p.type === 'service'), ...(DEMO_MODE ? COMMUNITY_DEMO_SERVICES : [])];
       communityReadIds = new Set(readIdsResult.ok ? (readIdsResult.data?.readIds ?? []) : []);
-      communityPolls = [...allPosts.filter((p) => p.type === 'poll'), ...COMMUNITY_DEMO_POLLS];
+      communityPolls = [...allPosts.filter((p) => p.type === 'poll'), ...(DEMO_MODE ? COMMUNITY_DEMO_POLLS : [])];
     }
 
     if (usernameResult.ok && usernameResult.data?.username) {

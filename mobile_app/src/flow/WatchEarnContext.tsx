@@ -8,6 +8,7 @@
 // Watch tabs, matching the source's single shared "main feed" wrapper (see
 // the plan doc's "Key architectural call").
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import Constants from "expo-constants";
 import {
   getContent,
   getContentCompletions,
@@ -17,9 +18,15 @@ import {
   getSettings,
   recordContentImpression,
   checkUsernameAvailable,
+  resolveMediaUrl,
 } from "@/lib/api";
 import { TL_FEATURED, TL_NEW, TL_SURVEYS, TL_ARTICLES, TL_VIDEOS, doneLabelForFrequency, type TLItem, type TLSurveyQuestion } from "@/lib/data";
 import { useTimeline } from "@/flow/TimelineContext";
+
+// Same flag/convention as PaymentScreen.tsx (mirrors frontend's
+// VITE_DEMO_MODE) — gates the static TL_* demo catalogue below so a real
+// deployment never shows placeholder content alongside genuine admin content.
+const DEMO_MODE = Constants.expoConfig?.extra?.demoMode !== false;
 
 const FALLBACK_WATCH_SECS = 6;
 
@@ -165,8 +172,12 @@ function normalizeLiveItem(row: LiveRow): TLItem {
     earnSecs: row.earn_secs,
     minWatchSecs: row.min_watch_secs ?? 0,
     surveyQuestions: normalizeSurveyQuestions(row.survey_questions),
-    img: row.img_url || fallback.img || "",
-    bodyUrl: row.body_url || "",
+    img: resolveMediaUrl(row.img_url) || fallback.img || "",
+    // Only video/lesson's body_url is ever a file URL — article's is prose
+    // (or an external link, matched separately by WatchEarnScreen), so
+    // resolving it here would otherwise corrupt real article text that
+    // happens to start with "/" (rare, but not worth the risk).
+    bodyUrl: (row.type === "video" || row.type === "lesson" ? resolveMediaUrl(row.body_url) : row.body_url) || "",
     isLive: true,
   };
 }
@@ -176,7 +187,7 @@ export function hasTrackedVideoPlayback(item: TLItem | null): boolean {
 }
 
 export type WatchEarnContextValue = {
-  featured: TLItem;
+  featured: TLItem | null;
   newItems: TLItem[];
   surveys: TLItem[];
   articles: TLItem[];
@@ -328,11 +339,26 @@ export function WatchEarnProvider({
   }, [mac, site]);
 
   const normalized = useMemo(() => liveItems.map(normalizeLiveItem), [liveItems]);
-  const featured = useMemo(() => normalized.find((i) => i.section === "hero") ?? { ...TL_FEATURED, isLive: false }, [normalized]);
-  const newItems = useMemo(() => [...normalized.filter((i) => i.section === "whats_new"), ...TL_NEW.map((i) => ({ ...i, isLive: false }))], [normalized]);
-  const surveys = useMemo(() => [...normalized.filter((i) => i.section === "survey"), ...TL_SURVEYS.map((i) => ({ ...i, isLive: false }))], [normalized]);
-  const articles = useMemo(() => [...normalized.filter((i) => i.section === "news"), ...TL_ARTICLES.map((i) => ({ ...i, isLive: false }))], [normalized]);
-  const videos = useMemo(() => [...normalized.filter((i) => i.section === "watch_earn"), ...TL_VIDEOS.map((i) => ({ ...i, isLive: false }))], [normalized]);
+  const featured = useMemo(
+    () => normalized.find((i) => i.section === "hero") ?? (DEMO_MODE ? { ...TL_FEATURED, isLive: false } : null),
+    [normalized]
+  );
+  const newItems = useMemo(
+    () => [...normalized.filter((i) => i.section === "whats_new"), ...(DEMO_MODE ? TL_NEW.map((i) => ({ ...i, isLive: false })) : [])],
+    [normalized]
+  );
+  const surveys = useMemo(
+    () => [...normalized.filter((i) => i.section === "survey"), ...(DEMO_MODE ? TL_SURVEYS.map((i) => ({ ...i, isLive: false })) : [])],
+    [normalized]
+  );
+  const articles = useMemo(
+    () => [...normalized.filter((i) => i.section === "news"), ...(DEMO_MODE ? TL_ARTICLES.map((i) => ({ ...i, isLive: false })) : [])],
+    [normalized]
+  );
+  const videos = useMemo(
+    () => [...normalized.filter((i) => i.section === "watch_earn"), ...(DEMO_MODE ? TL_VIDEOS.map((i) => ({ ...i, isLive: false })) : [])],
+    [normalized]
+  );
 
   const totalEarnedSecs = realUnclaimedSecs + demoBonusSecs;
   const earnedFormatted = formatMinutesLabel(totalEarnedSecs);

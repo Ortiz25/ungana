@@ -8,15 +8,24 @@
     "scheme": "ungana",
     "userInterfaceStyle": "light",
     "ios": {
-      "icon": "./assets/expo.icon",
       "supportsTablet": false,
       "bundleIdentifier": "app.ungana.mobile",
-      "associatedDomains": []
+      "associatedDomains": [],
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSExceptionDomains": {
+            "45.12.28.150": {
+              "NSIncludesSubdomains": false,
+              "NSTemporaryExceptionAllowsInsecureHTTPLoads": true
+            }
+          }
+        }
+      }
     },
     "android": {
       "package": "app.ungana.mobile",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#1D3C2A",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -57,6 +66,14 @@
         "expo-image-picker",
         {
           "photosPermission": "Ungana Admin needs access to your photos to attach images or video to content, notices and posts."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
         }
       ]
     ],

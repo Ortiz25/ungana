@@ -1,4 +1,3 @@
-import { Alert } from "react-native";
 import { router } from "expo-router";
 import PackageScreen from "@/screens/PackageScreen";
 import { useFlow } from "@/flow/FlowContext";
@@ -17,8 +16,8 @@ export default function PackagesRoute() {
         flow.setTimelineOrigin("packages");
         router.replace("/timeline");
       }}
-      onActivatorLogin={() => Alert.alert("Coming soon", "Activator sign-in is being added in a later phase.")}
-      onCoordinatorLogin={() => Alert.alert("Coming soon", "Coordinator sign-in is being added in a later phase.")}
+      onActivatorLogin={() => router.replace("/activator/login")}
+      onCoordinatorLogin={() => router.replace("/coordinator/login")}
       onAdminLogin={() => router.replace("/admin/login")}
     />
   );
