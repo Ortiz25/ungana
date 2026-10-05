@@ -126,3 +126,12 @@ export const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL; // e.g. http://local
 // channel is configured yet and points back to their activator instead.
 export const SUPPORT_WHATSAPP = process.env.SUPPORT_WHATSAPP; // e.g. 254712345678 (no +, no spaces — used to build a wa.me link)
 export const SUPPORT_PHONE = process.env.SUPPORT_PHONE;
+
+// ── Tracing (see telemetry.js) ──────────────────────────────────────────
+// Leave OTEL_EXPORTER_OTLP_ENDPOINT unset to print spans to this process's
+// own stdout (ConsoleSpanExporter) — zero setup, traces visible
+// immediately. Set it (e.g. to a local Jaeger/Grafana Tempo instance, or a
+// hosted collector like Honeycomb/Langfuse's OTLP endpoint) to ship real
+// spans there instead.
+export const OTEL_EXPORTER_OTLP_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+export const OTEL_SERVICE_NAME = process.env.OTEL_SERVICE_NAME || "ungana-backend";

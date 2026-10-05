@@ -94,14 +94,13 @@ export async function runAssistant({ messages, mac, site }) {
     stopWhen: stepCountIs(6),
     temperature: 0,
     messages,
-    // Hooks into OpenTelemetry — a no-op until a real OTel SDK/exporter is
-    // registered in this process (none is, today; see the comment on
-    // assistant_logs.trace in schema.sql for the self-contained alternative
-    // this route builds from the same result object regardless). Leaving
-    // this on costs nothing and means tracing lights up automatically the
-    // moment anyone wires up a collector, rather than needing this call
-    // site touched again later.
-    experimental_telemetry: {
+    // Emits OpenTelemetry spans via @ai-sdk/otel — see telemetry.js
+    // (registered once at server startup; that file's header comment has
+    // the full "why isn't this just @opentelemetry/api" explanation). Also
+    // see the comment on assistant_logs.trace in schema.sql for the
+    // self-contained, no-exporter-needed alternative this route builds
+    // from the same result object regardless.
+    telemetry: {
       isEnabled: true,
       functionId: "assistant-chat",
       metadata: { mac: mac ?? "unknown", site: site ?? "unknown", provider: LLM_PROVIDER },

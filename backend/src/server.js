@@ -1,3 +1,7 @@
+// Must be the very first import — registers the OpenTelemetry SDK before
+// anything else (in particular, before the AI assistant's first
+// generateText() call) can create a span. See telemetry.js's own comment.
+import "./telemetry.js";
 import express from "express";
 import cors from "cors";
 import {
