@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { runAssistant, LLM_PROVIDER, resolveModelId } from "../services/assistant/index.js";
+import { runAssistant, LLM_PROVIDER, resolveModelId, buildTrace } from "../services/assistant/index.js";
 import { confirmPurchase } from "../services/assistant/purchases.js";
 import { getSite } from "../services/sites.js";
 import { query } from "../db/pool.js";
@@ -28,8 +28,10 @@ assistantRouter.post("/chat", async (req, res) => {
     }
   }
 
+  const startedAt = Date.now();
   try {
     const result = await runAssistant({ messages, mac: mac || null, site: site || null });
+    const durationMs = Date.now() - startedAt;
 
     // toolResults carries each tool's real structured output (e.g.
     // propose_mpesa_purchase's token/price) — the mobile client renders UI
@@ -39,12 +41,17 @@ assistantRouter.post("/chat", async (req, res) => {
 
     // Best-effort audit log, after the response has already gone to the
     // client — a logging failure here must never affect what the guest saw.
+    // `trace` is the full per-step breakdown (see buildTrace) — how many
+    // tool round-trips it took, what each one actually returned, token
+    // usage and latency — for reviewing a specific exchange without
+    // needing an external APM.
     try {
       const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+      const trace = buildTrace(result, { durationMs });
       await query(
-        `INSERT INTO assistant_logs (mac, site_id, provider, model, user_message, assistant_message, tool_calls)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [mac || null, site || null, LLM_PROVIDER, resolveModelId(), lastUserMessage?.content ?? "", result.text, JSON.stringify(toolResults)]
+        `INSERT INTO assistant_logs (mac, site_id, provider, model, user_message, assistant_message, tool_calls, trace, duration_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [mac || null, site || null, LLM_PROVIDER, resolveModelId(), lastUserMessage?.content ?? "", result.text, JSON.stringify(toolResults), JSON.stringify(trace), durationMs]
       );
     } catch (logError) {
       console.error("⚠️  Assistant log write failed (response already sent):", logError.message);

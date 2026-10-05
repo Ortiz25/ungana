@@ -728,6 +728,19 @@ CREATE TABLE IF NOT EXISTS assistant_logs (
 CREATE INDEX IF NOT EXISTS idx_assistant_logs_mac ON assistant_logs(mac);
 CREATE INDEX IF NOT EXISTS idx_assistant_logs_site ON assistant_logs(site_id, created_at);
 
+-- Full per-step execution trace (one entry per tool-calling round: which
+-- tool(s) ran, their real inputs/outputs, finish reason, token usage per
+-- step) plus overall latency and token totals — see
+-- services/assistant/index.js's runAssistant(). `tool_calls` above stays a
+-- flat summary (what the mobile/web client itself logs client-side);
+-- `trace` is the deeper structure for debugging a specific exchange
+-- (why did it answer this way, how many tool round-trips, where did the
+-- time go) without needing an external APM — the generateText call also
+-- carries experimental_telemetry so a real OpenTelemetry collector picks
+-- these up automatically if one is ever registered in this process.
+ALTER TABLE assistant_logs ADD COLUMN IF NOT EXISTS trace JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE assistant_logs ADD COLUMN IF NOT EXISTS duration_ms INTEGER;
+
 -- A package purchase the assistant *proposed* in chat — never the charge
 -- itself. The model can only call propose_mpesa_purchase (reads the real
 -- catalog, writes one of these rows); the actual M-Pesa STK push only ever
