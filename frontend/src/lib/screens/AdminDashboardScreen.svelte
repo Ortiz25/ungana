@@ -4,7 +4,7 @@
     LogOut, Plus, X, Video, FileText, ClipboardList, BookOpen, Users, MapPin,
     ShieldCheck, Pause, Play, TrendingUp, Upload, Edit3, Save, Phone, Settings2, Zap,
     BarChart3, Eye, EyeOff, CheckCircle2, Wallet, Radio, Award, Repeat, Menu, Percent, RefreshCw, ChevronLeft, Bitcoin, Trash2,
-    Megaphone, Pin, Calendar, GraduationCap, ClipboardCheck, Link2, MousePointerClick, ShoppingBag, Star, Shield, Crown
+    Megaphone, Pin, Calendar, GraduationCap, ClipboardCheck, Link2, MousePointerClick, ShoppingBag, Star, Shield, Crown, Bot
   } from '@lucide/svelte';
   import BarChartMini from '$lib/components/BarChartMini.svelte';
   import MultiLineChartMini from '$lib/components/MultiLineChartMini.svelte';
@@ -1181,7 +1181,7 @@
   ];
 
   function freshSiteDraft() {
-    return { id: '', name: '', mode: 'both', btcEnabled: true, vertical: 'general' };
+    return { id: '', name: '', mode: 'both', btcEnabled: true, vertical: 'general', assistantEnabled: false };
   }
   let showSiteForm = $state(false);
   // null = creating a new site; otherwise the id of the site being edited —
@@ -1217,7 +1217,7 @@
   function startEditSite(s) {
     editingSiteId = s.id;
     siteFormError = '';
-    siteDraft = { id: s.id, name: s.name, mode: s.mode, btcEnabled: s.btc_enabled, vertical: s.vertical };
+    siteDraft = { id: s.id, name: s.name, mode: s.mode, btcEnabled: s.btc_enabled, vertical: s.vertical, assistantEnabled: s.assistant_enabled };
     showSiteForm = true;
   }
 
@@ -1240,7 +1240,8 @@
           name: siteDraft.name.trim(),
           mode: siteDraft.mode,
           btcEnabled: siteDraft.btcEnabled,
-          vertical: siteDraft.vertical
+          vertical: siteDraft.vertical,
+          assistantEnabled: siteDraft.assistantEnabled
         })
       : await adminCreateSite(token, {
           id: siteDraft.id.trim(),
@@ -3249,6 +3250,11 @@
             <span class="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-full" style="background: rgba(255,255,255,0.1); color: #C4DAC0;">
               <Bitcoin size={10} /> {s.btc_enabled ? 'BTC on' : 'BTC off'}
             </span>
+            {#if s.assistant_enabled}
+              <span class="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-full" style="background: rgba(196,92,56,0.18); color: #C45C38;">
+                <Bot size={10} /> Assistant on
+              </span>
+            {/if}
           </div>
 
           <div class="flex items-center gap-2">
@@ -3352,6 +3358,21 @@
               {siteDraft.btcEnabled ? 'Enabled' : 'Disabled'}
             </button>
           </div>
+          {#if editingSiteId}
+            <div>
+              <p class="text-[10px] text-[#AECAAE] font-semibold mb-1 uppercase tracking-wider">AI assistant</p>
+              <button
+                type="button"
+                onclick={() => (siteDraft.assistantEnabled = !siteDraft.assistantEnabled)}
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold"
+                style="background: {siteDraft.assistantEnabled ? '#C45C38' : 'rgba(255,255,255,0.1)'}; color: {siteDraft.assistantEnabled ? '#fff' : '#C4DAC0'};"
+              >
+                <Bot size={12} />
+                {siteDraft.assistantEnabled ? 'Enabled' : 'Disabled'}
+              </button>
+              <p class="text-[10px] text-[#96B496] mt-1">Lets guests at this site chat with the in-app AI assistant.</p>
+            </div>
+          {/if}
 
           {#if siteFormError}
             <p class="text-xs text-[#E08A6A]">{siteFormError}</p>

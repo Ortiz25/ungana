@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { View, Text, Pressable } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { ChevronRight, Clock, CheckCircle2, Zap, Pin, GraduationCap, Users, UserCheck, ShieldCheck } from "lucide-react-native";
+import { ChevronRight, Clock, CheckCircle2, Zap, Pin, GraduationCap, Users, UserCheck, ShieldCheck, UserCircle2 } from "lucide-react-native";
 import ScreenBg from "@/components/ScreenBg";
 import UnganaLogoMark from "@/components/UnganaLogoMark";
 import ActivatorDropdown from "@/components/ActivatorDropdown";
@@ -37,6 +37,7 @@ export default function PackageScreen({
   mode = "simulation",
   onSelect,
   onEarnAccess,
+  onCheckSession,
   onActivatorLogin,
   onCoordinatorLogin,
   onAdminLogin,
@@ -44,6 +45,10 @@ export default function PackageScreen({
   mode?: "simulation" | "active";
   onSelect: (pkg: Package, activator: Activator) => void;
   onEarnAccess: () => void;
+  // Returns to the by-username session lookup — for a guest who already
+  // has a session (e.g. recovering it on a new/cleared device) rather than
+  // one of the staff roles below.
+  onCheckSession: () => void;
   onActivatorLogin: () => void;
   onCoordinatorLogin: () => void;
   onAdminLogin: () => void;
@@ -150,6 +155,14 @@ export default function PackageScreen({
       );
     })();
   }, []);
+
+  // Earning needs a mac to track completions against — a device that
+  // arrived with none (freshly logged out, or never deep-linked in via the
+  // captive portal) can still buy a package (that flow is mac-tolerant, the
+  // router attaches it once they connect) but would otherwise watch content
+  // only to hit a dead end at the claim step. Computed once and reused by
+  // both the Earn Free Access CTA below and the footer's User pill.
+  const identityKnown = hasKnownIdentity();
 
   return (
     <ScreenBg scroll>
@@ -361,6 +374,7 @@ export default function PackageScreen({
             )}
             <View className="w-full mb-2">
               <Pressable
+                disabled={!identityKnown}
                 onPress={() => {
                   if (!activator) {
                     setActivatorError(true);
@@ -369,24 +383,36 @@ export default function PackageScreen({
                   onEarnAccess();
                 }}
                 className="w-full rounded-3xl overflow-hidden"
-                style={{ backgroundColor: "#C45C38" }}
+                style={{
+                  backgroundColor: identityKnown ? "#C45C38" : "transparent",
+                  borderWidth: identityKnown ? 0 : 2,
+                  borderColor: "rgba(29,60,42,0.25)",
+                  borderStyle: identityKnown ? "solid" : "dashed",
+                }}
               >
                 <View className="flex-row items-center gap-4 px-5 py-4">
-                  <View className="w-11 h-11 rounded-2xl items-center justify-center" style={{ backgroundColor: "rgba(255,255,255,0.22)" }}>
-                    <Zap size={20} color="#fff" strokeWidth={2} />
+                  <View
+                    className="w-11 h-11 rounded-2xl items-center justify-center"
+                    style={{ backgroundColor: identityKnown ? "rgba(255,255,255,0.22)" : "rgba(46,90,62,0.12)" }}
+                  >
+                    <Zap size={20} color={identityKnown ? "#fff" : "#3C6A4A"} strokeWidth={2} />
                   </View>
                   <View className="flex-1 min-w-0">
                     <View className="flex-row items-center gap-2 mb-0.5">
-                      <Text className="text-base font-sans-semibold text-white">Earn Free Access</Text>
-                      <View className="px-2 py-0.5 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.28)" }}>
-                        <Text className="text-[10px] font-sans-semibold text-white">FREE</Text>
-                      </View>
+                      <Text className="text-base font-sans-semibold" style={{ color: identityKnown ? "#fff" : "#1D3C2A" }}>
+                        Earn Free Access
+                      </Text>
+                      {identityKnown && (
+                        <View className="px-2 py-0.5 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.28)" }}>
+                          <Text className="text-[10px] font-sans-semibold text-white">FREE</Text>
+                        </View>
+                      )}
                     </View>
-                    <Text className="text-xs" style={{ color: "rgba(255,255,255,0.85)" }}>
-                      Watch & learn to unlock internet time
+                    <Text className="text-xs" style={{ color: identityKnown ? "rgba(255,255,255,0.85)" : "#3C6A4A" }}>
+                      {identityKnown ? "Watch & learn to unlock internet time" : "Reconnect to Ungana Wi-Fi to earn, or log in as user"}
                     </Text>
                   </View>
-                  <ChevronRight size={18} color="#fff" />
+                  <ChevronRight size={18} color={identityKnown ? "#fff" : "#9AB498"} />
                 </View>
               </Pressable>
             </View>
@@ -395,6 +421,22 @@ export default function PackageScreen({
 
         <View className="items-center mt-3" style={{ gap: 10 }}>
           <View className="flex-row items-center rounded-full overflow-hidden" style={{ backgroundColor: "rgba(46,90,62,0.08)", borderWidth: 1, borderColor: "rgba(29,60,42,0.08)" }}>
+            {/* Only a guest this device doesn't already recognize needs a
+                way back to the by-username lookup — once there's a known
+                session (e.g. mid-session via ActiveScreen's "Extend"), this
+                segment would just be a dead end back to a screen asking for
+                info the app already has. */}
+            {!identityKnown && (
+              <>
+                <Pressable onPress={onCheckSession} hitSlop={6} className="flex-row items-center gap-1.5 px-3.5 py-2">
+                  <UserCircle2 size={12} color="#CC8830" />
+                  <Text className="text-[11px] font-sans-semibold" style={{ color: "#CC8830" }}>
+                    User
+                  </Text>
+                </Pressable>
+                <View style={{ width: 1, height: 14, backgroundColor: "rgba(29,60,42,0.12)" }} />
+              </>
+            )}
             <Pressable onPress={onActivatorLogin} hitSlop={6} className="flex-row items-center gap-1.5 px-3.5 py-2">
               <UserCheck size={12} color="#2E5A3E" />
               <Text className="text-[11px] font-sans-semibold" style={{ color: "#2E5A3E" }}>

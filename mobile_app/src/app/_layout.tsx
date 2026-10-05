@@ -20,6 +20,7 @@ import {
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from "@expo-google-fonts/inter";
 import { initDeviceIdentity, applyDeepLink } from "@/lib/device";
 import { FlowProvider } from "@/flow/FlowContext";
+import AssistantBubble from "@/components/AssistantBubble";
 
 // Keeps the native splash (app.json's own splash config — same brand
 // colors as the web app) up during font loading + device identity
@@ -68,6 +69,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <FlowProvider>
         <Stack screenOptions={{ headerShown: false, animation: "fade" }} />
+        <AssistantBubble />
       </FlowProvider>
     </SafeAreaProvider>
   );

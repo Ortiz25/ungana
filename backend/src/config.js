@@ -105,3 +105,24 @@ export const SMS_PROVIDER = process.env.SMS_PROVIDER; // e.g. 'africastalking' �
 export const SMS_API_KEY = process.env.SMS_API_KEY;
 export const SMS_USERNAME = process.env.SMS_USERNAME;
 export const SMS_SENDER_ID = process.env.SMS_SENDER_ID;
+
+// ── AI Assistant (in-app chat) ──────────────────────────────────────────
+// Provider-agnostic — services/assistant/index.js picks the matching
+// @ai-sdk/* model off LLM_PROVIDER; switching providers is a .env change,
+// not a code change. Only the one provider's credentials below are
+// required. Per-site, the assistant is further gated by
+// sites.assistant_enabled (default false — see schema.sql) — an admin must
+// opt a site in even once a provider is configured.
+export const LLM_PROVIDER = (process.env.LLM_PROVIDER || "anthropic").toLowerCase();
+export const LLM_MODEL = process.env.LLM_MODEL; // optional override — each provider file in services/assistant/ has a sane default
+export const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+export const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+export const GOOGLE_GENERATIVE_AI_API_KEY = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+export const GROQ_API_KEY = process.env.GROQ_API_KEY;
+export const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL; // e.g. http://localhost:11434/v1 — any OpenAI-compatible endpoint works here (Ollama, LM Studio, OpenRouter, ...)
+
+// The assistant's request_human_help tool hands this back verbatim when a
+// guest needs a real person — unset is fine, the tool just says no live
+// channel is configured yet and points back to their activator instead.
+export const SUPPORT_WHATSAPP = process.env.SUPPORT_WHATSAPP; // e.g. 254712345678 (no +, no spaces — used to build a wa.me link)
+export const SUPPORT_PHONE = process.env.SUPPORT_PHONE;

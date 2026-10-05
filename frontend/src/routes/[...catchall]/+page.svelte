@@ -18,6 +18,8 @@
   import CheckSessionScreen from '$lib/screens/CheckSessionScreen.svelte';
   import AdminLoginScreen from '$lib/screens/AdminLoginScreen.svelte';
   import AdminDashboardScreen from '$lib/screens/AdminDashboardScreen.svelte';
+  import AssistantPanel from '$lib/components/AssistantPanel.svelte';
+  import AssistantBubble from '$lib/components/AssistantBubble.svelte';
   import { PACKAGES, getWarningThreshold } from '$lib/data.js';
   import { getSessionStatus, getAppInfo } from '$lib/api.js';
   import { getClientMac, getStoredClientMac, setClientMac, setSiteId } from '$lib/device.js';
@@ -78,6 +80,9 @@
   function backFromTimeline() {
     screen = timelineOrigin;
   }
+  // The assistant is a modal (see AssistantPanel.svelte), not a `screen` —
+  // opening it never disturbs whichever screen is underneath.
+  let assistantOpen = $state(false);
   function goWarning() {
     warningRemaining = getWarningThreshold(selectedPkg.demoSecs);
     screen = 'warning';
@@ -413,6 +418,7 @@
       onExpiring={goWarning}
       onExtend={goPackages}
       onExplore={goTimelineFromActive}
+      onSupport={() => (assistantOpen = true)}
     />
   {/if}
   {#if screen === 'warning'}
@@ -426,5 +432,26 @@
   {/if}
   {#if screen === 'ended'}
     <EndedScreen pkg={selectedPkg} {phone} onBuyAgain={goPackages} />
+  {/if}
+  <AssistantBubble {screen} onOpen={() => (assistantOpen = true)} />
+  {#if assistantOpen}
+    <AssistantPanel
+      onClose={() => (assistantOpen = false)}
+      onPurchaseConfirmed={({ phone: p, reference, packageId, packageLabel, priceKes, durationSecs }) => {
+        // Same handoff PaymentScreen's onPay does — 'initiated' (shows the
+        // "check your phone" messaging) -> 'connecting', which polls
+        // GET /verify-payment/:reference the normal way. Switching `screen`
+        // unmounts AssistantPanel on its own — no separate close needed.
+        // Only ever reached after a real confirmed charge (see
+        // AssistantPanel's handleConfirmPurchase) — never on its own.
+        selectedPkg = { id: packageId, label: packageLabel, duration: `${Math.round(durationSecs / 60)} min`, price: priceKes, icon: Zap, badge: null, demoSecs: durationSecs };
+        phone = p;
+        paymentReference = reference;
+        simulatePaymentFailure = false;
+        expectRealSession = true;
+        assistantOpen = false;
+        screen = 'initiated';
+      }}
+    />
   {/if}
 </AppShell>

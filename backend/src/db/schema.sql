@@ -55,6 +55,12 @@ ALTER TABLE sites ADD COLUMN IF NOT EXISTS vertical TEXT NOT NULL DEFAULT 'gener
 ALTER TABLE sites DROP CONSTRAINT IF EXISTS sites_vertical_check;
 ALTER TABLE sites ADD CONSTRAINT sites_vertical_check CHECK (vertical IN ('general', 'institution', 'community'));
 
+-- Per-site opt-in for the guest-facing AI assistant (see services/assistant/).
+-- Defaults to false — unlike btc_enabled, a brand-new capability like this
+-- should never silently switch on for every existing site the moment the
+-- column appears; an admin has to explicitly turn it on per site.
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS assistant_enabled BOOLEAN NOT NULL DEFAULT false;
+
 DROP TRIGGER IF EXISTS sites_set_updated_at ON sites;
 CREATE TRIGGER sites_set_updated_at
   BEFORE UPDATE ON sites
@@ -700,6 +706,48 @@ CREATE TABLE IF NOT EXISTS community_notice_reads (
   UNIQUE (post_id, mac)
 );
 CREATE INDEX IF NOT EXISTS idx_community_notice_reads_mac ON community_notice_reads(mac);
+
+-- ── AI Assistant ─────────────────────────────────────────────────────────
+-- One row per chat exchange — admin-review/audit trail only (NOT what the
+-- mobile app reads back; the app keeps its own on-device copy for display
+-- continuity, see mobile_app/src/lib/assistantStorage.ts). tool_calls
+-- records which grounding tool(s) answered the question, so hallucination
+-- review can tell a tool-grounded answer apart from one that (incorrectly)
+-- had none.
+CREATE TABLE IF NOT EXISTS assistant_logs (
+  id          BIGSERIAL PRIMARY KEY,
+  mac         TEXT,
+  site_id     TEXT REFERENCES sites(id) ON DELETE SET NULL,
+  provider    TEXT NOT NULL,
+  model       TEXT NOT NULL,
+  user_message      TEXT NOT NULL,
+  assistant_message TEXT NOT NULL,
+  tool_calls  JSONB NOT NULL DEFAULT '[]',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_logs_mac ON assistant_logs(mac);
+CREATE INDEX IF NOT EXISTS idx_assistant_logs_site ON assistant_logs(site_id, created_at);
+
+-- A package purchase the assistant *proposed* in chat — never the charge
+-- itself. The model can only call propose_mpesa_purchase (reads the real
+-- catalog, writes one of these rows); the actual M-Pesa STK push only ever
+-- fires from POST /api/assistant/purchase/:token/confirm, which a human taps
+-- a button to call — the LLM has no path to that endpoint. `token` is opaque
+-- and single-use (confirmed_at set on first use); proposals expire after 10
+-- minutes (checked in services/assistant/purchases.js, not enforced here)
+-- so a stale chat card can't be confirmed hours later at a since-changed price.
+CREATE TABLE IF NOT EXISTS assistant_purchase_proposals (
+  token         TEXT PRIMARY KEY,
+  mac           TEXT NOT NULL,
+  site_id       TEXT REFERENCES sites(id) ON DELETE SET NULL,
+  package_id    TEXT NOT NULL REFERENCES packages(id),
+  phone         TEXT NOT NULL,
+  amount_kes    NUMERIC NOT NULL,
+  activator_code TEXT,
+  confirmed_at  TIMESTAMPTZ,
+  session_reference TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- ── Escalations ──────────────────────────────────────────────────────────
 -- Issues a coordinator raises — either self-reported (e.g. a network

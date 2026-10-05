@@ -18,7 +18,7 @@
   // `onExplore` sends the client to TimelineScreen without losing this
   // session — see +page.svelte's timelineOrigin, which brings them right
   // back here on "Back" instead of dropping them at package selection.
-  let { pkg, phone, mode = 'simulation', initialRemaining = null, autoGoOnline = false, onExpiring, onExtend, onExplore } = $props();
+  let { pkg, phone, mode = 'simulation', initialRemaining = null, autoGoOnline = false, onExpiring, onExtend, onExplore, onSupport } = $props();
 
   // Same site-vertical lookup TimelineScreen itself makes — drives the
   // Explore tile's label/icon below so it points at whichever section of
@@ -32,6 +32,10 @@
   let siteVertical = $state('general');
   const isInstitution = $derived(siteVertical === 'institution');
   const isCommunity = $derived(siteVertical === 'community');
+  // Gates the Support button below — same per-site opt-in the admin Sites
+  // tab controls (sites.assistant_enabled), fetched alongside vertical
+  // rather than as a second request.
+  let assistantEnabled = $state(false);
 
   // Hands this device's real, router-authorised MAC off to the Ungana
   // mobile app via a deep link — the only way that app can ever learn a
@@ -118,7 +122,10 @@
     if (autoGoOnline) goOnline();
     if (site) {
       const result = await getSite(site);
-      if (result.ok && result.data?.site) siteVertical = result.data.site.vertical ?? 'general';
+      if (result.ok && result.data?.site) {
+        siteVertical = result.data.site.vertical ?? 'general';
+        assistantEnabled = !!result.data.site.assistantEnabled;
+      }
     }
     const mac = getClientMac();
     if (mac) {
@@ -281,11 +288,14 @@
   >
     <RotateCcw size={15} />Extend Session
   </button>
-  <button
-    class="w-full py-3.5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95"
-    style="background: rgba(255,255,255,0.14); color: #C4DAC0;"
-  >
-    <MessageCircle size={15} />Support
-  </button>
+  {#if assistantEnabled}
+    <button
+      onclick={onSupport}
+      class="w-full py-3.5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95"
+      style="background: rgba(255,255,255,0.14); color: #C4DAC0;"
+    >
+      <MessageCircle size={15} />Support
+    </button>
+  {/if}
   {#if mode !== 'active'}<DemoBadge />{/if}
 </div>

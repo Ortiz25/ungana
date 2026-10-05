@@ -5,7 +5,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { View, Text, Pressable, ScrollView, RefreshControl, ActivityIndicator } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Plus, Radio, GraduationCap, Users, Bitcoin, Edit3, Pause, Play, Star } from "lucide-react-native";
+import { Plus, Radio, GraduationCap, Users, Bitcoin, Edit3, Pause, Play, Star, Bot } from "lucide-react-native";
 import { useAdminAuth } from "@/flow/AdminAuthContext";
 import {
   adminGetSites,
@@ -40,7 +40,7 @@ function availableSiteModes(vertical: Site["vertical"]) {
   return vertical === "institution" ? SITE_MODES.filter((m) => m.id !== "pay_only") : SITE_MODES;
 }
 
-const EMPTY_SITE_DRAFT = { id: "", name: "", mode: "both" as Site["mode"], btcEnabled: true, vertical: "general" as Site["vertical"] };
+const EMPTY_SITE_DRAFT = { id: "", name: "", mode: "both" as Site["mode"], btcEnabled: true, vertical: "general" as Site["vertical"], assistantEnabled: false };
 
 const PACKAGE_BADGE_PRESETS = ["Best Value", "Test", "Popular", "Limited"];
 const EMPTY_PACKAGE_DRAFT = { id: "", label: "", priceKes: "", durationSecs: "", badge: "", isActive: true, siteIds: [] as string[] };
@@ -129,7 +129,7 @@ export default function SitesScreen() {
   function startEditSite(s: Site) {
     setEditingSiteId(s.id);
     setSiteFormError("");
-    setSiteDraft({ id: s.id, name: s.name, mode: s.mode, btcEnabled: s.btc_enabled, vertical: s.vertical });
+    setSiteDraft({ id: s.id, name: s.name, mode: s.mode, btcEnabled: s.btc_enabled, vertical: s.vertical, assistantEnabled: s.assistant_enabled });
     setShowSiteForm(true);
   }
 
@@ -146,7 +146,7 @@ export default function SitesScreen() {
     setSiteFormError("");
     setSiteSaving(true);
     const result = editingSiteId
-      ? await adminUpdateSite(token!, editingSiteId, { name: siteDraft.name.trim(), mode: siteDraft.mode, btcEnabled: siteDraft.btcEnabled, vertical: siteDraft.vertical })
+      ? await adminUpdateSite(token!, editingSiteId, { name: siteDraft.name.trim(), mode: siteDraft.mode, btcEnabled: siteDraft.btcEnabled, vertical: siteDraft.vertical, assistantEnabled: siteDraft.assistantEnabled })
       : await adminCreateSite(token!, { id: siteDraft.id.trim(), name: siteDraft.name.trim(), mode: siteDraft.mode, btcEnabled: siteDraft.btcEnabled, vertical: siteDraft.vertical });
     setSiteSaving(false);
 
@@ -338,6 +338,14 @@ export default function SitesScreen() {
               <Text className="text-[10px] font-sans-semibold px-2 py-1 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.1)", color: "#C4DAC0" }}>
                 {s.btc_enabled ? "BTC on" : "BTC off"}
               </Text>
+              {s.assistant_enabled && (
+                <View className="flex-row items-center gap-1 px-2 py-1 rounded-full" style={{ backgroundColor: "rgba(196,92,56,0.18)" }}>
+                  <Bot size={10} color="#C45C38" />
+                  <Text className="text-[10px] font-sans-semibold" style={{ color: "#C45C38" }}>
+                    Assistant on
+                  </Text>
+                </View>
+              )}
             </View>
 
             <View className="flex-row items-center gap-2">
@@ -519,6 +527,22 @@ export default function SitesScreen() {
           </Text>
           <Pill label={siteDraft.btcEnabled ? "Enabled" : "Disabled"} active={siteDraft.btcEnabled} icon={<Bitcoin size={12} color={siteDraft.btcEnabled ? "#fff" : "#C4DAC0"} />} onPress={() => setSiteDraft((d) => ({ ...d, btcEnabled: !d.btcEnabled }))} />
         </View>
+        {!!editingSiteId && (
+          <View>
+            <Text className="text-[10px] font-sans-semibold mb-1 uppercase" style={{ color: "#AECAAE", letterSpacing: 1 }}>
+              AI assistant
+            </Text>
+            <Pill
+              label={siteDraft.assistantEnabled ? "Enabled" : "Disabled"}
+              active={siteDraft.assistantEnabled}
+              icon={<Bot size={12} color={siteDraft.assistantEnabled ? "#fff" : "#C4DAC0"} />}
+              onPress={() => setSiteDraft((d) => ({ ...d, assistantEnabled: !d.assistantEnabled }))}
+            />
+            <Text className="text-[10px] mt-1" style={{ color: "#96B496" }}>
+              Lets guests at this site chat with the in-app AI assistant.
+            </Text>
+          </View>
+        )}
         {!!siteFormError && (
           <Text className="text-xs" style={{ color: "#E08A6A" }}>
             {siteFormError}

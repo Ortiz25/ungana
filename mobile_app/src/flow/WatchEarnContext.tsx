@@ -22,6 +22,7 @@ import {
 } from "@/lib/api";
 import { TL_FEATURED, TL_NEW, TL_SURVEYS, TL_ARTICLES, TL_VIDEOS, doneLabelForFrequency, type TLItem, type TLSurveyQuestion } from "@/lib/data";
 import { useTimeline } from "@/flow/TimelineContext";
+import { setAssistantBubbleHidden } from "@/lib/assistantBubbleStore";
 
 // Same flag/convention as PaymentScreen.tsx (mirrors frontend's
 // VITE_DEMO_MODE) — gates the static TL_* demo catalogue below so a real
@@ -409,6 +410,16 @@ export function WatchEarnProvider({
       if (usernameCheckTimerRef.current) clearTimeout(usernameCheckTimerRef.current);
     };
   }, []);
+
+  // The content viewer is a full-screen takeover with no chrome at all (see
+  // this file's own header comment) — the root-mounted floating assistant
+  // bubble (components/AssistantBubble.tsx) has to hide for it too, via
+  // this external signal since the bubble lives above both /packages and
+  // /timeline, outside this context's reach.
+  useEffect(() => {
+    setAssistantBubbleHidden(viewingItem !== null);
+    return () => setAssistantBubbleHidden(false);
+  }, [viewingItem]);
 
   function markVideoWatched() {
     setViewingItem((current) => {

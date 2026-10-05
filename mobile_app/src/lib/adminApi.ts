@@ -104,6 +104,7 @@ export type Site = {
   status: "active" | "suspended";
   btc_enabled: boolean;
   vertical: "general" | "institution" | "community";
+  assistant_enabled: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -128,11 +129,11 @@ export function adminCreateSite(
   return request("/admin/sites", { method: "POST", body: JSON.stringify(body), ...authed(token) });
 }
 
-/** PATCH /api/admin/sites/:id — partial update: name, mode, status, btcEnabled, vertical. */
+/** PATCH /api/admin/sites/:id — partial update: name, mode, status, btcEnabled, vertical, assistantEnabled. */
 export function adminUpdateSite(
   token: string,
   id: string,
-  body: Partial<{ name: string; mode: Site["mode"]; status: Site["status"]; btcEnabled: boolean; vertical: Site["vertical"] }>
+  body: Partial<{ name: string; mode: Site["mode"]; status: Site["status"]; btcEnabled: boolean; vertical: Site["vertical"]; assistantEnabled: boolean }>
 ): Promise<ApiResult<{ success: boolean; site?: Site; message?: string }>> {
   return request(`/admin/sites/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body), ...authed(token) });
 }

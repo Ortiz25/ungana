@@ -22,6 +22,7 @@ import { communityRouter } from "./routes/community.js";
 import { adminRouter } from "./routes/admin.js";
 import { settingsRouter } from "./routes/settings.js";
 import { sitesRouter } from "./routes/sites.js";
+import { assistantRouter } from "./routes/assistant.js";
 import { retryPaidAuthorizations } from "./services/authorization.js";
 import { runNotificationSweep } from "./services/notificationSweep.js";
 import { login } from "./services/unifi.js";
@@ -75,6 +76,7 @@ app.use("/api/community", communityRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/sites", sitesRouter);
+app.use("/api/assistant", assistantRouter);
 // maxAge is safe at a long value here — every upload gets a fresh random
 // UUID filename (see uploads.js), so a URL is never reused for different
 // content; caching one aggressively can never serve stale bytes for it.

@@ -14,6 +14,7 @@
   import MarketplaceBoard from '$lib/components/MarketplaceBoard.svelte';
   import CommunityPoll from '$lib/components/CommunityPoll.svelte';
   import { matchResourceCategory as matchCommunityCategory } from '$lib/communityResourceCategories.js';
+  import { setAssistantBubbleHidden } from '$lib/assistantBubbleStore.svelte.js';
   import {
     COMMUNITY_DEMO_ANNOUNCEMENTS,
     COMMUNITY_DEMO_EVENTS,
@@ -404,6 +405,14 @@
   };
 
   let viewingItem = $state(null);
+  // The content viewer below is a full-screen takeover with no chrome at
+  // all — the floating assistant bubble (rendered from +page.svelte, well
+  // above this component) has to hide for it too, via this external signal
+  // since there's no prop/store already carrying viewingItem that high.
+  $effect(() => {
+    setAssistantBubbleHidden(viewingItem !== null);
+    return () => setAssistantBubbleHidden(false);
+  });
   let viewProgress = $state(0);
   let viewDone = $state(false);
   // Lesson-only: true once the video portion is watched. A lesson with quiz

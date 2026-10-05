@@ -10,7 +10,9 @@ export const sitesRouter = Router();
  * toggle should even be offered — so this can't be admin-gated like the
  * rest of sites management is. Deliberately omits `status` — a suspended
  * site's guest portal shouldn't be reachable at the network level in the
- * first place, so the client never needs to know.
+ * first place, so the client never needs to know. `assistantEnabled` is
+ * read the same way, so the app can hide its Support entry point entirely
+ * rather than let a guest open a chat the backend will just 403 on.
  */
 sitesRouter.get("/:id", async (req, res) => {
   try {
@@ -18,7 +20,7 @@ sitesRouter.get("/:id", async (req, res) => {
     if (!site) return res.status(404).json({ success: false, message: "Unknown site" });
     res.json({
       success: true,
-      site: { id: site.id, name: site.name, mode: site.mode, btcEnabled: site.btc_enabled, vertical: site.vertical },
+      site: { id: site.id, name: site.name, mode: site.mode, btcEnabled: site.btc_enabled, vertical: site.vertical, assistantEnabled: site.assistant_enabled },
     });
   } catch (error) {
     console.error("❌ Site fetch error:", error.message);

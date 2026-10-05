@@ -17,7 +17,11 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'ht
 const BACKEND_ORIGIN = import.meta.env.VITE_BACKEND_ORIGIN || (import.meta.env.DEV ? 'http://localhost:5000' : '/backend');
 const TIMEOUT_MS = 5000;
 
-async function request(path, { timeoutMs = TIMEOUT_MS, ...options } = {}) {
+// Exported so sibling API-client modules (assistantApi.js) can reuse the
+// same base URL/timeout/never-throws mechanics instead of duplicating them
+// — kept in a separate file from this one purely to keep this file's own
+// guest-flow surface uncluttered.
+export async function request(path, { timeoutMs = TIMEOUT_MS, ...options } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   // FormData needs the browser to set its own multipart boundary — an

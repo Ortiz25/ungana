@@ -24,9 +24,17 @@ export async function listActivePackages(siteId = null) {
   return rows;
 }
 
-/** Single package lookup — the source of truth for real (non-simulated) session duration. */
+/**
+ * Single package lookup — the source of truth for real (non-simulated)
+ * session duration. Includes `is_active`: btc.js/payments.js's own callers
+ * never checked it (a package id reaching those routes already came from
+ * the live catalogue), but services/assistant/purchases.js's
+ * proposePurchase() does — without it in the SELECT, `pkg.is_active` was
+ * always `undefined` there, rejecting every package regardless of its real
+ * status with a misleading "No active package" error.
+ */
 export async function getPackageById(id) {
-  const { rows } = await query(`SELECT id, label, price_kes, duration_secs FROM packages WHERE id = $1`, [id]);
+  const { rows } = await query(`SELECT id, label, price_kes, duration_secs, is_active FROM packages WHERE id = $1`, [id]);
   return rows[0] || null;
 }
 

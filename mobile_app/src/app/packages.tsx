@@ -16,6 +16,7 @@ export default function PackagesRoute() {
         flow.setTimelineOrigin("packages");
         router.replace("/timeline");
       }}
+      onCheckSession={() => router.replace("/check-session")}
       onActivatorLogin={() => router.replace("/activator/login")}
       onCoordinatorLogin={() => router.replace("/coordinator/login")}
       onAdminLogin={() => router.replace("/admin/login")}

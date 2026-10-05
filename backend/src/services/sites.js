@@ -28,6 +28,7 @@ const SITE_FIELD_COLUMNS = {
   status: "status",
   btcEnabled: "btc_enabled",
   vertical: "vertical",
+  assistantEnabled: "assistant_enabled",
 };
 
 /** Partial update — only fields present in `fields` are touched. Returns null if the id doesn't exist. */
